@@ -17,25 +17,36 @@ local gui = nil
 -- ═══════════════════════════════════════════════
 -- REMOTES CONFIRMADOS
 -- ═══════════════════════════════════════════════
-local KnitPath = RS.Packages._Index["sleitnick_knit@1.4.7"].knit.Services
+-- Busca dinâmica do pacote Knit (evita quebrar quando a versão mudar)
+local KnitPackages = RS:WaitForChild("Packages", 10)
+local IndexFolder = KnitPackages and KnitPackages:WaitForChild("_Index", 10)
 
-local SkillMgrV2      = KnitPath.SkillManagerV2.RE
-local SkillMgr        = KnitPath.SkillManager.RE
-local PromptSVC       = KnitPath.PromptService.RE
-local PlayerLevelSVC  = KnitPath.PlayerLevelService.RF
-local ToolSVC         = KnitPath.ToolService.RE
-local FlightSVC       = KnitPath.FlightService.RE
-local ModeTransform   = KnitPath.ModeTransformService.RE
-local SkillRemote     = RS.Remotes.SkillRemote
+local KnitFolder = nil
+if IndexFolder then
+    for _, child in ipairs(IndexFolder:GetChildren()) do
+        if child.Name:find("sleitnick_knit") then
+            KnitFolder = child
+            break
+        end
+    end
+end
 
-local RE_ExecuteSkill        = SkillMgrV2.ExecuteSkill
-local RE_ExecuteSkillSpecial = SkillMgrV2.ExecuteSkill_Special
-local RE_LockedOnChanged     = SkillMgr.LockedOnChanged
-local RE_Prompt              = PromptSVC.Prompt
-local RF_RequestRebirth      = PlayerLevelSVC.RequestRebirth
-local RE_Toolbar             = ToolSVC.UpdatePlayerToolbarSelection
-local RE_SuperFlight         = FlightSVC.SuperFlight
-local RE_SelectMode          = ModeTransform and ModeTransform.SelectMode
+local KnitServices = KnitFolder and KnitFolder:FindFirstChild("knit") and KnitFolder.knit:FindFirstChild("Services")
+
+if not KnitServices then
+    warn("[DragonHub] Falha ao localizar os Serviços do Knit. Verifique se o jogo carregou completamente.")
+    return
+end
+
+-- Atribuição segura dos Remotes
+local SkillMgrV2        = KnitServices:FindFirstChild("SkillManagerV2") and KnitServices.SkillManagerV2:FindFirstChild("RE")
+local SkillMgr          = KnitServices:FindFirstChild("SkillManager") and KnitServices.SkillManager:FindFirstChild("RE")
+local PromptSVC         = KnitServices:FindFirstChild("PromptService") and KnitServices.PromptService:FindFirstChild("RE")
+local PlayerLevelSVC    = KnitServices:FindFirstChild("PlayerLevelService") and KnitServices.PlayerLevelService:FindFirstChild("RF")
+local ToolSVC           = KnitServices:FindFirstChild("ToolService") and KnitServices.ToolService:FindFirstChild("RE")
+local FlightSVC         = KnitServices:FindFirstChild("FlightService") and KnitServices.FlightService:FindFirstChild("RE")
+local ModeTransform     = KnitServices:FindFirstChild("ModeTransformService") and KnitServices.ModeTransformService:FindFirstChild("RE")
+
 
 -- ═══════════════════════════════════════════════
 -- CONFIG (flat)
