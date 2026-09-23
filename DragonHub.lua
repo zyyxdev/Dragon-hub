@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                   DRAGON BLOX HUB - VERSION 5.1                
+--                   DRAGON BLOX HUB - VERSION 5.2 (FIXED)         
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -11,33 +11,35 @@ local VIM = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
 local plr = Players.LocalPlayer
 
--- Reference forward declaration for UI Block Guard
 local mainFrame = nil
 
 -- ═══════════════════════════════════════════════
--- REMOTES (paths confirmados via dump de tráfego)
+-- BUSCA SEGURA DE REMOTES (FALLBACK ANTI-CRASH)
 -- ═══════════════════════════════════════════════
-local KnitPath = RS.Packages._Index["sleitnick_knit@1.4.7"].knit.Services
+local function obterRemote(nome)
+    local encontrado = RS:FindFirstChild(nome, true)
+    if encontrado and encontrado:IsA("RemoteEvent") then
+        return encontrado
+    end
+    return nil
+end
 
-local SkillMgrV2   = KnitPath.SkillManagerV2.RE
-local SkillMgr     = KnitPath.SkillManager.RE
-local SkillRemote  = RS.Remotes.SkillRemote
-
-local RE_ExecuteSkill        = SkillMgrV2.ExecuteSkill
-local RE_ExecuteSkillSpecial = SkillMgrV2.ExecuteSkill_Special
-local RE_LockedOnChanged     = SkillMgr.LockedOnChanged
+local RE_ExecuteSkill        = obterRemote("ExecuteSkill")
+local RE_ExecuteSkillSpecial = obterRemote("ExecuteSkill_Special")
+local RE_LockedOnChanged     = obterRemote("LockedOnChanged")
+local SkillRemote            = obterRemote("SkillRemote")
 
 -- ═══════════════════════════════════════════════
 -- CONFIGURAÇÕES LOCAIS
 -- ═══════════════════════════════════════════════
 local CombatCfg = {
-    M1_Delay        = 0.35,   -- intervalo entre M1
-    M1_Range        = 12,     -- studs pra acertar M1
-    Skill_Delay     = 1.2,    -- intervalo entre skills
-    Skill_Range     = 30,     -- range da skill
+    M1_Delay        = 0.35,
+    M1_Range        = 12,
+    Skill_Delay     = 1.2,
+    Skill_Range     = 30,
     Skill_Current   = "UniqueSets_2_1",
     Skill_Slot      = 1,
-    AutoLock        = true,   -- trava alvo automaticamente
+    AutoLock        = true,
 }
 
 local Config = {
@@ -47,10 +49,10 @@ local Config = {
 }
 
 local KiCfg = {
-    LimiteRecarga   = 0.30,   -- recarrega se Ki < 30%
-    AlvoRecarga     = 0.90,   -- para de recarregar em 90%
-    AposRecarga     = 0.5,    -- pausa após terminar
-    TempoMaxRecarga = 3.0,    -- máximo de segundos segurando
+    LimiteRecarga   = 0.30,
+    AlvoRecarga     = 0.90,
+    AposRecarga     = 0.5,
+    TempoMaxRecarga = 3.0,
     Recarregando    = false,
 }
 
@@ -61,20 +63,18 @@ local ShowESP = false
 local LogErrosList = {}
 
 -- ═══════════════════════════════════════════════
--- AUTO-CLICK MOBILE (VirtualInputManager)
+-- AUTO-CLICK MOBILE
 -- ═══════════════════════════════════════════════
 local AutoClickAtivo = false
 local AutoClickThread = nil
 
--- Verifica se o jogador está com UI do jogo ou do hub aberta
 local function uiBloqueada()
     if mainFrame and mainFrame.Visible then return true end
     local playerGui = plr:FindFirstChild("PlayerGui")
     if playerGui then
-        for _, gui in ipairs(playerGui:GetChildren()) do
-            if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "DragonBloxHub_v5"
-            and gui.Name ~= "DBH_ESP" then
-                local core = gui:FindFirstChildOfClass("Frame")
+        for _, guiObj in ipairs(playerGui:GetChildren()) do
+            if guiObj:IsA("ScreenGui") and guiObj.Enabled and guiObj.Name ~= "DragonBloxHub_v5" and guiObj.Name ~= "DBH_ESP" then
+                local core = guiObj:FindFirstChildOfClass("Frame")
                 if core and core.Visible and core.AbsoluteSize.X > 200 then
                     return true
                 end
@@ -84,14 +84,14 @@ local function uiBloqueada()
     return false
 end
 
--- Simula um clique/toque na tela (M1 mobile)
 local function simularToque(x, y)
-    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-    task.wait(0.02)
-    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    pcall(function()
+        VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.02)
+        VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
 end
 
--- Auto-click loop
 local function iniciarAutoClick(intervalo)
     if AutoClickAtivo then return end
     AutoClickAtivo = true
@@ -99,7 +99,6 @@ local function iniciarAutoClick(intervalo)
     AutoClickThread = task.spawn(function()
         while AutoClickAtivo and Ativo do
             task.wait(intervalo or 0.15)
-
             if not uiBloqueada() then
                 local cam = workspace.CurrentCamera
                 if cam then
@@ -120,11 +119,19 @@ local function pararAutoClick()
 end
 
 -- ═══════════════════════════════════════════════
--- LEITURA DE MÓDULOS E STATS
+-- LEITURA DE STATS COM TIMEOUT
 -- ═══════════════════════════════════════════════
 local PlayerStatsHandler = nil
-pcall(function()
-    PlayerStatsHandler = require(RS:WaitForChild("Handlers"):WaitForChild("PlayerStatsHandler"))
+task.spawn(function()
+    pcall(function()
+        local handlers = RS:WaitForChild("Handlers", 3) -- Timeout de 3 segundos
+        if handlers then
+            local statHandler = handlers:WaitForChild("PlayerStatsHandler", 3)
+            if statHandler then
+                PlayerStatsHandler = require(statHandler)
+            end
+        end
+    end)
 end)
 
 local function getStats()
@@ -137,7 +144,7 @@ local function getStats()
             result.Speed    = PlayerStatsHandler.GetSpeed and PlayerStatsHandler.GetSpeed(plr) or 0
         end)
     else
-        local statsObj = plr:FindFirstChild("Stats") or plr:FindFirstChild("Data")
+        local statsObj = plr:FindFirstChild("Stats") or plr:FindFirstChild("Data") or plr:FindFirstChild("leaderstats")
         if statsObj then
             for k, _ in pairs(result) do
                 local val = statsObj:FindFirstChild(k)
@@ -193,42 +200,8 @@ local function voarPara(pos, speed)
 end
 
 -- ═══════════════════════════════════════════════
--- DETECÇÃO DE MOBS VIA WORKSPACE
+-- DETECÇÃO DE MOBS
 -- ═══════════════════════════════════════════════
-local function getMobsVivos()
-    local lista = {}
-    local seen = {}
-
-    local function varrer(pasta)
-        if not pasta then return end
-        for _, mob in ipairs(pasta:GetChildren()) do
-            if mob:IsA("Model") and mob:FindFirstChild("Humanoid") 
-            and mob:FindFirstChild("HumanoidRootPart") then
-                local hum = mob.Humanoid
-                if hum.Health > 0 then
-                    local base = mob.Name:gsub("%-?%d+$", "")
-                    if not seen[base] then
-                        seen[base] = {nome=base, count=0}
-                    end
-                    seen[base].count = seen[base].count + 1
-                end
-            end
-        end
-    end
-
-    local wm = WS:FindFirstChild("World Mobs")
-    if wm then
-        varrer(wm:FindFirstChild("Mobs"))
-        varrer(wm:FindFirstChild("Boss Mobs"))
-    end
-
-    for _, info in pairs(seen) do
-        table.insert(lista, info)
-    end
-    table.sort(lista, function(a, b) return a.nome < b.nome end)
-    return lista
-end
-
 local function getMobMaisProximo()
     local char = plr.Character
     if not char then return nil end
@@ -273,7 +246,7 @@ local function getMobMaisProximo()
 end
 
 -- ═══════════════════════════════════════════════
--- GERENCIAMENTO DE KI / ENERGIA
+-- GERENCIAMENTO DE KI
 -- ═══════════════════════════════════════════════
 local function getKiAtual()
     local char = plr.Character
@@ -315,28 +288,32 @@ local function recarregarKi()
             if pct >= KiCfg.AlvoRecarga then break end
             if (os.clock() - inicio) >= KiCfg.TempoMaxRecarga then break end
 
+            if SkillRemote then
+                pcall(function()
+                    SkillRemote:FireServer({
+                        Began = true,
+                        CFrame = ancoraCF,
+                        Aim = hrp.Position + hrp.CFrame.LookVector * 10,
+                        Camera = camCF,
+                        Type = 1,
+                    })
+                end)
+            end
+
+            task.wait(0.15)
+        end
+
+        if SkillRemote then
             pcall(function()
                 SkillRemote:FireServer({
-                    Began = true,
+                    Began = false,
                     CFrame = ancoraCF,
                     Aim = hrp.Position + hrp.CFrame.LookVector * 10,
                     Camera = camCF,
                     Type = 1,
                 })
             end)
-
-            task.wait(0.15)
         end
-
-        pcall(function()
-            SkillRemote:FireServer({
-                Began = false,
-                CFrame = ancoraCF,
-                Aim = hrp.Position + hrp.CFrame.LookVector * 10,
-                Camera = camCF,
-                Type = 1,
-            })
-        end)
     end)
 
     local timeout = os.clock() + KiCfg.TempoMaxRecarga + 1
@@ -351,14 +328,14 @@ local function recarregarKi()
 end
 
 -- ═══════════════════════════════════════════════
--- SKILLS & ROTATING SYSTEM
+-- SKILLS
 -- ═══════════════════════════════════════════════
 local SkillList = {
-    "UniqueSets_2_1",   -- Kamehameha
-    "UniqueSets_2_2",   -- Melee
-    "UniqueSets_2_3",   -- Spirit Bomb
-    "Weapons_3_2",      -- Dimensional Slash
-    "Weapons_3_3",      -- Scythe
+    "UniqueSets_2_1",
+    "UniqueSets_2_2",
+    "UniqueSets_2_3",
+    "Weapons_3_2",
+    "Weapons_3_3",
 }
 local skillIndex = 1
 
@@ -369,42 +346,39 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
     if not hrp then return end
 
     local params = { HumCFrame = hrp.CFrame }
+    if targetPos then params.targetPos = targetPos end
+    if mobNome then params.Target = mobNome end
 
-    if targetPos then
-        params.targetPos = targetPos
+    if RE_ExecuteSkillSpecial then
+        pcall(function() RE_ExecuteSkillSpecial:FireServer(plr.Name, skillId) end)
     end
-    if mobNome then
-        params.Target = mobNome
-    end
-
-    pcall(function()
-        RE_ExecuteSkillSpecial:FireServer(plr.Name, skillId)
-    end)
     task.wait(0.03)
 
-    pcall(function()
-        SkillRemote:FireServer({
-            Began = true,
-            CFrame = hrp.CFrame,
-            Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
-            Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
-            Type = 2,
-        })
-    end)
-    task.wait(0.1)
-    pcall(function()
-        SkillRemote:FireServer({
-            Began = false,
-            CFrame = hrp.CFrame,
-            Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
-            Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
-            Type = 2,
-        })
-    end)
+    if SkillRemote then
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = true,
+                CFrame = hrp.CFrame,
+                Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+                Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
+                Type = 2,
+            })
+        end)
+        task.wait(0.1)
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = hrp.CFrame,
+                Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+                Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
+                Type = 2,
+            })
+        end)
+    end
 
-    pcall(function()
-        RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
-    end)
+    if RE_ExecuteSkill then
+        pcall(function() RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true) end)
+    end
 end
 
 local function proximaSkill()
@@ -414,16 +388,16 @@ local function proximaSkill()
 end
 
 -- ═══════════════════════════════════════════════
--- AUTO LOCK-ON (MOBILE)
+-- AUTO LOCK-ON
 -- ═══════════════════════════════════════════════
 local LockAtivo = false
 local LockConexao = nil
 local LockAlvo = nil
 
 local function lockOn(nomeMob, mobModel)
-    pcall(function()
-        RE_LockedOnChanged:FireServer(nomeMob or "")
-    end)
+    if RE_LockedOnChanged then
+        pcall(function() RE_LockedOnChanged:FireServer(nomeMob or "") end)
+    end
 
     if mobModel and mobModel:FindFirstChild("HumanoidRootPart") then
         LockAlvo = mobModel
@@ -456,7 +430,7 @@ local function lockOn(nomeMob, mobModel)
 end
 
 -- ═══════════════════════════════════════════════
--- SISTEMA ESP
+-- ESP SYSTEM
 -- ═══════════════════════════════════════════════
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
@@ -547,7 +521,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- LOOP DE COMBATE (ANTI-IMMORTAL)
+-- LOOP DE COMBATE
 -- ═══════════════════════════════════════════════
 task.spawn(function()
     local ultimoSkill = 0
@@ -562,7 +536,6 @@ task.spawn(function()
             continue
         end
 
-        -- ═══ KI ═══
         local cur, max = getKiAtual()
         local pct = max > 0 and (cur / max) or 1
         if pct < KiCfg.LimiteRecarga and AutoSkill then
@@ -574,7 +547,6 @@ task.spawn(function()
             continue
         end
 
-        -- ═══ MOB ═══
         local mob = getMobMaisProximo()
         if not mob then
             pararAutoClick()
@@ -586,13 +558,11 @@ task.spawn(function()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then continue end
 
-        -- ═══ ANTI-IMMORTAL ═══
         if mob.dist > CombatCfg.M1_Range then
             voarPara(mob.pos)
             continue
         end
 
-        -- ═══ LOCK-ON ═══
         if CombatCfg.AutoLock and alvoTravado ~= mob.baseName then
             lockOn(mob.baseName, mob.model)
             alvoTravado = mob.baseName
@@ -602,14 +572,12 @@ task.spawn(function()
         pararVoo()
         hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
 
-        -- ═══ M1 ═══
         if AutoFarm then
             iniciarAutoClick(CombatCfg.M1_Delay)
         else
             pararAutoClick()
         end
 
-        -- ═══ SKILL ═══
         if AutoSkill and (os.clock() - ultimoSkill) >= CombatCfg.Skill_Delay then
             local skillAtual = proximaSkill()
             usarSkill(skillAtual, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
@@ -619,14 +587,13 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- INTERFACE GRÁFICA COMPLETA (UI COM ABAS)
+-- INTERFACE GRÁFICA (UI)
 -- ═══════════════════════════════════════════════
 local gui = Instance.new("ScreenGui")
 gui.Name = "DragonBloxHub_v5"
 gui.ResetOnSpawn = false
 gui.Parent = CoreGui
 
--- Botão Flutuante
 local toggleBtn = Instance.new("TextButton", gui)
 toggleBtn.Size = UDim2.new(0, 45, 0, 45)
 toggleBtn.Position = UDim2.new(0, 15, 0.4, 0)
@@ -639,7 +606,6 @@ toggleBtn.Active = true
 toggleBtn.Draggable = true
 Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 22)
 
--- Janela Principal
 mainFrame = Instance.new("Frame", gui)
 mainFrame.Size = UDim2.new(0, 420, 0, 320)
 mainFrame.Position = UDim2.new(0.5, -210, 0.4, -160)
@@ -654,7 +620,6 @@ toggleBtn.MouseButton1Click:Connect(function()
     mainFrame.Visible = not mainFrame.Visible
 end)
 
--- Cabeçalho
 local header = Instance.new("Frame", mainFrame)
 header.Size = UDim2.new(1, 0, 0, 35)
 header.BackgroundColor3 = Color3.fromRGB(25, 25, 34)
@@ -665,13 +630,12 @@ local title = Instance.new("TextLabel", header)
 title.Size = UDim2.new(1, -10, 1, 0)
 title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "Dragon Blox Hub v5.1"
+title.Text = "Dragon Blox Hub v5.2 (Fixed)"
 title.TextColor3 = Color3.fromRGB(255, 140, 30)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
 title.TextXAlignment = Enum.TextXAlignment.Left
 
--- Barra de Navegação de Abas
 local navBar = Instance.new("Frame", mainFrame)
 navBar.Size = UDim2.new(0, 100, 1, -35)
 navBar.Position = UDim2.new(0, 0, 0, 35)
@@ -682,7 +646,6 @@ local navLayout = Instance.new("UIListLayout", navBar)
 navLayout.SortOrder = Enum.SortOrder.LayoutOrder
 navLayout.Padding = UDim.new(0, 2)
 
--- Container de Conteúdo das Abas
 local contentContainer = Instance.new("Frame", mainFrame)
 contentContainer.Size = UDim2.new(1, -105, 1, -40)
 contentContainer.Position = UDim2.new(0, 105, 0, 38)
@@ -731,20 +694,15 @@ local function createTab(name)
     return container
 end
 
--- Instanciação das Abas
 local farmTab   = createTab("Farm")
 local statsTab  = createTab("Stats")
 local miscTab   = createTab("Misc")
-local errosTab  = createTab("Erros")
 local configTab = createTab("Config")
-local sobreTab  = createTab("Sobre")
 
--- Seleciona Aba Inicial
 tabs["Farm"].btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
 tabs["Farm"].btn.TextColor3 = Color3.fromRGB(255, 140, 30)
 tabs["Farm"].container.Visible = true
 
--- Helpers de UI
 local function mkToggle(parent, text, default, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, -8, 0, 28)
@@ -802,51 +760,27 @@ local function mkSlider(parent, label, min, max, default, cb)
     end
 
     bar.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             setFromX(i.Position.X)
         end
     end)
     UIS.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-        or i.UserInputType == Enum.UserInputType.Touch) then
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
             setFromX(i.Position.X)
         end
     end)
     UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
             dragging = false
         end
     end)
 end
 
-local function mkBtn(parent, text, cb)
-    local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, -8, 0, 26)
-    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 11
-    btn.Text = text
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-    btn.MouseButton1Click:Connect(cb)
-    return btn
-end
-
--- ═══════════════════════════════════════════════
 -- CONTEÚDO DAS ABAS
--- ═══════════════════════════════════════════════
-
--- ABA: FARM
 mkToggle(farmTab, "Auto Farm (M1)", AutoFarm, function(v) AutoFarm = v end)
 mkToggle(farmTab, "Auto-Click (M1)", false, function(v)
-    if v then
-        iniciarAutoClick(CombatCfg.M1_Delay)
-    else
-        pararAutoClick()
-    end
+    if v then iniciarAutoClick(CombatCfg.M1_Delay) else pararAutoClick() end
 end)
 mkToggle(farmTab, "Auto Skill", AutoSkill, function(v) AutoSkill = v end)
 mkToggle(farmTab, "Auto Lock-On", CombatCfg.AutoLock, function(v) CombatCfg.AutoLock = v end)
@@ -855,7 +789,6 @@ mkToggle(farmTab, "Mostrar ESP", ShowESP, function(v) ShowESP = v end)
 mkSlider(farmTab, "M1 Range", 5, 50, CombatCfg.M1_Range, function(v) CombatCfg.M1_Range = v end)
 mkSlider(farmTab, "Skill Delay (x0.1s)", 3, 50, 12, function(v) CombatCfg.Skill_Delay = v / 10 end)
 
--- ABA: STATS
 local statsLabel = Instance.new("TextLabel", statsTab)
 statsLabel.Size = UDim2.new(1, -8, 0, 100)
 statsLabel.BackgroundTransparency = 1
@@ -875,9 +808,7 @@ task.spawn(function()
     end
 end)
 
--- ABA: MISC
 mkSlider(miscTab, "Velocidade de Voo", 50, 500, Config.FlySpeed, function(v) Config.FlySpeed = v end)
-
 mkToggle(miscTab, "Forçar WalkSpeed", Config.OverrideSpeed, function(v) Config.OverrideSpeed = v end)
 mkSlider(miscTab, "WalkSpeed", 16, 200, Config.WalkSpeed, function(v) Config.WalkSpeed = v end)
 
@@ -894,53 +825,6 @@ task.spawn(function()
     end
 end)
 
--- ABA: ERROS (LOG CONSOLE)
-local errLogLabel = Instance.new("TextLabel", errosTab)
-errLogLabel.Size = UDim2.new(1, -8, 0, 180)
-errLogLabel.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
-errLogLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-errLogLabel.Font = Enum.Font.Code
-errLogLabel.TextSize = 10
-errLogLabel.TextXAlignment = Enum.TextXAlignment.Left
-errLogLabel.TextYAlignment = Enum.TextYAlignment.Top
-errLogLabel.Text = " Nenhuma falha detectada."
-Instance.new("UICorner", errLogLabel).CornerRadius = UDim.new(0, 4)
-
-mkBtn(errosTab, "Copiar Logs de Erro", function()
-    if setclipboard then
-        setclipboard(errLogLabel.Text)
-    end
-end)
-
-local oldWarn = warn
-getgenv().warn = function(...)
-    local msg = table.concat({...}, " ")
-    oldWarn(...)
-    table.insert(LogErrosList, msg)
-    if #LogErrosList > 15 then table.remove(LogErrosList, 1) end
-    errLogLabel.Text = " " .. table.concat(LogErrosList, "\n ")
-end
-
--- ABA: CONFIG
-mkSlider(configTab, "Ki mín. p/ recarregar (%)", 10, 80, 30, function(v)
-    KiCfg.LimiteRecarga = v / 100
-end)
-
-mkSlider(configTab, "Ki alvo pós-recarga (%)", 50, 100, 90, function(v)
-    KiCfg.AlvoRecarga = v / 100
-end)
-
-mkSlider(configTab, "Tempo máx. recarga (s)", 1, 10, 3, function(v)
-    KiCfg.TempoMaxRecarga = v
-end)
-
--- ABA: SOBRE
-local sobreText = Instance.new("TextLabel", sobreTab)
-sobreText.Size = UDim2.new(1, -8, 0, 120)
-sobreText.BackgroundTransparency = 1
-sobreText.TextColor3 = Color3.fromRGB(200, 200, 210)
-sobreText.Font = Enum.Font.Gotham
-sobreText.TextSize = 11
-sobreText.TextXAlignment = Enum.TextXAlignment.Left
-sobreText.TextYAlignment = Enum.TextYAlignment.Top
-sobreText.Text = "Dragon Blox Hub v5.1\n\nSistema de Auto-Farm Mobile com VirtualInputManager e rotação de skills via Knit Remotes.\n\nProteção contra Mobs Imortais e trava de interface nativa ativadas."
+mkSlider(configTab, "Ki mín. p/ recarregar (%)", 10, 80, 30, function(v) KiCfg.LimiteRecarga = v / 100 end)
+mkSlider(configTab, "Ki alvo pós-recarga (%)", 50, 100, 90, function(v) KiCfg.AlvoRecarga = v / 100 end)
+mkSlider(configTab, "Tempo máx. recarga (s)", 1, 10, 3, function(v) KiCfg.TempoMaxRecarga = v end)
