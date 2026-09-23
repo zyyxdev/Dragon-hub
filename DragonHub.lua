@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                   DRAGON BLOX HUB - VERSION 5.5 (AMOLED)       
+--           DRAGON BLOX HUB - VERSION 5.6 (AMOLED RAYFIELD)       
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -282,7 +282,7 @@ local function getMobMaisProximo()
 end
 
 -- ═══════════════════════════════════════════════
--- GERENCIAMENTO DE KI
+-- GERENCIAMENTO DE KI (LEITURA)
 -- ═══════════════════════════════════════════════
 local function getKiAtual()
     local char = plr.Character
@@ -295,66 +295,8 @@ local function getKiAtual()
     return cur.Value, max.Value
 end
 
-local function recarregarKi()
-    if KiCfg.Recarregando then return end
-    KiCfg.Recarregando = true
-
-    local char = plr.Character
-    if not char then KiCfg.Recarregando = false return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then KiCfg.Recarregando = false return end
-
-    local mob = getMobMaisProximo()
-    if mob and mob.dist < 40 then
-        local fuga = hrp.Position + (hrp.Position - mob.pos).Unit * 40
-        voarPara(fuga, 100)
-        task.wait(0.5)
-    end
-
-    local ancora = hrp.CFrame
-    local cam = workspace.CurrentCamera
-    local camCF = cam and cam.CFrame or ancora
-    local inicio = os.clock()
-    local duracaoMax = KiCfg.TempoMaxRecarga or 3
-
-    while KiCfg.Recarregando and Ativo do
-        local cur, max = getKiAtual()
-        local pct = max > 0 and (cur / max) or 0
-        if pct >= KiCfg.AlvoRecarga then break end
-        if (os.clock() - inicio) >= duracaoMax then break end
-
-        if SkillRemote then
-            pcall(function()
-                SkillRemote:FireServer({
-                    Began = true,
-                    CFrame = ancora,
-                    Aim = ancora.Position + ancora.LookVector * 10,
-                    Camera = camCF,
-                    Type = 1,
-                })
-            end)
-        end
-        task.wait(0.2)
-    end
-
-    if SkillRemote then
-        pcall(function()
-            SkillRemote:FireServer({
-                Began = false,
-                CFrame = ancora,
-                Aim = ancora.Position + ancora.LookVector * 10,
-                Camera = camCF,
-                Type = 1,
-            })
-        end)
-    end
-
-    KiCfg.Recarregando = false
-    task.wait(KiCfg.AposRecarga or 0.5)
-end
-
 -- ═══════════════════════════════════════════════
--- GERENCIAMENTO DE SKILLS (SKILL TAP SUPPORTE)
+-- GERENCIAMENTO DE SKILLS (CORRIGIDO)
 -- ═══════════════════════════════════════════════
 local SkillList = {
     "UniqueSets_2_1",
@@ -379,6 +321,7 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
+    -- 1) Special só quando troca de skill
     if skillId ~= ultimaSpecial then
         if RE_ExecuteSkillSpecial then
             pcall(function()
@@ -389,6 +332,7 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
         task.wait(0.08)
     end
 
+    -- 2) Se NÃO é tap, segura por X segundos (Type 1 corrigido)
     if not SkillTap and SkillRemote then
         pcall(function()
             SkillRemote:FireServer({
@@ -396,12 +340,13 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
                 CFrame = hrp.CFrame,
                 Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
                 Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
-                Type = 2,
+                Type = 1,
             })
         end)
-        task.wait(0.1)
+        task.wait(0.15)
     end
 
+    -- 3) Executa a skill no servidor
     local params = { HumCFrame = hrp.CFrame }
     if targetPos then params.targetPos = targetPos end
     if mobNome then params.Target = mobNome end
@@ -412,14 +357,16 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
         end)
     end
 
-    if SkillRemote then
+    -- 4) Só manda Began=false se houve Began=true antes (Type 1)
+    if not SkillTap and SkillRemote then
+        task.wait(0.1)
         pcall(function()
             SkillRemote:FireServer({
                 Began = false,
                 CFrame = hrp.CFrame,
                 Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
                 Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
-                Type = 2,
+                Type = 1,
             })
         end)
     end
@@ -573,17 +520,6 @@ task.spawn(function()
             continue
         end
 
-        -- KI
-        local cur, max = getKiAtual()
-        local pct = max > 0 and (cur / max) or 1
-        if pct < KiCfg.LimiteRecarga and AutoSkill then
-            lockOn("")
-            pararVoo()
-            recarregarKi()
-            ultimoSkill = os.clock()
-            continue
-        end
-
         local mob = getMobMaisProximo()
         if not mob then
             pararVoo()
@@ -629,257 +565,477 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- INTERFACE GRÁFICA (AMOLED UI)
+-- UI LIBRARY — RAYFIELD-STYLE (custom, AMOLED)
 -- ═══════════════════════════════════════════════
-local gui = Instance.new("ScreenGui")
-gui.Name = "DragonBloxHub_v5"
-gui.ResetOnSpawn = false
-gui.Parent = CoreGui
+local UI = {}
 
-local toggleBtn = Instance.new("TextButton", gui)
-toggleBtn.Size = UDim2.new(0, 45, 0, 45)
-toggleBtn.Position = UDim2.new(0, 15, 0.4, 0)
-toggleBtn.BackgroundColor3 = Color3.fromRGB(255, 140, 30)
-toggleBtn.Text = "DBH"
-toggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-toggleBtn.Font = Enum.Font.GothamBold
-toggleBtn.TextSize = 14
-toggleBtn.Active = true
-toggleBtn.Draggable = true
-Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 22)
+UI.Theme = {
+    Bg        = Color3.fromRGB(0, 0, 0),
+    Panel     = Color3.fromRGB(8, 8, 8),
+    Elevated  = Color3.fromRGB(14, 14, 14),
+    Border    = Color3.fromRGB(26, 26, 30),
+    Accent    = Color3.fromRGB(255, 140, 30),
+    Text      = Color3.fromRGB(235, 235, 240),
+    TextDim   = Color3.fromRGB(150, 150, 160),
+    Success   = Color3.fromRGB(80, 200, 120),
+    Danger    = Color3.fromRGB(220, 60, 60),
+    Off       = Color3.fromRGB(45, 45, 55),
+}
 
-mainFrame = Instance.new("Frame", gui)
-mainFrame.Size = UDim2.new(0, 420, 0, 320)
-mainFrame.Position = UDim2.new(0.5, -210, 0.4, -160)
-mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-mainFrame.BackgroundTransparency = 0.1
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.Draggable = true
-mainFrame.Visible = true
-Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
+local FONT      = Enum.Font.GothamMedium
+local FONT_BOLD = Enum.Font.GothamBold
+local FONT_MONO = Enum.Font.Code
 
-toggleBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = not mainFrame.Visible
-end)
-
-local header = Instance.new("Frame", mainFrame)
-header.Size = UDim2.new(1, 0, 0, 35)
-header.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
-header.BorderSizePixel = 0
-Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
-
-local title = Instance.new("TextLabel", header)
-title.Size = UDim2.new(1, -10, 1, 0)
-title.Position = UDim2.new(0, 10, 0, 0)
-title.BackgroundTransparency = 1
-title.Text = "Dragon Blox Hub v5.5 (AMOLED Edition)"
-title.TextColor3 = Color3.fromRGB(255, 140, 30)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 14
-title.TextXAlignment = Enum.TextXAlignment.Left
-
-local navBar = Instance.new("Frame", mainFrame)
-navBar.Size = UDim2.new(0, 100, 1, -35)
-navBar.Position = UDim2.new(0, 0, 0, 35)
-navBar.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
-navBar.BorderSizePixel = 0
-
-local navLayout = Instance.new("UIListLayout", navBar)
-navLayout.SortOrder = Enum.SortOrder.LayoutOrder
-navLayout.Padding = UDim.new(0, 2)
-
-local contentContainer = Instance.new("Frame", mainFrame)
-contentContainer.Size = UDim2.new(1, -105, 1, -40)
-contentContainer.Position = UDim2.new(0, 105, 0, 38)
-contentContainer.BackgroundTransparency = 1
-
-local tabs = {}
-
-local function createTab(name)
-    local tabBtn = Instance.new("TextButton", navBar)
-    tabBtn.Size = UDim2.new(1, 0, 0, 32)
-    tabBtn.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
-    tabBtn.TextColor3 = Color3.fromRGB(160, 160, 170)
-    tabBtn.Font = Enum.Font.Gotham
-    tabBtn.TextSize = 11
-    tabBtn.Text = name
-    tabBtn.BorderSizePixel = 0
-
-    local container = Instance.new("ScrollingFrame", contentContainer)
-    container.Size = UDim2.new(1, 0, 1, 0)
-    container.BackgroundTransparency = 1
-    container.Visible = false
-    container.CanvasSize = UDim2.new(0, 0, 0, 0)
-    container.ScrollBarThickness = 4
-
-    local layout = Instance.new("UIListLayout", container)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 6)
-
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        container.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 10)
-    end)
-
-    tabBtn.MouseButton1Click:Connect(function()
-        for _, t in pairs(tabs) do
-            t.btn.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
-            t.btn.TextColor3 = Color3.fromRGB(160, 160, 170)
-            t.container.Visible = false
-        end
-        tabBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
-        tabBtn.TextColor3 = Color3.fromRGB(255, 140, 30)
-        container.Visible = true
-    end)
-
-    local tabData = {btn = tabBtn, container = container}
-    tabs[name] = tabData
-    return container
+local function I(class, props, parent)
+    local o = Instance.new(class)
+    for k, v in pairs(props or {}) do o[k] = v end
+    if parent then o.Parent = parent end
+    return o
 end
 
-local farmTab   = createTab("Farm")
-local statsTab  = createTab("Stats")
-local miscTab   = createTab("Misc")
-local configTab = createTab("Config")
-
-tabs["Farm"].btn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
-tabs["Farm"].btn.TextColor3 = Color3.fromRGB(255, 140, 30)
-tabs["Farm"].container.Visible = true
-
-local function mkToggle(parent, text, default, cb)
-    local btn = Instance.new("TextButton", parent)
-    btn.Size = UDim2.new(1, -8, 0, 28)
-    btn.BackgroundColor3 = default and Color3.fromRGB(30, 100, 50) or Color3.fromRGB(20, 20, 20)
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 11
-    btn.Text = text .. ": " .. (default and "LIGADO" or "DESLIGADO")
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
-
-    local st = default
-    btn.MouseButton1Click:Connect(function()
-        st = not st
-        btn.BackgroundColor3 = st and Color3.fromRGB(30, 100, 50) or Color3.fromRGB(20, 20, 20)
-        btn.Text = text .. ": " .. (st and "LIGADO" or "DESLIGADO")
-        cb(st)
-    end)
+local function corner(o, r)
+    return I("UICorner", {CornerRadius = r or UDim.new(0, 7)}, o)
 end
 
-local function mkSlider(parent, label, min, max, default, cb)
-    local f = Instance.new("Frame", parent)
-    f.Size = UDim2.new(1, -8, 0, 40)
-    f.BackgroundTransparency = 1
+local function pad(o, t, b, l, r)
+    return I("UIPadding", {
+        PaddingTop = UDim.new(0, t or 0),
+        PaddingBottom = UDim.new(0, b or 0),
+        PaddingLeft = UDim.new(0, l or 0),
+        PaddingRight = UDim.new(0, r or 0),
+    }, o)
+end
 
-    local l = Instance.new("TextLabel", f)
-    l.Size = UDim2.new(1, 0, 0, 14)
-    l.BackgroundTransparency = 1
-    l.TextColor3 = Color3.fromRGB(220, 220, 225)
-    l.TextSize = 11
-    l.Font = Enum.Font.Gotham
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Text = label
+-- ─── Window ─────────────────────────────
+function UI.newWindow()
+    local gui = I("ScreenGui", {
+        Name = "DragonBloxHub_v5",
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    }, CoreGui)
 
-    local bar = Instance.new("Frame", f)
-    bar.Size = UDim2.new(1, 0, 0, 14)
-    bar.Position = UDim2.new(0, 0, 0, 20)
-    bar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-    bar.BorderSizePixel = 0
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 4)
+    local main = I("Frame", {
+        Name = "Main",
+        Size = UDim2.new(0, 480, 0, 360),
+        Position = UDim2.new(0.5, -240, 0.5, -180),
+        BackgroundColor3 = UI.Theme.Bg,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Active = true,
+    }, gui)
+    corner(main, UDim.new(0, 10))
+    I("UIStroke", {Color = UI.Theme.Border, Thickness = 1}, main)
 
-    local fill = Instance.new("Frame", bar)
-    fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
-    fill.BackgroundColor3 = Color3.fromRGB(255, 140, 30)
-    fill.BorderSizePixel = 0
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+    -- Header
+    local header = I("Frame", {
+        Size = UDim2.new(1, 0, 0, 36),
+        BackgroundColor3 = UI.Theme.Panel,
+        BorderSizePixel = 0,
+    }, main)
+    corner(header, UDim.new(0, 10))
 
-    local valorLabel = Instance.new("TextLabel", bar)
-    valorLabel.Size = UDim2.new(1, 0, 1, 0)
-    valorLabel.BackgroundTransparency = 1
-    valorLabel.Text = tostring(default)
-    valorLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    valorLabel.TextStrokeTransparency = 0.5
-    valorLabel.Font = Enum.Font.GothamBold
-    valorLabel.TextSize = 10
-    valorLabel.ZIndex = 5
+    I("TextLabel", {
+        Size = UDim2.new(1, -110, 1, 0),
+        Position = UDim2.new(0, 14, 0, 0),
+        BackgroundTransparency = 1,
+        Text = "🐉   Dragon Blox Hub",
+        TextColor3 = UI.Theme.Text,
+        Font = FONT_BOLD,
+        TextSize = 13,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, header)
 
-    local dragging = false
+    local btnClose = I("TextButton", {
+        Size = UDim2.new(0, 22, 0, 22),
+        Position = UDim2.new(1, -30, 0.5, -11),
+        BackgroundColor3 = UI.Theme.Danger,
+        Text = "×", TextColor3 = Color3.new(1,1,1),
+        Font = FONT_BOLD, TextSize = 14,
+        AutoButtonColor = false, BorderSizePixel = 0,
+    }, header)
+    corner(btnClose, UDim.new(0, 5))
 
-    local function setFromX(x)
-        local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
-        local val = math.floor(min + (max - min) * rel)
-        fill.Size = UDim2.new(rel, 0, 1, 0)
-        valorLabel.Text = tostring(val)
-        cb(val)
-    end
+    local btnMin = I("TextButton", {
+        Size = UDim2.new(0, 22, 0, 22),
+        Position = UDim2.new(1, -56, 0.5, -11),
+        BackgroundColor3 = UI.Theme.Elevated,
+        Text = "—", TextColor3 = UI.Theme.Text,
+        Font = FONT_BOLD, TextSize = 12,
+        AutoButtonColor = false, BorderSizePixel = 0,
+    }, header)
+    corner(btnMin, UDim.new(0, 5))
 
-    bar.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+    -- Sidebar
+    local sidebar = I("Frame", {
+        Size = UDim2.new(0, 118, 1, -36),
+        Position = UDim2.new(0, 0, 0, 36),
+        BackgroundColor3 = UI.Theme.Panel,
+        BorderSizePixel = 0,
+    }, main)
+    I("UIListLayout", {
+        Padding = UDim.new(0, 3),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, sidebar)
+    pad(sidebar, 8, 8, 8, 8)
+
+    -- Content
+    local content = I("Frame", {
+        Size = UDim2.new(1, -118, 1, -36),
+        Position = UDim2.new(0, 118, 0, 36),
+        BackgroundColor3 = UI.Theme.Bg,
+        BorderSizePixel = 0,
+    }, main)
+
+    -- Drag pela header
+    local dragging, dragStart, startPos = false, nil, nil
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
-            setFromX(i.Position.X)
+            dragStart = input.Position
+            startPos = main.Position
         end
     end)
-    UIS.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            setFromX(i.Position.X)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y)
         end
     end)
-    UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
         end
     end)
+
+    -- Botão flutuante
+    local float = I("TextButton", {
+        Size = UDim2.new(0, 46, 0, 46),
+        Position = UDim2.new(0, 20, 0.4, 0),
+        BackgroundColor3 = UI.Theme.Bg,
+        Text = "🐉", TextColor3 = UI.Theme.Accent,
+        Font = FONT_BOLD, TextSize = 20,
+        AutoButtonColor = false, Visible = false,
+        Active = true, Draggable = true, BorderSizePixel = 0,
+    }, gui)
+    corner(float, UDim.new(1, 0))
+    I("UIStroke", {Color = UI.Theme.Accent, Thickness = 1}, float)
+
+    btnMin.MouseButton1Click:Connect(function()
+        main.Visible = false; float.Visible = true
+    end)
+    float.MouseButton1Click:Connect(function()
+        main.Visible = true; float.Visible = false
+    end)
+    btnClose.MouseButton1Click:Connect(function() gui:Destroy() end)
+
+    return {gui = gui, frame = main, sidebar = sidebar, content = content, float = float, tabs = {}}
 end
 
--- CONTEÚDO DAS ABAS
-mkToggle(farmTab, "Auto Farm (M1)", AutoFarm, function(v) AutoFarm = v end)
-mkToggle(farmTab, "Auto Skill", AutoSkill, function(v) AutoSkill = v end)
-mkToggle(farmTab, "Auto Lock-On", CombatCfg.AutoLock, function(v) CombatCfg.AutoLock = v end)
-mkToggle(farmTab, "Mostrar ESP", ShowESP, function(v) ShowESP = v end)
+-- ─── Tab ─────────────────────────────
+function UI.newTab(win, icon, name)
+    local btn = I("TextButton", {
+        Size = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = UI.Theme.Panel,
+        TextColor3 = UI.Theme.TextDim,
+        Font = FONT, TextSize = 11,
+        Text = "  " .. icon .. "   " .. name,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        BorderSizePixel = 0, AutoButtonColor = false,
+    }, win.sidebar)
+    corner(btn, UDim.new(0, 7))
 
-mkSlider(farmTab, "M1 Range", 5, 50, CombatCfg.M1_Range, function(v) CombatCfg.M1_Range = v end)
-mkSlider(farmTab, "M1 Delay (x0.01s)", 10, 100, 40, function(v) CombatCfg.M1_Delay = v / 100 end)
-mkSlider(farmTab, "Skill Delay (x0.1s)", 3, 50, 12, function(v) CombatCfg.Skill_Delay = v / 10 end)
+    local frame = I("ScrollingFrame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1, BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = UI.Theme.Border,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        Visible = false,
+    }, win.content)
+    local layout = I("UIListLayout", {
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    }, frame)
+    pad(frame, 12, 12, 12, 12)
+    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        frame.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 24)
+    end)
 
-local statsLabel = Instance.new("TextLabel", statsTab)
-statsLabel.Size = UDim2.new(1, -8, 0, 100)
-statsLabel.BackgroundTransparency = 1
-statsLabel.TextColor3 = Color3.fromRGB(220, 220, 225)
-statsLabel.Font = Enum.Font.Gotham
-statsLabel.TextSize = 12
-statsLabel.TextXAlignment = Enum.TextXAlignment.Left
-statsLabel.TextYAlignment = Enum.TextYAlignment.Top
-statsLabel.Text = "Carregando estatísticas..."
+    btn.MouseButton1Click:Connect(function()
+        for _, t in pairs(win.tabs) do
+            t.btn.BackgroundColor3 = UI.Theme.Panel
+            t.btn.TextColor3 = UI.Theme.TextDim
+            t.frame.Visible = false
+        end
+        btn.BackgroundColor3 = UI.Theme.Elevated
+        btn.TextColor3 = UI.Theme.Accent
+        frame.Visible = true
+    end)
 
+    local tab = {btn = btn, frame = frame}
+    win.tabs[name] = tab
+    return tab
+end
+
+-- ─── Section ─────────────────────────
+function UI.section(tab, title)
+    return I("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 26),
+        BackgroundTransparency = 1,
+        Text = title, TextColor3 = UI.Theme.Accent,
+        Font = FONT_BOLD, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, tab.frame)
+end
+
+-- ─── Toggle (switch iOS) ─────────────
+function UI.toggle(tab, opts)
+    local state = opts.default or false
+
+    local frame = I("TextButton", {
+        Size = UDim2.new(1, 0, 0, 40),
+        BackgroundColor3 = UI.Theme.Elevated,
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false,
+    }, tab.frame)
+    corner(frame, UDim.new(0, 8))
+
+    I("TextLabel", {
+        Size = UDim2.new(1, -70, 1, 0),
+        Position = UDim2.new(0, 14, 0, 0),
+        BackgroundTransparency = 1,
+        Text = opts.name, TextColor3 = UI.Theme.Text,
+        Font = FONT, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, frame)
+
+    local sw = I("Frame", {
+        Size = UDim2.new(0, 42, 0, 24),
+        Position = UDim2.new(1, -56, 0.5, -12),
+        BackgroundColor3 = state and UI.Theme.Success or UI.Theme.Off,
+        BorderSizePixel = 0,
+    }, frame)
+    corner(sw, UDim.new(1, 0))
+
+    local knob = I("Frame", {
+        Size = UDim2.new(0, 20, 0, 20),
+        Position = state and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10),
+        BackgroundColor3 = Color3.fromRGB(255,255,255),
+        BorderSizePixel = 0,
+    }, sw)
+    corner(knob, UDim.new(1, 0))
+
+    local function set(v)
+        state = v
+        sw.BackgroundColor3 = v and UI.Theme.Success or UI.Theme.Off
+        knob.Position = v and UDim2.new(1, -22, 0.5, -10) or UDim2.new(0, 2, 0.5, -10)
+    end
+
+    frame.MouseButton1Click:Connect(function()
+        set(not state)
+        if opts.callback then opts.callback(state) end
+    end)
+
+    return {set = set}
+end
+
+-- ─── Slider (label + valor + track) ──
+function UI.slider(tab, opts)
+    local min = opts.min or 0
+    local max = opts.max or 100
+    local value = opts.default or min
+    local suffix = opts.suffix or ""
+
+    local frame = I("Frame", {
+        Size = UDim2.new(1, 0, 0, 56),
+        BackgroundColor3 = UI.Theme.Elevated,
+        BorderSizePixel = 0,
+    }, tab.frame)
+    corner(frame, UDim.new(0, 8))
+
+    I("TextLabel", {
+        Size = UDim2.new(1, -90, 0, 22),
+        Position = UDim2.new(0, 14, 0, 6),
+        BackgroundTransparency = 1,
+        Text = opts.name, TextColor3 = UI.Theme.Text,
+        Font = FONT, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, frame)
+
+    local valLabel = I("TextLabel", {
+        Size = UDim2.new(0, 80, 0, 22),
+        Position = UDim2.new(1, -92, 0, 6),
+        BackgroundTransparency = 1,
+        Text = tostring(value) .. suffix,
+        TextColor3 = UI.Theme.Accent,
+        Font = FONT_BOLD, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    }, frame)
+
+    local track = I("Frame", {
+        Size = UDim2.new(1, -28, 0, 6),
+        Position = UDim2.new(0, 14, 0, 38),
+        BackgroundColor3 = UI.Theme.Border,
+        BorderSizePixel = 0,
+    }, frame)
+    corner(track, UDim.new(1, 0))
+
+    local fill = I("Frame", {
+        Size = UDim2.new((value - min) / (max - min), 0, 1, 0),
+        BackgroundColor3 = UI.Theme.Accent,
+        BorderSizePixel = 0,
+    }, track)
+    corner(fill, UDim.new(1, 0))
+
+    local dragging = false
+
+    local function update(x)
+        local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+        local val = math.floor(min + (max - min) * rel + 0.5)
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        valLabel.Text = tostring(val) .. suffix
+        value = val
+        if opts.callback then opts.callback(val) end
+    end
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(input.Position.X)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
+            update(input.Position.X)
+        end
+    end)
+    UIS.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    return {set = function(v)
+        value = v
+        local rel = (v - min) / (max - min)
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        valLabel.Text = tostring(v) .. suffix
+    end}
+end
+
+-- ─── Label (info read-only) ──────────
+function UI.label(tab, opts)
+    local l = I("TextLabel", {
+        Size = UDim2.new(1, 0, 0, opts.height or 60),
+        BackgroundColor3 = UI.Theme.Elevated,
+        TextColor3 = UI.Theme.Text,
+        Font = FONT_MONO, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        TextWrapped = true,
+        Text = opts.text or "",
+    }, tab.frame)
+    corner(l, UDim.new(0, 8))
+    pad(l, 10, 10, 14, 14)
+    return l
+end
+
+-- ═══════════════════════════════════════════════
+-- APLICAÇÃO
+-- ═══════════════════════════════════════════════
+local win = UI.newWindow()
+mainFrame = win.frame
+
+local farmTab   = UI.newTab(win, "⚔", "Farm")
+local statsTab  = UI.newTab(win, "📊", "Stats")
+local miscTab   = UI.newTab(win, "🛠", "Misc")
+local configTab = UI.newTab(win, "⚙", "Config")
+
+-- ativa Farm
+farmTab.btn.BackgroundColor3 = UI.Theme.Elevated
+farmTab.btn.TextColor3 = UI.Theme.Accent
+farmTab.frame.Visible = true
+
+-- ─── FARM ────────────────────────────
+UI.section(farmTab, "⚔   COMBATE")
+UI.toggle(farmTab, {name = "Auto Farm (M1)", default = AutoFarm,   callback = function(v) AutoFarm = v end})
+UI.toggle(farmTab, {name = "Auto Skill",      default = AutoSkill,  callback = function(v) AutoSkill = v end})
+UI.toggle(farmTab, {name = "Auto Lock-On",    default = CombatCfg.AutoLock, callback = function(v) CombatCfg.AutoLock = v end})
+UI.toggle(farmTab, {name = "Mostrar ESP",     default = ShowESP,    callback = function(v) ShowESP = v end})
+
+UI.section(farmTab, "🎯   RANGES & DELAYS")
+UI.slider(farmTab, {
+    name = "M1 Range", min = 5, max = 50, default = CombatCfg.M1_Range, suffix = " studs",
+    callback = function(v) CombatCfg.M1_Range = v end
+})
+UI.slider(farmTab, {
+    name = "M1 Delay", min = 10, max = 100, default = 40, suffix = " ms",
+    callback = function(v) CombatCfg.M1_Delay = v / 100 end
+})
+UI.slider(farmTab, {
+    name = "Skill Delay", min = 3, max = 50, default = 12, suffix = " x0.1s",
+    callback = function(v) CombatCfg.Skill_Delay = v / 10 end
+})
+
+-- ─── STATS ───────────────────────────
+UI.section(statsTab, "📊   STATUS DO JOGADOR")
+local statsLabel = UI.label(statsTab, {text = "Carregando...", height = 110})
+
+-- ─── MISC ────────────────────────────
+UI.section(miscTab, "🛠   UTILITÁRIOS")
+UI.toggle(miscTab, {name = "Noclip", default = NoclipAtivo, callback = function(v) NoclipAtivo = v end})
+
+UI.section(miscTab, "🎯   HITBOX")
+UI.toggle(miscTab, {name = "Hitbox Expandida", default = HitboxCfg.Ativo, callback = function(v) HitboxCfg.Ativo = v end})
+UI.slider(miscTab, {
+    name = "Multiplicador Hitbox", min = 1, max = 5, default = HitboxCfg.Multiplicador,
+    callback = function(v) HitboxCfg.Multiplicador = v end
+})
+
+UI.section(miscTab, "✈   MOVIMENTO")
+UI.slider(miscTab, {
+    name = "Velocidade de Voo", min = 50, max = 500, default = Config.FlySpeed, suffix = " studs/s",
+    callback = function(v) Config.FlySpeed = v end
+})
+UI.toggle(miscTab, {name = "Forçar WalkSpeed", default = Config.OverrideSpeed, callback = function(v) Config.OverrideSpeed = v end})
+UI.slider(miscTab, {
+    name = "WalkSpeed", min = 16, max = 200, default = Config.WalkSpeed,
+    callback = function(v) Config.WalkSpeed = v end
+})
+
+-- ─── CONFIG ──────────────────────────
+UI.section(configTab, "⚡   SKILLS")
+UI.toggle(configTab, {name = "Skills: Tap (não segurar)", default = SkillTap, callback = function(v) SkillTap = v end})
+
+UI.section(configTab, "💠   KI / ENERGIA")
+UI.slider(configTab, {
+    name = "Ki mín. p/ recarregar", min = 10, max = 80, default = 30, suffix = "%",
+    callback = function(v) KiCfg.LimiteRecarga = v / 100 end
+})
+UI.slider(configTab, {
+    name = "Ki alvo pós-recarga", min = 50, max = 100, default = 90, suffix = "%",
+    callback = function(v) KiCfg.AlvoRecarga = v / 100 end
+})
+UI.slider(configTab, {
+    name = "Tempo máx. recarga", min = 1, max = 10, default = 3, suffix = " s",
+    callback = function(v) KiCfg.TempoMaxRecarga = v end
+})
+
+-- ─── Stats loop ──────────────────────
 task.spawn(function()
     while Ativo do
         local st = getStats()
-        statsLabel.Text = string.format("Força: %d\nEnergia (Ki): %d\nDefesa: %d\nVelocidade: %d", 
-            st.Strength or 0, st.Energy or 0, st.Defense or 0, st.Speed or 0)
+        statsLabel.Text = string.format(
+            "Força:        %d\nEnergia (Ki): %d\nDefesa:       %d\nVelocidade:   %d",
+            st.Strength or 0, st.Energy or 0, st.Defense or 0, st.Speed or 0
+        )
         task.wait(1)
     end
 end)
-
-mkToggle(miscTab, "Noclip", NoclipAtivo, function(v) NoclipAtivo = v end)
-mkToggle(miscTab, "Hitbox Expandida", HitboxCfg.Ativo, function(v) HitboxCfg.Ativo = v end)
-mkSlider(miscTab, "Multiplicador Hitbox", 1, 5, HitboxCfg.Multiplicador, function(v) HitboxCfg.Multiplicador = v end)
-mkSlider(miscTab, "Velocidade de Voo", 50, 500, Config.FlySpeed, function(v) Config.FlySpeed = v end)
-mkToggle(miscTab, "Forçar WalkSpeed", Config.OverrideSpeed, function(v) Config.OverrideSpeed = v end)
-mkSlider(miscTab, "WalkSpeed", 16, 200, Config.WalkSpeed, function(v) Config.WalkSpeed = v end)
-
-task.spawn(function()
-    while Ativo do
-        if Config.OverrideSpeed then
-            local char = plr.Character
-            if char then
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hum then hum.WalkSpeed = Config.WalkSpeed end
-            end
-        end
-        task.wait(0.5)
-    end
-end)
-
-mkToggle(configTab, "Skills: Tap (não segurar)", SkillTap, function(v) SkillTap = v end)
-mkSlider(configTab, "Ki mín. p/ recarregar (%)", 10, 80, 30, function(v) KiCfg.LimiteRecarga = v / 100 end)
-mkSlider(configTab, "Ki alvo pós-recarga (%)", 50, 100, 90, function(v) KiCfg.AlvoRecarga = v / 100 end)
-mkSlider(configTab, "Tempo máx. recarga (s)", 1, 10, 3, function(v) KiCfg.TempoMaxRecarga = v end)
