@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                   DRAGON BLOX HUB - VERSION 5.2 (FIXED)         
+--                   DRAGON BLOX HUB - VERSION 5.3                
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -7,14 +7,13 @@ local WS = game:GetService("Workspace")
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local UIS = game:GetService("UserInputService")
-local VIM = game:GetService("VirtualInputManager")
 local RunService = game:GetService("RunService")
 local plr = Players.LocalPlayer
 
 local mainFrame = nil
 
 -- ═══════════════════════════════════════════════
--- BUSCA SEGURA DE REMOTES (FALLBACK ANTI-CRASH)
+-- BUSCA SEGURA DE REMOTES
 -- ═══════════════════════════════════════════════
 local function obterRemote(nome)
     local encontrado = RS:FindFirstChild(nome, true)
@@ -37,7 +36,6 @@ local CombatCfg = {
     M1_Range        = 12,
     Skill_Delay     = 1.2,
     Skill_Range     = 30,
-    Skill_Current   = "UniqueSets_2_1",
     Skill_Slot      = 1,
     AutoLock        = true,
 }
@@ -60,61 +58,43 @@ local Ativo = true
 local AutoFarm = false
 local AutoSkill = false
 local ShowESP = false
-local LogErrosList = {}
 
 -- ═══════════════════════════════════════════════
--- AUTO-CLICK MOBILE
+-- ATAQUE M1 DIRETO VIA REMOTE (SEM VIRTUAL INPUT)
 -- ═══════════════════════════════════════════════
-local AutoClickAtivo = false
-local AutoClickThread = nil
+local function m1Direto(alvoPos)
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-local function uiBloqueada()
-    if mainFrame and mainFrame.Visible then return true end
-    local playerGui = plr:FindFirstChild("PlayerGui")
-    if playerGui then
-        for _, guiObj in ipairs(playerGui:GetChildren()) do
-            if guiObj:IsA("ScreenGui") and guiObj.Enabled and guiObj.Name ~= "DragonBloxHub_v5" and guiObj.Name ~= "DBH_ESP" then
-                local core = guiObj:FindFirstChildOfClass("Frame")
-                if core and core.Visible and core.AbsoluteSize.X > 200 then
-                    return true
-                end
-            end
-        end
-    end
-    return false
-end
+    local cam = workspace.CurrentCamera
+    local camCF = cam and cam.CFrame or hrp.CFrame
 
-local function simularToque(x, y)
-    pcall(function()
-        VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(0.02)
-        VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    end)
-end
+    if SkillRemote then
+        -- Began=true (inicia M1)
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = true,
+                CFrame = hrp.CFrame,
+                Aim = alvoPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+                Camera = camCF,
+                Type = 1,
+            })
+        end)
 
-local function iniciarAutoClick(intervalo)
-    if AutoClickAtivo then return end
-    AutoClickAtivo = true
+        task.wait(0.08)
 
-    AutoClickThread = task.spawn(function()
-        while AutoClickAtivo and Ativo do
-            task.wait(intervalo or 0.15)
-            if not uiBloqueada() then
-                local cam = workspace.CurrentCamera
-                if cam then
-                    local vp = cam.ViewportSize
-                    simularToque(vp.X / 2, vp.Y / 2)
-                end
-            end
-        end
-    end)
-end
-
-local function pararAutoClick()
-    AutoClickAtivo = false
-    if AutoClickThread then
-        task.cancel(AutoClickThread)
-        AutoClickThread = nil
+        -- Began=false (finaliza M1)
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = hrp.CFrame,
+                Aim = alvoPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+                Camera = camCF,
+                Type = 1,
+            })
+        end)
     end
 end
 
@@ -124,7 +104,7 @@ end
 local PlayerStatsHandler = nil
 task.spawn(function()
     pcall(function()
-        local handlers = RS:WaitForChild("Handlers", 3) -- Timeout de 3 segundos
+        local handlers = RS:WaitForChild("Handlers", 3)
         if handlers then
             local statHandler = handlers:WaitForChild("PlayerStatsHandler", 3)
             if statHandler then
@@ -525,13 +505,13 @@ end)
 -- ═══════════════════════════════════════════════
 task.spawn(function()
     local ultimoSkill = 0
+    local ultimoM1 = 0
     local alvoTravado = nil
 
     while Ativo do
         task.wait(0.05)
 
         if not AutoFarm and not AutoSkill then
-            pararAutoClick()
             alvoTravado = nil
             continue
         end
@@ -539,7 +519,6 @@ task.spawn(function()
         local cur, max = getKiAtual()
         local pct = max > 0 and (cur / max) or 1
         if pct < KiCfg.LimiteRecarga and AutoSkill then
-            pararAutoClick()
             lockOn("")
             pararVoo()
             recarregarKi()
@@ -549,7 +528,6 @@ task.spawn(function()
 
         local mob = getMobMaisProximo()
         if not mob then
-            pararAutoClick()
             continue
         end
 
@@ -572,12 +550,13 @@ task.spawn(function()
         pararVoo()
         hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
 
-        if AutoFarm then
-            iniciarAutoClick(CombatCfg.M1_Delay)
-        else
-            pararAutoClick()
+        -- Executa ataque M1 via Remote
+        if AutoFarm and (os.clock() - ultimoM1) >= CombatCfg.M1_Delay then
+            m1Direto(mob.pos)
+            ultimoM1 = os.clock()
         end
 
+        -- Executa ataque de Skill
         if AutoSkill and (os.clock() - ultimoSkill) >= CombatCfg.Skill_Delay then
             local skillAtual = proximaSkill()
             usarSkill(skillAtual, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
@@ -630,7 +609,7 @@ local title = Instance.new("TextLabel", header)
 title.Size = UDim2.new(1, -10, 1, 0)
 title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "Dragon Blox Hub v5.2 (Fixed)"
+title.Text = "Dragon Blox Hub v5.3"
 title.TextColor3 = Color3.fromRGB(255, 140, 30)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
@@ -779,14 +758,12 @@ end
 
 -- CONTEÚDO DAS ABAS
 mkToggle(farmTab, "Auto Farm (M1)", AutoFarm, function(v) AutoFarm = v end)
-mkToggle(farmTab, "Auto-Click (M1)", false, function(v)
-    if v then iniciarAutoClick(CombatCfg.M1_Delay) else pararAutoClick() end
-end)
 mkToggle(farmTab, "Auto Skill", AutoSkill, function(v) AutoSkill = v end)
 mkToggle(farmTab, "Auto Lock-On", CombatCfg.AutoLock, function(v) CombatCfg.AutoLock = v end)
 mkToggle(farmTab, "Mostrar ESP", ShowESP, function(v) ShowESP = v end)
 
 mkSlider(farmTab, "M1 Range", 5, 50, CombatCfg.M1_Range, function(v) CombatCfg.M1_Range = v end)
+mkSlider(farmTab, "M1 Delay (x0.01s)", 10, 100, 35, function(v) CombatCfg.M1_Delay = v / 100 end)
 mkSlider(farmTab, "Skill Delay (x0.1s)", 3, 50, 12, function(v) CombatCfg.Skill_Delay = v / 10 end)
 
 local statsLabel = Instance.new("TextLabel", statsTab)
