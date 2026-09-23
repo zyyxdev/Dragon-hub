@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                DRAGON BLOX HUB - v6.0 (FIXED & CONSOLIDATED)
+--                DRAGON BLOX HUB - v7.0 (REESCRITO)
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -11,129 +11,116 @@ local RunService = game:GetService("RunService")
 local VIM = game:GetService("VirtualInputManager")
 local plr = Players.LocalPlayer
 
-local mainFrame = nil
-local gui = nil
-
 -- ═══════════════════════════════════════════════
--- BUSCA SEGURA DE REMOTES (KNIT & DIRECT)
+-- BUSCA DE REMOTES (sem versão fixa)
 -- ═══════════════════════════════════════════════
-local function getServiceRemote(serviceName, remoteName, isRF)
+local function getKnitServices()
     local packages = RS:FindFirstChild("Packages")
     if not packages then return nil end
     local index = packages:FindFirstChild("_Index")
     if not index then return nil end
-    
+
+    local candidatos = {}
     for _, folder in ipairs(index:GetChildren()) do
         if folder.Name:find("sleitnick_knit") then
-            local services = folder:FindFirstChild("knit") and folder.knit:FindFirstChild("Services")
-            if services then
-                local svc = services:FindFirstChild(serviceName)
-                if svc then
-                    local folderName = isRF and "RF" or "RE"
-                    local targetFolder = svc:FindFirstChild(folderName)
-                    if targetFolder then
-                        return targetFolder:FindFirstChild(remoteName)
-                    end
-                end
-            end
+            table.insert(candidatos, folder)
+        end
+    end
+    table.sort(candidatos, function(a, b) return a.Name > b.Name end)
+
+    for _, folder in ipairs(candidatos) do
+        local knit = folder:FindFirstChild("knit")
+        if knit then
+            local services = knit:FindFirstChild("Services")
+            if services then return services end
         end
     end
     return nil
 end
 
-local RE_ExecuteSkill        = getServiceRemote("SkillManagerV2", "ExecuteSkill", false)
-local RE_ExecuteSkillSpecial = getServiceRemote("SkillManagerV2", "ExecuteSkill_Special", false)
-local RE_LockedOnChanged     = getServiceRemote("SkillManager", "LockedOnChanged", false)
-local RE_Prompt              = getServiceRemote("PromptService", "Prompt", false)
-local RF_RequestRebirth      = getServiceRemote("PlayerLevelService", "RequestRebirth", true)
-local RE_Toolbar             = getServiceRemote("ToolService", "UpdatePlayerToolbarSelection", false)
-local RE_SuperFlight         = getServiceRemote("FlightService", "SuperFlight", false)
-local RE_SelectMode          = getServiceRemote("ModeTransformService", "SelectMode", false)
+local function getRemote(serviceName, remoteName, isRF)
+    local services = getKnitServices()
+    if not services then return nil end
+    local svc = services:FindFirstChild(serviceName)
+    if not svc then return nil end
+    local sub = svc:FindFirstChild(isRF and "RF" or "RE")
+    if not sub then return nil end
+    return sub:FindFirstChild(remoteName)
+end
+
+local RE_ExecuteSkill        = getRemote("SkillManagerV2", "ExecuteSkill", false)
+local RE_ExecuteSkillSpecial = getRemote("SkillManagerV2", "ExecuteSkill_Special", false)
+local RE_LockedOnChanged     = getRemote("SkillManager", "LockedOnChanged", false)
+local RE_Prompt              = getRemote("PromptService", "Prompt", false)
+local RF_RequestRebirth      = getRemote("PlayerLevelService", "RequestRebirth", true)
+local RE_Toolbar             = getRemote("ToolService", "UpdatePlayerToolbarSelection", false)
+local RE_SuperFlight         = getRemote("FlightService", "SuperFlight", false)
+local RE_SelectMode          = getRemote("ModeTransformService", "SelectMode", false)
+local OnEventEffect          = getRemote("PeriodicEventService", "onEventEffect", false)
+local ItemSpawned            = getRemote("ItemDropService", "ItemSpawned", false)
+local ClaimItem              = getRemote("ItemDropService", "ClaimItem", true)
 
 local SkillRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
 -- ═══════════════════════════════════════════════
--- CONFIGURAÇÕES GLOBAIS
+-- CONFIG
 -- ═══════════════════════════════════════════════
 local Config = {
-    -- Farm
-    AutoFarm        = false,
-    AutoBoss        = false,
-    AutoSkill       = false,
-    AutoLock        = true,
-    ShowESP         = false,
-    M1_Range        = 12,
-    M1_Delay        = 0.35,
-    Skill_Delay     = 1.2,
-    Skill_Slot      = 1,
-    MobAlvo         = nil,
+    AutoFarm = false,
+    AutoBoss = false,
+    AutoSkill = false,
+    AutoLock = true,
+    ShowESP = false,
+    M1_Range = 12,
+    M1_Delay = 0.35,
+    Skill_Delay = 1.2,
+    MobAlvo = nil,
 
-    -- Tour
-    AutoTour        = false,
+    AutoTour = false,
     AreaSelecionada = nil,
-    RaioArea        = 3000,
-    EsperaSpawn     = 3,
+    RaioArea = 3000,
+    EsperaSpawn = 3,
 
-    -- Combate avançado
-    Godmode         = false,
-    Stick           = false,
-    HitboxGigante   = false,
-    HitboxPlayer    = false,
-    PlayerHitboxSize= 30,
-    Noclip          = false,
+    Godmode = false,
+    Stick = false,
+    HitboxGigante = false,
+    HitboxPlayer = false,
+    PlayerHitboxSize = 30,
+    Noclip = false,
 
-    -- Rebirth
-    AutoRebirth     = false,
+    AutoRebirth = false,
     RebirthMultiplier = 3,
 
-    -- Quests
-    AutoQuest       = false,
-    SelectedQuest   = nil,
+    AutoCollect = false,
+    AutoTransform = false,
+    TransformMode = "SSJAngel",
+    AutoEquip = false,
+    EquipSlot = 1,
 
-    -- Collect
-    AutoCollect     = false,
+    FlySpeed = 100,
+    WalkSpeed = 16,
+    OverrideSpeed = false,
 
-    -- Transform
-    AutoTransform   = false,
-    TransformMode   = "SSJAngel",
-
-    -- Equip
-    AutoEquip       = false,
-    EquipSlot       = 1,
-
-    -- Movement
-    FlySpeed        = 100,
-    WalkSpeed       = 16,
-    OverrideSpeed   = false,
-
-    -- Skills
-    SkillTap        = true,
-
-    -- Console Log
-    ConsoleAtivo    = true,
-    ConsoleIntervalo = 60,
+    SkillTap = true,
 }
 
 local KiCfg = {
-    LimiteRecarga   = 0.30,
-    AlvoRecarga     = 0.95,
+    LimiteRecarga = 0.30,
+    AlvoRecarga = 0.95,
     TempoMaxRecarga = 5,
-    Recarregando    = false,
+    Recarregando = false,
 }
 
 local Ativo = true
 local hitboxOriginal = nil
 local ultimaSpecial = nil
+local gui = nil
+local mainFrame = nil
 
 -- ═══════════════════════════════════════════════
--- BLOCO 1: CONSOLE LITE
+-- CONSOLE LITE
 -- ═══════════════════════════════════════════════
-local ConsoleCfg = {
-    Ativo = true,
-    IntervaloSalvar = 60,
-    MaxLinhas = 3000,
-}
-
+local ConsoleCfg = { Ativo = true, IntervaloSalvar = 60, MaxLinhas = 3000 }
 local ConsoleBuf = {}
 local ConsoleUltimoSalvar = os.clock()
 local ConsoleInicio = os.time()
@@ -145,7 +132,7 @@ local EVENTOS_IMPORTANTES = {
     "ItemSpawned", "ItemDrop", "ShootingStar", "onEventEffect",
     "Prompt", "Reward", "Drop", "Spawn", "Boss", "Zaja",
     "Quest", "Dialog", "UnlockMode", "Rebirth",
-    "Skill", "ExecuteSkill", "Attack", "LockedOn",
+    "ExecuteSkill", "LockedOn",
     "Orb", "Sphere", "Wish", "DragonBall",
 }
 
@@ -172,12 +159,9 @@ local function consoleAdd(tipo, msg)
     if not deveRegistrar(chave) then return end
     local linha = string.format("[%s] [%s] %s", os.date("%H:%M:%S"), tipo, msg)
     table.insert(ConsoleBuf, linha)
-    if #ConsoleBuf > ConsoleCfg.MaxLinhas then
-        table.remove(ConsoleBuf, 1)
-    end
+    if #ConsoleBuf > ConsoleCfg.MaxLinhas then table.remove(ConsoleBuf, 1) end
 end
 
--- Tentativa segura de registrar chamadas
 if hookmetamethod then
     _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
         pcall(function()
@@ -216,14 +200,12 @@ end
 
 local function _restaurarHook()
     if _hookAtivo and _nomecallOriginal and hookmetamethod then
-        pcall(function()
-            hookmetamethod(game, "__namecall", _nomecallOriginal)
-        end)
+        pcall(function() hookmetamethod(game, "__namecall", _nomecallOriginal) end)
         _hookAtivo = false
     end
 end
 
--- Scanner de drops/esferas
+-- Scanner de drops
 task.spawn(function()
     local conhecidos = {}
     while Ativo do
@@ -239,8 +221,7 @@ task.spawn(function()
                         local pos = obj:IsA("BasePart") and obj.Position
                             or (obj.PrimaryPart and obj.PrimaryPart.Position)
                         if pos and obj.Parent then
-                            consoleAdd("DROP",
-                                obj.Name .. " | Pai: "..obj.Parent.Name ..
+                            consoleAdd("DROP", obj.Name .. " | Pai: "..obj.Parent.Name ..
                                 " | " .. string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
                         end
                     end
@@ -250,15 +231,15 @@ task.spawn(function()
     end
 end)
 
--- Auto-save de logs
+-- Auto-save
 task.spawn(function()
     while Ativo do
         task.wait(5)
         if ConsoleCfg.Ativo and (os.clock() - ConsoleUltimoSalvar) >= ConsoleCfg.IntervaloSalvar then
-            if #ConsoleBuf > 0 and writefile then
+            if #ConsoleBuf > 0 then
                 local nome = "DBH_console_" .. ConsoleInicio .. ".txt"
                 local conteudo = table.concat(ConsoleBuf, "\n")
-                pcall(function() writefile(nome, conteudo) end)
+                pcall(function() if writefile then writefile(nome, conteudo) end end)
                 ConsoleUltimoSalvar = os.clock()
             end
         end
@@ -268,13 +249,10 @@ end)
 -- ═══════════════════════════════════════════════
 -- HELPERS
 -- ═══════════════════════════════════════════════
-local function safe(fn)
-    local ok, err = pcall(fn)
-    if not ok then warn("[DBH] " .. tostring(err)) end
-    return ok
-end
-
 local function podeAtacar()
+    if gui and mainFrame and mainFrame.Visible then
+        -- Se a janela do hub está aberta, ainda permite atacar se não estiver clicando nela
+    end
     local pg = plr:FindFirstChild("PlayerGui")
     if pg then
         local chat = pg:FindFirstChild("Chat")
@@ -377,7 +355,7 @@ local function getMobMaisProximo()
                 local hum = mob:FindFirstChildOfClass("Humanoid")
                 if hum and hum.Health > 0 then
                     local base = mob.Name:gsub("%-?%d+$", "")
-                    
+
                     local valido = false
                     if Config.AutoFarm and not isBoss then valido = true end
                     if Config.AutoBoss and isBoss then valido = true end
@@ -412,14 +390,12 @@ local function getMobMaisProximo()
     if wm then
         checar(wm:FindFirstChild("Mobs"), false)
         checar(wm:FindFirstChild("Boss Mobs"), true)
-        
         for _, pasta in ipairs(wm:GetChildren()) do
             if pasta.Name:lower():find("boss") and pasta.Name ~= "Boss Mobs" then
                 checar(pasta, true)
             end
         end
     end
-
     return maisProximo
 end
 
@@ -428,7 +404,6 @@ local function listarMobsUnicos()
     local seen = {}
     local wm = WS:FindFirstChild("World Mobs")
     if not wm then return lista end
-    
     for _, pasta in ipairs(wm:GetChildren()) do
         if pasta:IsA("Folder") or pasta:IsA("Model") then
             for _, mob in ipairs(pasta:GetChildren()) do
@@ -469,7 +444,6 @@ local function voarPara(pos, speed)
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-
     speed = speed or Config.FlySpeed or 100
 
     local bv = hrp:FindFirstChild("__DBHVel") or Instance.new("BodyVelocity")
@@ -483,7 +457,7 @@ local function voarPara(pos, speed)
     bg.P = 10000
     bg.Parent = hrp
 
-    local dir = (pos - hrp.Position)
+    local dir = pos - hrp.Position
     if dir.Magnitude > 8 then
         local spd = math.min(speed, dir.Magnitude * 4)
         bv.Velocity = dir.Unit * spd
@@ -537,11 +511,10 @@ local function godmodePosicional(mob)
 end
 
 -- ═══════════════════════════════════════════════
--- M1 ATTACK
+-- M1 ATTACK (SkillRemote com SkillId=2)
 -- ═══════════════════════════════════════════════
 local function m1(alvo)
-    if not podeAtacar() or not SkillRemote then return end
-    
+    if not SkillRemote then return end
     local char = plr.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -553,15 +526,23 @@ local function m1(alvo)
 
     pcall(function()
         SkillRemote:FireServer({
-            Began = true, CFrame = hrp.CFrame, Aim = aimPos,
-            Camera = camCF, Type = 1, SkillId = "2",
+            Began = true,
+            CFrame = hrp.CFrame,
+            Aim = aimPos,
+            Camera = camCF,
+            Type = 1,
+            SkillId = "2",
         })
     end)
     task.wait(0.05)
     pcall(function()
         SkillRemote:FireServer({
-            Began = false, CFrame = hrp.CFrame, Aim = aimPos,
-            Camera = camCF, Type = 1, SkillId = "2",
+            Began = false,
+            CFrame = hrp.CFrame,
+            Aim = aimPos,
+            Camera = camCF,
+            Type = 1,
+            SkillId = "2",
         })
     end)
 end
@@ -602,8 +583,8 @@ local function usarSkill(skillId, slot, targetPos, mobModel)
             return RS.Assets.SkillsV2.UniqueSets["Seijin Instinct"].Animations
         end)
         if ok and folder then
-            local anim = skillId:find("_2_1") and "Kamehameha" 
-                or skillId:find("_2_3") and "SpiritBomb" 
+            local anim = skillId:find("_2_1") and "Kamehameha"
+                or skillId:find("_2_3") and "SpiritBomb"
                 or nil
             if anim then
                 params = {
@@ -629,13 +610,9 @@ local function usarSkill(skillId, slot, targetPos, mobModel)
         params = { CFrame = hrp.CFrame }
     end
 
-    pcall(function()
-        RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
-    end)
+    pcall(function() RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true) end)
     task.wait(0.3)
-    pcall(function()
-        RE_ExecuteSkill:FireServer(skillId, params, slot or 1, false)
-    end)
+    pcall(function() RE_ExecuteSkill:FireServer(skillId, params, slot or 1, false) end)
 end
 
 -- ═══════════════════════════════════════════════
@@ -850,26 +827,20 @@ local function fazerRebirth()
     end
     task.wait(0.3)
     if RF_RequestRebirth then
-        pcall(function()
-            RF_RequestRebirth:InvokeServer(true)
-        end)
+        pcall(function() RF_RequestRebirth:InvokeServer(true) end)
     end
 end
 
 -- ═══════════════════════════════════════════════
 -- COLLECT
 -- ═══════════════════════════════════════════════
-local OnEventEffect = getServiceRemote("PeriodicEventService", "onEventEffect", false)
-local ItemSpawned  = getServiceRemote("ItemDropService", "ItemSpawned", false)
-local ClaimItem    = getServiceRemote("ItemDropService", "ClaimItem", true)
-
 task.spawn(function()
     task.wait(3)
     if OnEventEffect then
         OnEventEffect.OnClientEvent:Connect(function(evento, pos)
             if not Config.AutoCollect then return end
             if evento == "ShootingStar" and typeof(pos) == "Vector3" then
-                consoleAdd("COLLECT", "Meteoro detectado em: " .. tostring(pos))
+                consoleAdd("COLLECT", "Meteoro: " .. tostring(pos))
                 voarPara(pos)
                 task.wait(3)
             end
@@ -879,7 +850,7 @@ task.spawn(function()
         ItemSpawned.OnClientEvent:Connect(function(data)
             if not Config.AutoCollect then return end
             if type(data) == "table" and data.Pos then
-                consoleAdd("COLLECT", "Item Spawned: " .. tostring(data.Name))
+                consoleAdd("COLLECT", "Item: " .. tostring(data.Name))
                 task.wait(1)
                 voarPara(data.Pos)
                 task.wait(2)
@@ -916,7 +887,7 @@ local function criarESP(mob)
     local nome = Instance.new("TextLabel", bb)
     nome.Size = UDim2.new(1, 0, 0, 18)
     nome.BackgroundTransparency = 1
-    nome.TextColor3 = mob.Parent and mob.Parent.Name == "Boss Mobs" 
+    nome.TextColor3 = mob.Parent and mob.Parent.Name == "Boss Mobs"
         and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 200, 80)
     nome.TextStrokeTransparency = 0.5
     nome.TextSize = 12
@@ -1041,7 +1012,7 @@ local function pad(o, t, b, l, r)
 end
 
 function UI.newWindow()
-    gui = I("ScreenGui", {Name = "DragonBloxHub_v6", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, CoreGui)
+    gui = I("ScreenGui", {Name = "DragonBloxHub_v7", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling}, CoreGui)
     local main = I("Frame", {
         Size = UDim2.new(0, 500, 0, 400),
         Position = UDim2.new(0.5, -250, 0.5, -200),
@@ -1055,7 +1026,7 @@ function UI.newWindow()
     corner(header, UDim.new(0, 10))
     I("TextLabel", {
         Size = UDim2.new(1, -110, 1, 0), Position = UDim2.new(0, 14, 0, 0),
-        BackgroundTransparency = 1, Text = "🐉   Dragon Blox Hub v6",
+        BackgroundTransparency = 1, Text = "🐉   Dragon Blox Hub v7",
         TextColor3 = UI.Theme.Text, Font = FONT_BOLD, TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
     }, header)
@@ -1361,7 +1332,7 @@ function UI.dropdown(tab, opts)
 end
 
 -- ═══════════════════════════════════════════════
--- BLOCO 2: LIBERA TODAS AS TECLAS/BOTÕES
+-- SOLTA TECLAS
 -- ═══════════════════════════════════════════════
 local function _soltarTeclas()
     pcall(function()
@@ -1383,13 +1354,12 @@ local function _soltarTeclas()
 end
 
 -- ═══════════════════════════════════════════════
--- BLOCO 3: KILL SWITCH (matarTudo)
+-- KILL SWITCH (declarado APÓS pararLock)
 -- ═══════════════════════════════════════════════
 local function matarTudo()
     Ativo = false
-
     Config.AutoFarm = false; Config.AutoSkill = false; Config.AutoTour = false
-    Config.AutoRebirth = false; Config.AutoQuest = false; Config.AutoCollect = false
+    Config.AutoRebirth = false; Config.AutoCollect = false
     Config.AutoTransform = false; Config.AutoEquip = false; Config.Noclip = false
     Config.ShowESP = false; Config.Godmode = false; Config.Stick = false
     Config.HitboxPlayer = false; Config.HitboxGigante = false
@@ -1397,8 +1367,8 @@ local function matarTudo()
 
     if _restaurarHook then _restaurarHook() end
     _soltarTeclas()
-
-    if pararLock then pcall(pararLock) end
+    pcall(pararLock)
+    pcall(pararStick)
 
     local char = plr.Character
     if char then
@@ -1416,8 +1386,7 @@ local function matarTudo()
 
     if gui then gui:Destroy() end
     if espGui then espGui:Destroy() end
-
-    print("[DBH] ✅ Script encerrado. HUD restaurado.")
+    print("[DBH] Script encerrado.")
 end
 
 -- ═══════════════════════════════════════════════
@@ -1426,71 +1395,15 @@ end
 local win = UI.newWindow()
 mainFrame = win.frame
 
--- DECLARAÇÃO PRÉVIA DAS VARIÁVEIS DE DROPDOWN PARA EVITAR NIL REFERENCING
-local mobDropdown = nil
-local areaDropdown = nil
-local questDropdown = nil
-
 local farmTab      = UI.newTab(win, "⚔", "Farm")
 local tourTab      = UI.newTab(win, "🗺", "Tour")
 local rebirthTab   = UI.newTab(win, "🔄", "Rebirth")
 local questTab     = UI.newTab(win, "📜", "Quest")
 local collectTab   = UI.newTab(win, "💎", "Collect")
 local transformTab = UI.newTab(win, "🌀", "Transform")
-
--- CONSOLE TAB
-local consoleTab   = UI.newTab(win, "🖥", "Console")
-
-UI.section(consoleTab, "🖥   CONSOLE LITE")
-UI.toggle(consoleTab, {name = "Captura Ativa", default = true, callback = function(v)
-    ConsoleCfg.Ativo = v
-end})
-
-UI.slider(consoleTab, {
-    name = "Auto-save a cada",
-    min = 30, max = 300, default = 60, suffix = " s",
-    callback = function(v) ConsoleCfg.IntervaloSalvar = v end
-})
-
-UI.button(consoleTab, {name = "💾 Salvar Agora", callback = function()
-    if #ConsoleBuf > 0 then
-        local nome = "DBH_manual_" .. os.time() .. ".txt"
-        local conteudo = table.concat(ConsoleBuf, "\n")
-        if writefile then
-            pcall(function() writefile(nome, conteudo) end)
-            print("[CONSOLE] Salvo: " .. nome)
-        elseif setclipboard then
-            setclipboard(conteudo)
-            print("[CONSOLE] Copiado pro clipboard")
-        end
-    end
-end})
-
-UI.button(consoleTab, {name = "🗑 Limpar Buffer", callback = function()
-    ConsoleBuf = {}
-end})
-
-UI.section(consoleTab, "📋   LOG AO VIVO")
-local consoleLabel = UI.label(consoleTab, {text = "Iniciando...", height = 300})
-
-task.spawn(function()
-    while Ativo do
-        task.wait(1)
-        local linhas = {}
-        local inicio = math.max(1, #ConsoleBuf - 20)
-        for i = inicio, #ConsoleBuf do
-            table.insert(linhas, ConsoleBuf[i])
-        end
-        if #linhas == 0 then
-            consoleLabel.Text = "(sem eventos ainda)"
-        else
-            consoleLabel.Text = table.concat(linhas, "\n")
-        end
-    end
-end)
-
 local miscTab      = UI.newTab(win, "🛠", "Misc")
 local configTab    = UI.newTab(win, "⚙", "Config")
+local consoleTab   = UI.newTab(win, "🖥", "Console")
 local statsTab     = UI.newTab(win, "📊", "Stats")
 local sobreTab     = UI.newTab(win, "ℹ", "Sobre")
 
@@ -1507,7 +1420,7 @@ UI.toggle(farmTab, {name = "Auto Lock-On", default = true, callback = function(v
 UI.toggle(farmTab, {name = "Mostrar ESP", default = false, callback = function(v) Config.ShowESP = v end})
 
 UI.section(farmTab, "🎯   MOB ALVO")
-mobDropdown = UI.dropdown(farmTab, {
+local mobDropdown = UI.dropdown(farmTab, {
     name = "Filtrar Mob",
     options = function() return listarMobsUnicos() end,
     default = "(todos)",
@@ -1532,19 +1445,15 @@ UI.toggle(farmTab, {name = "Hitbox Gigante (mob)", default = false, callback = f
 
 -- ═══ TOUR ═══
 UI.section(tourTab, "🗺   AUTO TOUR")
-UI.toggle(tourTab, {name = "Auto Tour (percorrer áreas)", default = false, callback = function(v) Config.AutoTour = v end})
+UI.toggle(tourTab, {name = "Auto Tour", default = false, callback = function(v) Config.AutoTour = v end})
 UI.slider(tourTab, {name = "Raio de Descoberta", min = 500, max = 8000, default = 3000, suffix = " studs", callback = function(v) Config.RaioArea = v end})
-UI.slider(tourTab, {name = "Espera por Área", min = 1, max = 15, default = 3, suffix = " s", callback = function(v) Config.EsperaSpawn = v end})
-
-UI.section(tourTab, "📍   ÁREAS")
+UI.slider(tourTab, {name = "Espera por Área", min = 1, max = 15, default = 3, suffix = " s", callback = function(v) Config.EspaSpawn = v end})
 UI.button(tourTab, {name = "🔄 Re-escaneiar Áreas", callback = function() descobrirAreas() end})
-areaDropdown = UI.dropdown(tourTab, {
+UI.dropdown(tourTab, {
     name = "Ir para Área",
     options = function()
         local lista = {"(nenhuma)"}
-        for _, a in ipairs(areas) do
-            table.insert(lista, a.categoria .. " ▸ " .. a.nome)
-        end
+        for _, a in ipairs(areas) do table.insert(lista, a.categoria .. " ▸ " .. a.nome) end
         return lista
     end,
     default = "(nenhuma)",
@@ -1559,24 +1468,18 @@ areaDropdown = UI.dropdown(tourTab, {
         end
     end
 })
-
 local infoArea = UI.label(tourTab, {text = "Área: --\nMobs: --", height = 50})
 
 -- ═══ REBIRTH ═══
 UI.section(rebirthTab, "🔄   AUTO REBIRTH")
-UI.toggle(rebirthTab, {name = "Auto Rebirth", default = false, callback = function(v)
-    Config.AutoRebirth = v
-end})
+UI.toggle(rebirthTab, {name = "Auto Rebirth", default = false, callback = function(v) Config.AutoRebirth = v end})
 UI.slider(rebirthTab, {name = "Acumular (x requisito)", min = 1, max = 10, default = 3, callback = function(v) Config.RebirthMultiplier = v end})
-UI.button(rebirthTab, {name = "🔄 Forçar Rebirth", callback = function()
-    fazerRebirth()
-end})
-
+UI.button(rebirthTab, {name = "🔄 Forçar Rebirth", callback = function() fazerRebirth() end})
 local infoRebirth = UI.label(rebirthTab, {text = "Rebirth: --\nStats: --\nAlvo: --", height = 80})
 
 -- ═══ QUEST ═══
 UI.section(questTab, "📜   QUEST")
-questDropdown = UI.dropdown(questTab, {
+UI.dropdown(questTab, {
     name = "Quest",
     options = function()
         local lista = {"(nenhuma)"}
@@ -1598,10 +1501,8 @@ UI.toggle(questTab, {name = "Auto Aceitar Quest", default = false, callback = fu
 
 -- ═══ COLLECT ═══
 UI.section(collectTab, "💎   AUTO COLLECT")
-UI.toggle(collectTab, {name = "Auto Coletar (esferas/meteoros/items)", default = false, callback = function(v) Config.AutoCollect = v end})
-
-UI.section(collectTab, "ℹ   INFO")
-local infoCollect = UI.label(collectTab, {text = "Escaneando Drops...", height = 60})
+UI.toggle(collectTab, {name = "Auto Coletar", default = false, callback = function(v) Config.AutoCollect = v end})
+UI.label(collectTab, {text = "Detecta esferas/meteoros automaticamente.", height = 50})
 
 -- ═══ TRANSFORM ═══
 UI.section(transformTab, "🌀   TRANSFORMAÇÃO")
@@ -1638,15 +1539,6 @@ UI.slider(miscTab, {name = "Velocidade de Voo", min = 50, max = 500, default = 1
 UI.toggle(miscTab, {name = "Forçar WalkSpeed", default = false, callback = function(v) Config.OverrideSpeed = v end})
 UI.slider(miscTab, {name = "WalkSpeed", min = 16, max = 200, default = 16, callback = function(v) Config.WalkSpeed = v end})
 
-UI.section(miscTab, "🌌   VOO NATIVO")
-UI.button(miscTab, {name = "Ativar Voo Nativo (5s)", callback = function()
-    if RE_SuperFlight then
-        pcall(function() RE_SuperFlight:FireServer(true) end)
-        task.wait(5)
-        pcall(function() RE_SuperFlight:FireServer(false) end)
-    end
-end})
-
 -- ═══ CONFIG ═══
 UI.section(configTab, "⚡   SKILLS")
 UI.toggle(configTab, {name = "Skills: Tap (não segurar)", default = true, callback = function(v) Config.SkillTap = v end})
@@ -1663,22 +1555,43 @@ UI.slider(configTab, {name = "Slot da Ferramenta", min = 1, max = 9, default = 1
 UI.section(configTab, "🛑   SISTEMA")
 UI.button(configTab, {name = "🛑 MATAR SCRIPT", callback = matarTudo})
 
+-- ═══ CONSOLE ═══
+UI.section(consoleTab, "🖥   CONSOLE LITE")
+UI.toggle(consoleTab, {name = "Captura Ativa", default = true, callback = function(v) ConsoleCfg.Ativo = v end})
+UI.slider(consoleTab, {name = "Auto-save a cada", min = 30, max = 300, default = 60, suffix = " s", callback = function(v) ConsoleCfg.IntervaloSalvar = v end})
+UI.button(consoleTab, {name = "💾 Salvar Agora", callback = function()
+    if #ConsoleBuf > 0 then
+        local nome = "DBH_manual_" .. os.time() .. ".txt"
+        local conteudo = table.concat(ConsoleBuf, "\n")
+        local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
+        if not ok then pcall(function() if setclipboard then setclipboard(conteudo) end end) end
+    end
+end})
+UI.button(consoleTab, {name = "🗑 Limpar Buffer", callback = function() ConsoleBuf = {} end})
+UI.section(consoleTab, "📋   LOG AO VIVO")
+local consoleLabel = UI.label(consoleTab, {text = "(sem eventos)", height = 250})
+
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        local linhas = {}
+        local inicio = math.max(1, #ConsoleBuf - 20)
+        for i = inicio, #ConsoleBuf do table.insert(linhas, ConsoleBuf[i]) end
+        consoleLabel.Text = #linhas == 0 and "(sem eventos)" or table.concat(linhas, "\n")
+    end
+end)
+
 -- ═══ STATS ═══
 UI.section(statsTab, "📊   STATUS")
 local statsLabel = UI.label(statsTab, {text = "Carregando...", height = 130})
 
 -- ═══ SOBRE ═══
 UI.section(sobreTab, "ℹ   INFO")
-UI.label(sobreTab, {text = "🐉 DRAGON BLOX HUB v6\n\nCriadores: zyyx & elliot\n\nSistema de Auto-Farm otimizado via Knit Remotes + VirtualInputManager.\n\nAgradecimentos: comunidade Dragon Blox.", height = 130})
-
-UI.section(sobreTab, "🖥   SERVIDOR")
-local infoServidor = UI.label(sobreTab, {text = "Carregando...", height = 120})
+UI.label(sobreTab, {text = "🐉 DRAGON BLOX HUB v7\n\nzyyx & elliot", height = 80})
 
 -- ═══════════════════════════════════════════════
--- LOOPS PRINCIPAIS DE FUNCIONAMENTO
+-- LOOP DE COMBATE
 -- ═══════════════════════════════════════════════
-
--- Combate
 task.spawn(function()
     local ultimoM1 = 0
     local ultimoSkill = 0
@@ -1687,6 +1600,7 @@ task.spawn(function()
 
     while Ativo do
         task.wait(0.1)
+
         if os.clock() - ultimoHitboxCheck >= 1.0 then
             aplicarHitboxMobs()
             ultimoHitboxCheck = os.clock()
@@ -1700,6 +1614,7 @@ task.spawn(function()
             continue
         end
 
+        -- Ki check
         local cur, max = getKiAtual()
         local pct = max > 0 and (cur / max) or 1
         if pct < KiCfg.LimiteRecarga then
@@ -1707,14 +1622,14 @@ task.spawn(function()
             pararVoo()
             recarregarKi()
             ultimoSkill = os.clock()
-            continue
+            -- Não dá continue, deixa cair pro loop normal depois
         end
 
         local mob = getMobMaisProximo()
         if not mob then
             pararVoo()
             pararStick()
-            task.wait(0.5)
+            task.wait(0.3)
             continue
         end
 
@@ -1752,30 +1667,32 @@ task.spawn(function()
 
         if Config.AutoSkill and (os.clock() - ultimoSkill) >= Config.Skill_Delay then
             local s = proximaSkill()
-            usarSkill(s, Config.Skill_Slot, mob.pos, mob.model)
+            usarSkill(s, 1, mob.pos, mob.model)
             ultimoSkill = os.clock()
         end
     end
 end)
 
--- Auto Tour
+-- ═══════════════════════════════════════════════
+-- AUTO TOUR
+-- ═══════════════════════════════════════════════
 task.spawn(function()
     while Ativo do
         task.wait(2)
-        if Config.AutoTour and (Config.AutoFarm or Config.AutoBoss or Config.AutoSkill) then
+        if Config.AutoTour then
             if #areas == 0 then descobrirAreas() end
             if #areas > 0 then
                 if Config.AreaSelecionada then
                     if areaAtual ~= Config.AreaSelecionada then irParaArea(Config.AreaSelecionada) end
                 else
                     local n = mobsNaArea(areaAtual, 200)
-                    if n == 0 then
+                    if n == 0 or not areaAtual then
                         areaIdx = areaIdx + 1
                         if areaIdx > #areas then areaIdx = 1; descobrirAreas() end
                         local prox = areas[areaIdx]
                         if prox then
                             irParaArea(prox)
-                            task.wait(Config.EsperaSpawn)
+                            task.wait(Config.EspaSpawn)
                         end
                     end
                 end
@@ -1835,7 +1752,7 @@ task.spawn(function()
     end
 end)
 
--- Display & Stats Tracker
+-- Stats tracker
 task.spawn(function()
     while Ativo do
         local char = plr.Character
@@ -1850,15 +1767,13 @@ task.spawn(function()
                     local reb = stats and stats:FindFirstChild("Rebirth")
                     local str = stats and stats:FindFirstChild("Strength")
                     local ki = stats and stats:FindFirstChild("Ki")
-                    local endu = stats and stats:FindFirstChild("Endurance")
-                    local agi = stats and stats:FindFirstChild("Agility")
 
                     statsLabel.Text = string.format(
-                        "Ki: %d / %d (%.0f%%)\nRebirth: %d\nStrength: %d\nKi Stat: %d\nEndurance: %d\nAgility: %d\n\nWalkSpeed: %d\nFlySpeed: %d",
+                        "Ki: %d / %d (%.0f%%)\nRebirth: %d\nStrength: %d\nKi Stat: %d",
                         cur.Value, max.Value, pct * 100,
-                        reb and reb.Value or 0, str and str.Value or 0,
-                        ki and ki.Value or 0, endu and endu.Value or 0, agi and agi.Value or 0,
-                        Config.WalkSpeed, Config.FlySpeed
+                        reb and reb.Value or 0,
+                        str and str.Value or 0,
+                        ki and ki.Value or 0
                     )
                 end
             end
@@ -1867,20 +1782,11 @@ task.spawn(function()
         local _, info = checarRebirth()
         if info then
             infoRebirth.Text = "Rebirth: " .. info.rebirth ..
-                "\nSeus stats: " .. info.total ..
-                "\nAlvo (" .. Config.RebirthMultiplier .. "x): " .. info.alvo
+                "\nStats: " .. info.total ..
+                "\nAlvo: " .. info.alvo
         end
-
-        local jobId = game.JobId ~= "" and game.JobId:sub(1, 8) .. "..." or "Privado"
-        local ping = 0
-        pcall(function() ping = math.floor(plr:GetNetworkPing() * 1000) end)
-
-        infoServidor.Text = "Hora: " .. os.date("%H:%M:%S") ..
-            "\nServidor: " .. jobId ..
-            "\nJogadores: " .. #Players:GetPlayers() ..
-            "\nPing: " .. ping .. " ms"
         task.wait(2)
     end
 end)
 
-print("[DBH] ✅ Dragon Blox Hub v6 corrigido e carregado com sucesso!")
+print("[DBH] ✅ Dragon Blox Hub v7 carregado!")
