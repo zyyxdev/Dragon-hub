@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                   DRAGON BLOX HUB - VERSION 5.3                
+--                   DRAGON BLOX HUB - VERSION 5.4 (PATCHED)      
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -49,8 +49,8 @@ local Config = {
 local KiCfg = {
     LimiteRecarga   = 0.30,
     AlvoRecarga     = 0.90,
-    AposRecarga     = 0.5,
     TempoMaxRecarga = 3.0,
+    AposRecarga     = 0.5,
     Recarregando    = false,
 }
 
@@ -58,45 +58,6 @@ local Ativo = true
 local AutoFarm = false
 local AutoSkill = false
 local ShowESP = false
-
--- ═══════════════════════════════════════════════
--- ATAQUE M1 DIRETO VIA REMOTE (SEM VIRTUAL INPUT)
--- ═══════════════════════════════════════════════
-local function m1Direto(alvoPos)
-    local char = plr.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local cam = workspace.CurrentCamera
-    local camCF = cam and cam.CFrame or hrp.CFrame
-
-    if SkillRemote then
-        -- Began=true (inicia M1)
-        pcall(function()
-            SkillRemote:FireServer({
-                Began = true,
-                CFrame = hrp.CFrame,
-                Aim = alvoPos or (hrp.Position + hrp.CFrame.LookVector * 10),
-                Camera = camCF,
-                Type = 1,
-            })
-        end)
-
-        task.wait(0.08)
-
-        -- Began=false (finaliza M1)
-        pcall(function()
-            SkillRemote:FireServer({
-                Began = false,
-                CFrame = hrp.CFrame,
-                Aim = alvoPos or (hrp.Position + hrp.CFrame.LookVector * 10),
-                Camera = camCF,
-                Type = 1,
-            })
-        end)
-    end
-end
 
 -- ═══════════════════════════════════════════════
 -- LEITURA DE STATS COM TIMEOUT
@@ -226,7 +187,7 @@ local function getMobMaisProximo()
 end
 
 -- ═══════════════════════════════════════════════
--- GERENCIAMENTO DE KI
+-- GERENCIAMENTO DE KI (CORREÇÃO 3)
 -- ═══════════════════════════════════════════════
 local function getKiAtual()
     local char = plr.Character
@@ -255,60 +216,50 @@ local function recarregarKi()
         task.wait(0.5)
     end
 
-    local ancoraCF = hrp.CFrame
+    local ancora = hrp.CFrame
     local cam = workspace.CurrentCamera
-    local camCF = cam and cam.CFrame or ancoraCF
+    local camCF = cam and cam.CFrame or ancora
     local inicio = os.clock()
+    local duracaoMax = KiCfg.TempoMaxRecarga or 3
 
-    task.spawn(function()
-        while KiCfg.Recarregando and Ativo do
-            local cur, max = getKiAtual()
-            local pct = max > 0 and (cur / max) or 0
-
-            if pct >= KiCfg.AlvoRecarga then break end
-            if (os.clock() - inicio) >= KiCfg.TempoMaxRecarga then break end
-
-            if SkillRemote then
-                pcall(function()
-                    SkillRemote:FireServer({
-                        Began = true,
-                        CFrame = ancoraCF,
-                        Aim = hrp.Position + hrp.CFrame.LookVector * 10,
-                        Camera = camCF,
-                        Type = 1,
-                    })
-                end)
-            end
-
-            task.wait(0.15)
-        end
+    while KiCfg.Recarregando and Ativo do
+        local cur, max = getKiAtual()
+        local pct = max > 0 and (cur / max) or 0
+        if pct >= KiCfg.AlvoRecarga then break end
+        if (os.clock() - inicio) >= duracaoMax then break end
 
         if SkillRemote then
             pcall(function()
                 SkillRemote:FireServer({
-                    Began = false,
-                    CFrame = ancoraCF,
-                    Aim = hrp.Position + hrp.CFrame.LookVector * 10,
+                    Began = true,
+                    CFrame = ancora,
+                    Aim = ancora.Position + ancora.LookVector * 10,
                     Camera = camCF,
                     Type = 1,
                 })
             end)
         end
-    end)
-
-    local timeout = os.clock() + KiCfg.TempoMaxRecarga + 1
-    while KiCfg.Recarregando and Ativo and os.clock() < timeout do
-        local cur, max = getKiAtual()
-        if max > 0 and (cur / max) >= KiCfg.AlvoRecarga then break end
         task.wait(0.2)
     end
 
+    if SkillRemote then
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = ancora,
+                Aim = ancora.Position + ancora.LookVector * 10,
+                Camera = camCF,
+                Type = 1,
+            })
+        end)
+    end
+
     KiCfg.Recarregando = false
-    task.wait(KiCfg.AposRecarga)
+    task.wait(KiCfg.AposRecarga or 0.5)
 end
 
 -- ═══════════════════════════════════════════════
--- SKILLS
+-- GERENCIAMENTO DE SKILLS (CORREÇÃO 4)
 -- ═══════════════════════════════════════════════
 local SkillList = {
     "UniqueSets_2_1",
@@ -317,7 +268,15 @@ local SkillList = {
     "Weapons_3_2",
     "Weapons_3_3",
 }
-local skillIndex = 1
+local skillIdx = 0
+
+local function proximaSkill()
+    skillIdx = skillIdx + 1
+    if skillIdx > #SkillList then skillIdx = 1 end
+    return SkillList[skillIdx]
+end
+
+local ultimaSpecial = nil
 
 local function usarSkill(skillId, slot, targetPos, mobNome)
     local char = plr.Character
@@ -325,88 +284,57 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
+    if skillId ~= ultimaSpecial then
+        if RE_ExecuteSkillSpecial then
+            pcall(function()
+                RE_ExecuteSkillSpecial:FireServer(plr.Name, skillId)
+            end)
+        end
+        ultimaSpecial = skillId
+        task.wait(0.08)
+    end
+
     local params = { HumCFrame = hrp.CFrame }
     if targetPos then params.targetPos = targetPos end
     if mobNome then params.Target = mobNome end
 
-    if RE_ExecuteSkillSpecial then
-        pcall(function() RE_ExecuteSkillSpecial:FireServer(plr.Name, skillId) end)
-    end
-    task.wait(0.03)
-
-    if SkillRemote then
-        pcall(function()
-            SkillRemote:FireServer({
-                Began = true,
-                CFrame = hrp.CFrame,
-                Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
-                Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
-                Type = 2,
-            })
-        end)
-        task.wait(0.1)
-        pcall(function()
-            SkillRemote:FireServer({
-                Began = false,
-                CFrame = hrp.CFrame,
-                Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
-                Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
-                Type = 2,
-            })
-        end)
-    end
-
     if RE_ExecuteSkill then
-        pcall(function() RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true) end)
+        pcall(function()
+            RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
+        end)
     end
 end
 
-local function proximaSkill()
-    skillIndex = skillIndex + 1
-    if skillIndex > #SkillList then skillIndex = 1 end
-    return SkillList[skillIndex]
-end
-
 -- ═══════════════════════════════════════════════
--- AUTO LOCK-ON
+-- AUTO LOCK-ON (CORREÇÃO 2)
 -- ═══════════════════════════════════════════════
-local LockAtivo = false
 local LockConexao = nil
 local LockAlvo = nil
+
+local function pararLock()
+    if LockConexao then
+        LockConexao:Disconnect()
+        LockConexao = nil
+    end
+    LockAlvo = nil
+end
 
 local function lockOn(nomeMob, mobModel)
     if RE_LockedOnChanged then
         pcall(function() RE_LockedOnChanged:FireServer(nomeMob or "") end)
     end
-
-    if mobModel and mobModel:FindFirstChild("HumanoidRootPart") then
-        LockAlvo = mobModel
-        LockAtivo = true
-
-        if LockConexao then LockConexao:Disconnect() end
-        LockConexao = RunService.RenderStepped:Connect(function()
-            if not LockAtivo or not LockAlvo then return end
-            local meuChar = plr.Character
-            if not meuChar or not meuChar:FindFirstChild("HumanoidRootPart") then return end
-            local alvoHrp = LockAlvo:FindFirstChild("HumanoidRootPart")
-            if not alvoHrp or not LockAlvo:FindFirstChildOfClass("Humanoid") 
-            or LockAlvo:FindFirstChildOfClass("Humanoid").Health <= 0 then
-                LockAtivo = false
-                return
-            end
-            workspace.CurrentCamera.CFrame = CFrame.lookAt(
-                workspace.CurrentCamera.CFrame.Position,
-                alvoHrp.Position
-            )
-        end)
-    else
-        LockAtivo = false
-        LockAlvo = nil
-        if LockConexao then
-            LockConexao:Disconnect()
-            LockConexao = nil
-        end
-    end
+    pararLock()
+    if not mobModel or not mobModel:FindFirstChild("HumanoidRootPart") then return end
+    LockAlvo = mobModel
+    LockConexao = RunService.RenderStepped:Connect(function()
+        if not LockAlvo or not LockAlvo.Parent then pararLock() return end
+        local hrp = LockAlvo:FindFirstChild("HumanoidRootPart")
+        local hum = LockAlvo:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum or hum.Health <= 0 then pararLock() return end
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        cam.CFrame = CFrame.lookAt(cam.CFrame.Position, hrp.Position)
+    end)
 end
 
 -- ═══════════════════════════════════════════════
@@ -501,21 +429,24 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- LOOP DE COMBATE
+-- LOOP DE COMBATE (CORREÇÃO 5)
 -- ═══════════════════════════════════════════════
 task.spawn(function()
-    local ultimoSkill = 0
     local ultimoM1 = 0
+    local ultimoSkill = 0
     local alvoTravado = nil
 
     while Ativo do
-        task.wait(0.05)
+        task.wait(0.1)
 
         if not AutoFarm and not AutoSkill then
             alvoTravado = nil
+            pararVoo()
+            task.wait(0.5)
             continue
         end
 
+        -- KI
         local cur, max = getKiAtual()
         local pct = max > 0 and (cur / max) or 1
         if pct < KiCfg.LimiteRecarga and AutoSkill then
@@ -528,6 +459,7 @@ task.spawn(function()
 
         local mob = getMobMaisProximo()
         if not mob then
+            pararVoo()
             continue
         end
 
@@ -536,30 +468,54 @@ task.spawn(function()
         local hrp = char:FindFirstChild("HumanoidRootPart")
         if not hrp then continue end
 
-        if mob.dist > CombatCfg.M1_Range then
-            voarPara(mob.pos)
-            continue
-        end
-
+        -- LOCK-ON
         if CombatCfg.AutoLock and alvoTravado ~= mob.baseName then
             lockOn(mob.baseName, mob.model)
             alvoTravado = mob.baseName
-            task.wait(0.05)
         end
 
+        -- SE LONGE: voa pra perto
+        if mob.dist > CombatCfg.M1_Range then
+            voarPara(mob.pos)
+            task.wait(0.1)
+            continue
+        end
+
+        -- SE PERTO: para e ataca
         pararVoo()
         hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
 
-        -- Executa ataque M1 via Remote
+        -- M1
         if AutoFarm and (os.clock() - ultimoM1) >= CombatCfg.M1_Delay then
-            m1Direto(mob.pos)
+            local cam = workspace.CurrentCamera
+            if SkillRemote then
+                pcall(function()
+                    SkillRemote:FireServer({
+                        Began = true,
+                        CFrame = hrp.CFrame,
+                        Aim = mob.pos,
+                        Camera = cam and cam.CFrame or hrp.CFrame,
+                        Type = 1,
+                    })
+                end)
+                task.wait(0.05)
+                pcall(function()
+                    SkillRemote:FireServer({
+                        Began = false,
+                        CFrame = hrp.CFrame,
+                        Aim = mob.pos,
+                        Camera = cam and cam.CFrame or hrp.CFrame,
+                        Type = 1,
+                    })
+                end)
+            end
             ultimoM1 = os.clock()
         end
 
-        -- Executa ataque de Skill
+        -- SKILL (alternando)
         if AutoSkill and (os.clock() - ultimoSkill) >= CombatCfg.Skill_Delay then
-            local skillAtual = proximaSkill()
-            usarSkill(skillAtual, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
+            local s = proximaSkill()
+            usarSkill(s, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
             ultimoSkill = os.clock()
         end
     end
@@ -609,7 +565,7 @@ local title = Instance.new("TextLabel", header)
 title.Size = UDim2.new(1, -10, 1, 0)
 title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "Dragon Blox Hub v5.3"
+title.Text = "Dragon Blox Hub v5.4 (Consolidated Patch)"
 title.TextColor3 = Color3.fromRGB(255, 140, 30)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
