@@ -15,38 +15,57 @@ local mainFrame = nil
 local gui = nil
 
 -- ═══════════════════════════════════════════════
--- REMOTES CONFIRMADOS
+-- REMOTES CONFIRMADOS & CARREGAMENTO SEGURO
 -- ═══════════════════════════════════════════════
--- Busca dinâmica do pacote Knit (evita quebrar quando a versão mudar)
-local KnitPackages = RS:WaitForChild("Packages", 10)
-local IndexFolder = KnitPackages and KnitPackages:WaitForChild("_Index", 10)
 
-local KnitFolder = nil
-if IndexFolder then
+local function GetKnitServices()
+    local Packages = RS:WaitForChild("Packages", 10)
+    if not Packages then return nil end
+    
+    local IndexFolder = Packages:WaitForChild("_Index", 10)
+    if not IndexFolder then return nil end
+    
     for _, child in ipairs(IndexFolder:GetChildren()) do
         if child.Name:find("sleitnick_knit") then
-            KnitFolder = child
-            break
+            local knit = child:FindFirstChild("knit")
+            if knit and knit:FindFirstChild("Services") then
+                return knit.Services
+            end
         end
+    end
+    return nil
+end
+
+local KnitPath = GetKnitServices()
+
+-- Declaração com fallback seguro (evita que a variável seja nil)
+local SkillMgrV2        = KnitPath and KnitPath:FindFirstChild("SkillManagerV2") and KnitPath.SkillManagerV2:FindFirstChild("RE")
+local SkillMgr          = KnitPath and KnitPath:FindFirstChild("SkillManager") and KnitPath.SkillManager:FindFirstChild("RE")
+local PromptSVC         = KnitPath and KnitPath:FindFirstChild("PromptService") and KnitPath.PromptService:FindFirstChild("RE")
+local PlayerLevelSVC    = KnitPath and KnitPath:FindFirstChild("PlayerLevelService") and KnitPath.PlayerLevelService:FindFirstChild("RF")
+local ToolSVC           = KnitPath and KnitPath:FindFirstChild("ToolService") and KnitPath.ToolService:FindFirstChild("RE")
+local FlightSVC         = KnitPath and KnitPath:FindFirstChild("FlightService") and KnitPath.FlightService:FindFirstChild("RE")
+local ModeTransform     = KnitPath and KnitPath:FindFirstChild("ModeTransformService") and KnitPath.ModeTransformService:FindFirstChild("RE")
+
+local SkillRemote       = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
+
+-- Funções auxiliares para disparar remotes sem dar crash no script
+local function SafeFireServer(remote, ...)
+    if remote and typeof(remote) == "Instance" and remote:IsA("RemoteEvent") then
+        remote:FireServer(...)
+    else
+        warn("[DragonHub] Tentativa de disparar RemoteEvent nulo ou inválido.")
     end
 end
 
-local KnitServices = KnitFolder and KnitFolder:FindFirstChild("knit") and KnitFolder.knit:FindFirstChild("Services")
-
-if not KnitServices then
-    warn("[DragonHub] Falha ao localizar os Serviços do Knit. Verifique se o jogo carregou completamente.")
-    return
+local function SafeInvokeServer(remote, ...)
+    if remote and typeof(remote) == "Instance" and remote:IsA("RemoteFunction") then
+        return remote:InvokeServer(...)
+    else
+        warn("[DragonHub] Tentativa de invocar RemoteFunction nula ou inválida.")
+        return nil
+    end
 end
-
--- Atribuição segura dos Remotes
-local SkillMgrV2        = KnitServices:FindFirstChild("SkillManagerV2") and KnitServices.SkillManagerV2:FindFirstChild("RE")
-local SkillMgr          = KnitServices:FindFirstChild("SkillManager") and KnitServices.SkillManager:FindFirstChild("RE")
-local PromptSVC         = KnitServices:FindFirstChild("PromptService") and KnitServices.PromptService:FindFirstChild("RE")
-local PlayerLevelSVC    = KnitServices:FindFirstChild("PlayerLevelService") and KnitServices.PlayerLevelService:FindFirstChild("RF")
-local ToolSVC           = KnitServices:FindFirstChild("ToolService") and KnitServices.ToolService:FindFirstChild("RE")
-local FlightSVC         = KnitServices:FindFirstChild("FlightService") and KnitServices.FlightService:FindFirstChild("RE")
-local ModeTransform     = KnitServices:FindFirstChild("ModeTransformService") and KnitServices.ModeTransformService:FindFirstChild("RE")
-
 
 -- ═══════════════════════════════════════════════
 -- CONFIG (flat)
