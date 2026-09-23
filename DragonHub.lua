@@ -164,35 +164,39 @@ end
 
 if hookmetamethod then
     _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
+        local args = {...}
+        local n = select("#", ...)
+        
         pcall(function()
             if not ConsoleCfg.Ativo then return end
             local m = getnamecallmethod()
             if m == "FireServer" or m == "Fire" or m == "InvokeServer" then
                 local okp, path = pcall(game.GetFullName, self)
                 if okp and deveCapturar(path) then
-                    local args = {}
-                    for i = 1, math.min(select("#", ...), 5) do
-                        local v = select(i, ...)
+                    local parts = {}
+                    for i = 1, math.min(n, 5) do
+                        local v = args[i]
                         local t = typeof(v)
                         if t == "Instance" then
                             local ok2, fn = pcall(game.GetFullName, v)
-                            table.insert(args, ok2 and fn or tostring(v))
+                            table.insert(parts, ok2 and fn or tostring(v))
                         elseif t == "Vector3" then
-                            table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
+                            table.insert(parts, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
                         elseif t == "table" then
                             local sub = {}
                             for k, vv in pairs(v) do
                                 table.insert(sub, tostring(k).."="..tostring(vv))
                             end
-                            table.insert(args, "{"..table.concat(sub, ",").."}")
+                            table.insert(parts, "{"..table.concat(sub,",").."}")
                         else
-                            table.insert(args, tostring(v))
+                            table.insert(parts, tostring(v))
                         end
                     end
-                    consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(args, " | "))
+                    consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(parts, " | "))
                 end
             end
         end)
+        
         return _nomecallOriginal(self, ...)
     end)
     _hookAtivo = true
