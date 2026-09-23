@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                   DRAGON BLOX HUB - VERSION 5.4 (PATCHED)      
+--                   DRAGON BLOX HUB - VERSION 5.5 (AMOLED)       
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -32,7 +32,7 @@ local SkillRemote            = obterRemote("SkillRemote")
 -- CONFIGURAÇÕES LOCAIS
 -- ═══════════════════════════════════════════════
 local CombatCfg = {
-    M1_Delay        = 0.35,
+    M1_Delay        = 0.40,
     M1_Range        = 12,
     Skill_Delay     = 1.2,
     Skill_Range     = 30,
@@ -54,10 +54,105 @@ local KiCfg = {
     Recarregando    = false,
 }
 
-local Ativo = true
-local AutoFarm = false
-local AutoSkill = false
-local ShowESP = false
+local HitboxCfg = {
+    Ativo         = false,
+    Multiplicador = 1,
+}
+
+local NoclipAtivo = false
+local SkillTap    = true
+local Ativo       = true
+local AutoFarm    = false
+local AutoSkill   = false
+local ShowESP     = false
+
+-- ═══════════════════════════════════════════════
+-- NOCLIP SYSTEM
+-- ═══════════════════════════════════════════════
+task.spawn(function()
+    while Ativo do
+        task.wait(0.2)
+        if NoclipAtivo then
+            local char = plr.Character
+            if char then
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and part.CanCollide then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════
+-- HITBOX EXPANDIDA & AIM ESTENDIDO (M1)
+-- ═══════════════════════════════════════════════
+local function aplicarHitbox()
+    if not HitboxCfg.Ativo then return end
+    local wm = WS:FindFirstChild("World Mobs")
+    if not wm then return end
+    for _, pasta in ipairs({wm:FindFirstChild("Mobs"), wm:FindFirstChild("Boss Mobs")}) do
+        if pasta then
+            for _, mob in ipairs(pasta:GetChildren()) do
+                local hrp = mob:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local orig = hrp:FindFirstChild("__OrigSize")
+                    if not orig then
+                        orig = Instance.new("Vector3Value")
+                        orig.Name = "__OrigSize"
+                        orig.Value = hrp.Size
+                        orig.Parent = hrp
+                    end
+                    hrp.Size = orig.Value * HitboxCfg.Multiplicador
+                    hrp.Transparency = math.max(hrp.Transparency, 0.95)
+                end
+            end
+        end
+    end
+end
+
+local function m1Estendido(mobPos)
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local dir = (mobPos - hrp.Position)
+    local dist = dir.Magnitude
+    local fakePos
+
+    if dist > CombatCfg.M1_Range then
+        fakePos = mobPos - dir.Unit * 10
+    else
+        fakePos = hrp.Position
+    end
+
+    local fakeCF = CFrame.new(fakePos, mobPos)
+    local cam = workspace.CurrentCamera
+
+    if SkillRemote then
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = true,
+                CFrame = fakeCF,
+                Aim = mobPos,
+                Camera = cam and cam.CFrame or fakeCF,
+                Type = 1,
+            })
+        end)
+        task.wait(0.04)
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = fakeCF,
+                Aim = mobPos,
+                Camera = cam and cam.CFrame or fakeCF,
+                Type = 1,
+            })
+        end)
+    end
+end
 
 -- ═══════════════════════════════════════════════
 -- LEITURA DE STATS COM TIMEOUT
@@ -187,7 +282,7 @@ local function getMobMaisProximo()
 end
 
 -- ═══════════════════════════════════════════════
--- GERENCIAMENTO DE KI (CORREÇÃO 3)
+-- GERENCIAMENTO DE KI
 -- ═══════════════════════════════════════════════
 local function getKiAtual()
     local char = plr.Character
@@ -259,7 +354,7 @@ local function recarregarKi()
 end
 
 -- ═══════════════════════════════════════════════
--- GERENCIAMENTO DE SKILLS (CORREÇÃO 4)
+-- GERENCIAMENTO DE SKILLS (SKILL TAP SUPPORTE)
 -- ═══════════════════════════════════════════════
 local SkillList = {
     "UniqueSets_2_1",
@@ -294,6 +389,19 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
         task.wait(0.08)
     end
 
+    if not SkillTap and SkillRemote then
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = true,
+                CFrame = hrp.CFrame,
+                Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+                Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
+                Type = 2,
+            })
+        end)
+        task.wait(0.1)
+    end
+
     local params = { HumCFrame = hrp.CFrame }
     if targetPos then params.targetPos = targetPos end
     if mobNome then params.Target = mobNome end
@@ -303,10 +411,22 @@ local function usarSkill(skillId, slot, targetPos, mobNome)
             RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
         end)
     end
+
+    if SkillRemote then
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = hrp.CFrame,
+                Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+                Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
+                Type = 2,
+            })
+        end)
+    end
 end
 
 -- ═══════════════════════════════════════════════
--- AUTO LOCK-ON (CORREÇÃO 2)
+-- AUTO LOCK-ON
 -- ═══════════════════════════════════════════════
 local LockConexao = nil
 local LockAlvo = nil
@@ -373,7 +493,7 @@ local function criarESP(mob)
     local hpBar = Instance.new("Frame", bb)
     hpBar.Size = UDim2.new(1, -10, 0, 6)
     hpBar.Position = UDim2.new(0, 5, 0, 20)
-    hpBar.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    hpBar.BackgroundColor3 = Color3.fromRGB(20,20,20)
     hpBar.BorderSizePixel = 0
 
     local hpFill = Instance.new("Frame", hpBar)
@@ -429,15 +549,22 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- LOOP DE COMBATE (CORREÇÃO 5)
+-- LOOP DE COMBATE
 -- ═══════════════════════════════════════════════
 task.spawn(function()
     local ultimoM1 = 0
     local ultimoSkill = 0
+    local ultimoHitboxCheck = 0
     local alvoTravado = nil
 
     while Ativo do
         task.wait(0.1)
+
+        -- Atualização de Hitbox local periodicamente
+        if os.clock() - ultimoHitboxCheck >= 1.0 then
+            aplicarHitbox()
+            ultimoHitboxCheck = os.clock()
+        end
 
         if not AutoFarm and not AutoSkill then
             alvoTravado = nil
@@ -481,34 +608,14 @@ task.spawn(function()
             continue
         end
 
-        -- SE PERTO: para e ataca
+        -- SE PERTO: para e sincroniza CFrame
         pararVoo()
         hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
+        task.wait()
 
-        -- M1
+        -- M1 ESTENDIDO / AUTO FARM
         if AutoFarm and (os.clock() - ultimoM1) >= CombatCfg.M1_Delay then
-            local cam = workspace.CurrentCamera
-            if SkillRemote then
-                pcall(function()
-                    SkillRemote:FireServer({
-                        Began = true,
-                        CFrame = hrp.CFrame,
-                        Aim = mob.pos,
-                        Camera = cam and cam.CFrame or hrp.CFrame,
-                        Type = 1,
-                    })
-                end)
-                task.wait(0.05)
-                pcall(function()
-                    SkillRemote:FireServer({
-                        Began = false,
-                        CFrame = hrp.CFrame,
-                        Aim = mob.pos,
-                        Camera = cam and cam.CFrame or hrp.CFrame,
-                        Type = 1,
-                    })
-                end)
-            end
+            m1Estendido(mob.pos)
             ultimoM1 = os.clock()
         end
 
@@ -522,7 +629,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- INTERFACE GRÁFICA (UI)
+-- INTERFACE GRÁFICA (AMOLED UI)
 -- ═══════════════════════════════════════════════
 local gui = Instance.new("ScreenGui")
 gui.Name = "DragonBloxHub_v5"
@@ -544,7 +651,8 @@ Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 22)
 mainFrame = Instance.new("Frame", gui)
 mainFrame.Size = UDim2.new(0, 420, 0, 320)
 mainFrame.Position = UDim2.new(0.5, -210, 0.4, -160)
-mainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+mainFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+mainFrame.BackgroundTransparency = 0.1
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
 mainFrame.Draggable = true
@@ -557,7 +665,7 @@ end)
 
 local header = Instance.new("Frame", mainFrame)
 header.Size = UDim2.new(1, 0, 0, 35)
-header.BackgroundColor3 = Color3.fromRGB(25, 25, 34)
+header.BackgroundColor3 = Color3.fromRGB(8, 8, 8)
 header.BorderSizePixel = 0
 Instance.new("UICorner", header).CornerRadius = UDim.new(0, 8)
 
@@ -565,7 +673,7 @@ local title = Instance.new("TextLabel", header)
 title.Size = UDim2.new(1, -10, 1, 0)
 title.Position = UDim2.new(0, 10, 0, 0)
 title.BackgroundTransparency = 1
-title.Text = "Dragon Blox Hub v5.4 (Consolidated Patch)"
+title.Text = "Dragon Blox Hub v5.5 (AMOLED Edition)"
 title.TextColor3 = Color3.fromRGB(255, 140, 30)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 14
@@ -574,7 +682,7 @@ title.TextXAlignment = Enum.TextXAlignment.Left
 local navBar = Instance.new("Frame", mainFrame)
 navBar.Size = UDim2.new(0, 100, 1, -35)
 navBar.Position = UDim2.new(0, 0, 0, 35)
-navBar.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+navBar.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
 navBar.BorderSizePixel = 0
 
 local navLayout = Instance.new("UIListLayout", navBar)
@@ -591,7 +699,7 @@ local tabs = {}
 local function createTab(name)
     local tabBtn = Instance.new("TextButton", navBar)
     tabBtn.Size = UDim2.new(1, 0, 0, 32)
-    tabBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+    tabBtn.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
     tabBtn.TextColor3 = Color3.fromRGB(160, 160, 170)
     tabBtn.Font = Enum.Font.Gotham
     tabBtn.TextSize = 11
@@ -615,11 +723,11 @@ local function createTab(name)
 
     tabBtn.MouseButton1Click:Connect(function()
         for _, t in pairs(tabs) do
-            t.btn.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+            t.btn.BackgroundColor3 = Color3.fromRGB(12, 12, 12)
             t.btn.TextColor3 = Color3.fromRGB(160, 160, 170)
             t.container.Visible = false
         end
-        tabBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+        tabBtn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
         tabBtn.TextColor3 = Color3.fromRGB(255, 140, 30)
         container.Visible = true
     end)
@@ -634,14 +742,14 @@ local statsTab  = createTab("Stats")
 local miscTab   = createTab("Misc")
 local configTab = createTab("Config")
 
-tabs["Farm"].btn.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+tabs["Farm"].btn.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
 tabs["Farm"].btn.TextColor3 = Color3.fromRGB(255, 140, 30)
 tabs["Farm"].container.Visible = true
 
 local function mkToggle(parent, text, default, cb)
     local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, -8, 0, 28)
-    btn.BackgroundColor3 = default and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(40, 40, 48)
+    btn.BackgroundColor3 = default and Color3.fromRGB(30, 100, 50) or Color3.fromRGB(20, 20, 20)
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn.Font = Enum.Font.Gotham
     btn.TextSize = 11
@@ -651,7 +759,7 @@ local function mkToggle(parent, text, default, cb)
     local st = default
     btn.MouseButton1Click:Connect(function()
         st = not st
-        btn.BackgroundColor3 = st and Color3.fromRGB(40, 120, 60) or Color3.fromRGB(40, 40, 48)
+        btn.BackgroundColor3 = st and Color3.fromRGB(30, 100, 50) or Color3.fromRGB(20, 20, 20)
         btn.Text = text .. ": " .. (st and "LIGADO" or "DESLIGADO")
         cb(st)
     end)
@@ -669,20 +777,30 @@ local function mkSlider(parent, label, min, max, default, cb)
     l.TextSize = 11
     l.Font = Enum.Font.Gotham
     l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Text = label .. ": " .. default
+    l.Text = label
 
     local bar = Instance.new("Frame", f)
-    bar.Size = UDim2.new(1, 0, 0, 12)
-    bar.Position = UDim2.new(0, 0, 0, 22)
-    bar.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+    bar.Size = UDim2.new(1, 0, 0, 14)
+    bar.Position = UDim2.new(0, 0, 0, 20)
+    bar.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
     bar.BorderSizePixel = 0
-    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 4)
 
     local fill = Instance.new("Frame", bar)
     fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
     fill.BackgroundColor3 = Color3.fromRGB(255, 140, 30)
     fill.BorderSizePixel = 0
-    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 4)
+
+    local valorLabel = Instance.new("TextLabel", bar)
+    valorLabel.Size = UDim2.new(1, 0, 1, 0)
+    valorLabel.BackgroundTransparency = 1
+    valorLabel.Text = tostring(default)
+    valorLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    valorLabel.TextStrokeTransparency = 0.5
+    valorLabel.Font = Enum.Font.GothamBold
+    valorLabel.TextSize = 10
+    valorLabel.ZIndex = 5
 
     local dragging = false
 
@@ -690,7 +808,7 @@ local function mkSlider(parent, label, min, max, default, cb)
         local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
         local val = math.floor(min + (max - min) * rel)
         fill.Size = UDim2.new(rel, 0, 1, 0)
-        l.Text = label .. ": " .. val
+        valorLabel.Text = tostring(val)
         cb(val)
     end
 
@@ -719,7 +837,7 @@ mkToggle(farmTab, "Auto Lock-On", CombatCfg.AutoLock, function(v) CombatCfg.Auto
 mkToggle(farmTab, "Mostrar ESP", ShowESP, function(v) ShowESP = v end)
 
 mkSlider(farmTab, "M1 Range", 5, 50, CombatCfg.M1_Range, function(v) CombatCfg.M1_Range = v end)
-mkSlider(farmTab, "M1 Delay (x0.01s)", 10, 100, 35, function(v) CombatCfg.M1_Delay = v / 100 end)
+mkSlider(farmTab, "M1 Delay (x0.01s)", 10, 100, 40, function(v) CombatCfg.M1_Delay = v / 100 end)
 mkSlider(farmTab, "Skill Delay (x0.1s)", 3, 50, 12, function(v) CombatCfg.Skill_Delay = v / 10 end)
 
 local statsLabel = Instance.new("TextLabel", statsTab)
@@ -741,6 +859,9 @@ task.spawn(function()
     end
 end)
 
+mkToggle(miscTab, "Noclip", NoclipAtivo, function(v) NoclipAtivo = v end)
+mkToggle(miscTab, "Hitbox Expandida", HitboxCfg.Ativo, function(v) HitboxCfg.Ativo = v end)
+mkSlider(miscTab, "Multiplicador Hitbox", 1, 5, HitboxCfg.Multiplicador, function(v) HitboxCfg.Multiplicador = v end)
 mkSlider(miscTab, "Velocidade de Voo", 50, 500, Config.FlySpeed, function(v) Config.FlySpeed = v end)
 mkToggle(miscTab, "Forçar WalkSpeed", Config.OverrideSpeed, function(v) Config.OverrideSpeed = v end)
 mkSlider(miscTab, "WalkSpeed", 16, 200, Config.WalkSpeed, function(v) Config.WalkSpeed = v end)
@@ -758,6 +879,7 @@ task.spawn(function()
     end
 end)
 
+mkToggle(configTab, "Skills: Tap (não segurar)", SkillTap, function(v) SkillTap = v end)
 mkSlider(configTab, "Ki mín. p/ recarregar (%)", 10, 80, 30, function(v) KiCfg.LimiteRecarga = v / 100 end)
 mkSlider(configTab, "Ki alvo pós-recarga (%)", 50, 100, 90, function(v) KiCfg.AlvoRecarga = v / 100 end)
 mkSlider(configTab, "Tempo máx. recarga (s)", 1, 10, 3, function(v) KiCfg.TempoMaxRecarga = v end)
