@@ -43,6 +43,7 @@ local RE_SelectMode          = ModeTransform and ModeTransform.SelectMode
 local Config = {
     -- Farm
     AutoFarm        = false,
+    AutoBoss        = false,
     AutoSkill       = false,
     AutoLock        = true,
     ShowESP         = false,
@@ -92,6 +93,10 @@ local Config = {
 
     -- Skills
     SkillTap        = true,
+
+    -- Console Log
+    ConsoleAtivo    = true,
+    ConsoleIntervalo = 60,
 }
 
 local KiCfg = {
@@ -105,6 +110,78 @@ local Ativo = true
 local hitboxOriginal = nil
 local ultimaSpecial = nil
 
+-- Console System Globals
+local ConsoleBuf = {}
+local ConsoleUltimoSalvar = os.clock()
+local ConsoleInicio = os.time()
+local ConsoleLabelRef = nil
+
+-- ═══════════════════════════════════════════════
+-- CONSOLE LITE (SISTEMA DE LOG)
+-- ═══════════════════════════════════════════════
+local EVENTOS_IMPORTANTES = {
+    "ItemSpawned", "ItemDrop", "ShootingStar", "onEventEffect",
+    "Prompt", "Reward", "Drop", "Spawn", "Boss", "Zaja",
+    "Quest", "Dialog", "UnlockMode", "Rebirth",
+}
+
+local function consoleAdd(tipo, msg)
+    if not Config.ConsoleAtivo then return end
+    local linha = string.format("[%s] [%s] %s", os.date("%H:%M:%S"), tipo, msg)
+    table.insert(ConsoleBuf, linha)
+    if #ConsoleBuf > 2000 then table.remove(ConsoleBuf, 1) end
+    if ConsoleLabelRef then
+        ConsoleLabelRef.Text = table.concat(ConsoleBuf, "\n")
+    end
+end
+
+local function deveCapturar(nome)
+    for _, kw in ipairs(EVENTOS_IMPORTANTES) do
+        if nome:find(kw) then return true end
+    end
+    return false
+end
+
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local m
+    local okM = pcall(function() m = getnamecallmethod() end)
+    if okM and (m == "FireServer" or m == "Fire" or m == "InvokeServer") then
+        local ok, path = pcall(game.GetFullName, self)
+        if ok and deveCapturar(path) then
+            local args = {}
+            for i = 1, math.min(select("#", ...), 5) do
+                local v = select(i, ...)
+                local t = typeof(v)
+                if t == "Instance" then
+                    local ok2, fn = pcall(game.GetFullName, v)
+                    table.insert(args, ok2 and fn or tostring(v))
+                elseif t == "Vector3" then
+                    table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
+                else
+                    table.insert(args, tostring(v))
+                end
+            end
+            consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "") .. " | " .. table.concat(args, " | "))
+        end
+    end
+    return oldNamecall(self, ...)
+end)
+
+-- Auto-Save Logs
+task.spawn(function()
+    while Ativo do
+        task.wait(5)
+        if Config.ConsoleAtivo and (os.clock() - ConsoleUltimoSalvar) >= Config.ConsoleIntervalo then
+            if #ConsoleBuf > 0 then
+                local nome = "DBH_Log_" .. ConsoleInicio .. ".txt"
+                pcall(function() writefile(nome, table.concat(ConsoleBuf, "\n")) end)
+                ConsoleUltimoSalvar = os.clock()
+            end
+        end
+    end
+end)
+
 -- ═══════════════════════════════════════════════
 -- HELPERS
 -- ═══════════════════════════════════════════════
@@ -112,6 +189,21 @@ local function safe(fn)
     local ok, err = pcall(fn)
     if not ok then warn("[DBH] " .. tostring(err)) end
     return ok
+end
+
+local function podeAtacar()
+    local pg = plr:FindFirstChild("PlayerGui")
+    if pg then
+        local chat = pg:FindFirstChild("Chat")
+        if chat and chat:FindFirstChild("ChatWindow") and chat.ChatWindow.Visible then
+            return false
+        end
+    end
+    local char = plr.Character
+    if not char then return false end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return false end
+    return true
 end
 
 -- ═══════════════════════════════════════════════
@@ -202,7 +294,17 @@ local function getMobMaisProximo()
                 local hum = mob:FindFirstChildOfClass("Humanoid")
                 if hum and hum.Health > 0 then
                     local base = mob.Name:gsub("%-?%d+$", "")
-                    if not Config.MobAlvo or base == Config.MobAlvo then
+                    
+                    local valido = false
+                    if Config.AutoFarm and not isBoss then valido = true end
+                    if Config.AutoBoss and isBoss then valido = true end
+                    if Config.AutoFarm and Config.AutoBoss then valido = true end
+
+                    if valido and Config.MobAlvo and base ~= Config.MobAlvo then
+                        valido = false
+                    end
+
+                    if valido then
                         local d = (mob.HumanoidRootPart.Position - myPos).Magnitude
                         if d < minD then
                             minD = d
@@ -227,6 +329,12 @@ local function getMobMaisProximo()
     if wm then
         checar(wm:FindFirstChild("Mobs"), false)
         checar(wm:FindFirstChild("Boss Mobs"), true)
+        
+        for _, pasta in ipairs(wm:GetChildren()) do
+            if pasta.Name:lower():find("boss") and pasta.Name ~= "Boss Mobs" then
+                checar(pasta, true)
+            end
+        end
     end
 
     return maisProximo
@@ -237,8 +345,9 @@ local function listarMobsUnicos()
     local seen = {}
     local wm = WS:FindFirstChild("World Mobs")
     if not wm then return lista end
-    for _, pasta in ipairs({wm:FindFirstChild("Mobs"), wm:FindFirstChild("Boss Mobs")}) do
-        if pasta then
+    
+    for _, pasta in ipairs(wm:GetChildren()) do
+        if pasta:IsA("Folder") or pasta:IsA("Model") then
             for _, mob in ipairs(pasta:GetChildren()) do
                 if mob:IsA("Model") and mob:FindFirstChild("Humanoid") then
                     local base = mob.Name:gsub("%-?%d+$", "")
@@ -348,6 +457,8 @@ end
 -- M1 (SkillId=2)
 -- ═══════════════════════════════════════════════
 local function m1(alvo)
+    if not podeAtacar() then return end
+    
     local char = plr.Character
     if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -437,6 +548,10 @@ local function usarSkill(skillId, slot, targetPos, mobModel)
 
     pcall(function()
         RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
+    end)
+    task.wait(0.3)
+    pcall(function()
+        RE_ExecuteSkill:FireServer(skillId, params, slot or 1, false)
     end)
 end
 
@@ -665,6 +780,7 @@ task.spawn(function()
         OnEventEffect.OnClientEvent:Connect(function(evento, pos)
             if not Config.AutoCollect then return end
             if evento == "ShootingStar" and typeof(pos) == "Vector3" then
+                consoleAdd("COLLECT", "Meteoro detectado em: " .. tostring(pos))
                 voarPara(pos)
                 task.wait(3)
             end
@@ -674,6 +790,7 @@ task.spawn(function()
         ItemSpawned.OnClientEvent:Connect(function(data)
             if not Config.AutoCollect then return end
             if type(data) == "table" and data.Pos then
+                consoleAdd("COLLECT", "Item Spawned: " .. tostring(data.Name))
                 task.wait(1)
                 voarPara(data.Pos)
                 task.wait(2)
@@ -1083,7 +1200,6 @@ function UI.label(tab, opts)
     return l
 end
 
--- Dropdown (modal popup)
 function UI.dropdown(tab, opts)
     local current = opts.default or "(todos)"
     local btn = I("TextButton", {
@@ -1100,7 +1216,6 @@ function UI.dropdown(tab, opts)
     end
 
     btn.MouseButton1Click:Connect(function()
-        -- popup modal
         local popup = I("Frame", {
             Size = UDim2.new(0, 260, 0, 300),
             Position = UDim2.new(0.5, -130, 0.5, -150),
@@ -1161,7 +1276,7 @@ end
 -- ═══════════════════════════════════════════════
 local function matarTudo()
     Ativo = false
-    Config.AutoFarm = false; Config.AutoSkill = false; Config.AutoTour = false
+    Config.AutoFarm = false; Config.AutoBoss = false; Config.AutoSkill = false; Config.AutoTour = false
     Config.AutoRebirth = false; Config.AutoQuest = false; Config.AutoCollect = false
     Config.AutoTransform = false; Config.AutoEquip = false; Config.Noclip = false
     Config.ShowESP = false; Config.Godmode = false; Config.Stick = false
@@ -1197,6 +1312,7 @@ local rebirthTab   = UI.newTab(win, "🔄", "Rebirth")
 local questTab     = UI.newTab(win, "📜", "Quest")
 local collectTab   = UI.newTab(win, "💎", "Collect")
 local transformTab = UI.newTab(win, "🌀", "Transform")
+local consoleTab   = UI.newTab(win, "📜", "Console")
 local miscTab      = UI.newTab(win, "🛠", "Misc")
 local configTab    = UI.newTab(win, "⚙", "Config")
 local statsTab     = UI.newTab(win, "📊", "Stats")
@@ -1208,7 +1324,8 @@ farmTab.frame.Visible = true
 
 -- ═══ FARM ═══
 UI.section(farmTab, "⚔   COMBATE")
-UI.toggle(farmTab, {name = "Auto Farm (M1)", default = false, callback = function(v) Config.AutoFarm = v end})
+UI.toggle(farmTab, {name = "Auto Farm (Mobs)", default = false, callback = function(v) Config.AutoFarm = v end})
+UI.toggle(farmTab, {name = "Auto Farm (Bosses)", default = false, callback = function(v) Config.AutoBoss = v end})
 UI.toggle(farmTab, {name = "Auto Skill", default = false, callback = function(v) Config.AutoSkill = v end})
 UI.toggle(farmTab, {name = "Auto Lock-On", default = true, callback = function(v) Config.AutoLock = v end})
 UI.toggle(farmTab, {name = "Mostrar ESP", default = false, callback = function(v) Config.ShowESP = v end})
@@ -1311,7 +1428,7 @@ UI.section(collectTab, "💎   AUTO COLLECT")
 UI.toggle(collectTab, {name = "Auto Coletar (esferas/meteoros/items)", default = false, callback = function(v) Config.AutoCollect = v end})
 
 UI.section(collectTab, "ℹ   INFO")
-local infoCollect = UI.label(collectTab, {text = "Aguardando...", height = 60})
+local infoCollect = UI.label(collectTab, {text = "Escaneando Drops...", height = 60})
 
 -- ═══ TRANSFORM ═══
 UI.section(transformTab, "🌀   TRANSFORMAÇÃO")
@@ -1329,6 +1446,11 @@ UI.dropdown(transformTab, {
     default = "SSJAngel",
     callback = function(opt) Config.TransformMode = opt end
 })
+
+-- ═══ CONSOLE LOG ═══
+UI.section(consoleTab, "📜   CONSOLE LOGS")
+UI.toggle(consoleTab, {name = "Capturar Remotes", default = true, callback = function(v) Config.ConsoleAtivo = v end})
+ConsoleLabelRef = UI.label(consoleTab, {text = "Iniciando captura de dados de rede...", height = 220})
 
 -- ═══ MISC ═══
 UI.section(miscTab, "🛠   UTILITÁRIOS")
@@ -1400,7 +1522,7 @@ task.spawn(function()
             ultimoHitboxCheck = os.clock()
         end
 
-        if not Config.AutoFarm and not Config.AutoSkill then
+        if not Config.AutoFarm and not Config.AutoBoss and not Config.AutoSkill then
             alvoTravado = nil
             pararVoo()
             pararStick()
@@ -1410,7 +1532,7 @@ task.spawn(function()
 
         local cur, max = getKiAtual()
         local pct = max > 0 and (cur / max) or 1
-        if pct < KiCfg.LimiteRecarga and Config.AutoSkill then
+        if pct < KiCfg.LimiteRecarga then
             lockOn(nil)
             pararVoo()
             recarregarKi()
@@ -1453,7 +1575,7 @@ task.spawn(function()
             godmodePosicional(mob.model)
         end
 
-        if Config.AutoFarm and (os.clock() - ultimoM1) >= Config.M1_Delay then
+        if (Config.AutoFarm or Config.AutoBoss) and (os.clock() - ultimoM1) >= Config.M1_Delay then
             m1(mob)
             ultimoM1 = os.clock()
         end
@@ -1470,7 +1592,7 @@ end)
 task.spawn(function()
     while Ativo do
         task.wait(2)
-        if Config.AutoTour and (Config.AutoFarm or Config.AutoSkill) then
+        if Config.AutoTour and (Config.AutoFarm or Config.AutoBoss or Config.AutoSkill) then
             if #areas == 0 then descobrirAreas() end
             if #areas > 0 then
                 if Config.AreaSelecionada then
@@ -1588,4 +1710,4 @@ task.spawn(function()
     end
 end)
 
-print("[DBH] ✅ Dragon Blox Hub v6 carregado!")
+print("[DBH] ✅ Dragon Blox Hub v6 carregado com Rayfield AMOLED UI intacta!")
