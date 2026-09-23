@@ -110,29 +110,38 @@ local Ativo = true
 local hitboxOriginal = nil
 local ultimaSpecial = nil
 
--- Console System Globals
+-- ═══════════════════════════════════════════════
+-- BLOCO 1: CONSOLE LITE (com restauração segura)
+-- ═══════════════════════════════════════════════
+local ConsoleCfg = {
+    Ativo = true,
+    IntervaloSalvar = 60,
+    MaxLinhas = 3000,
+}
+
 local ConsoleBuf = {}
 local ConsoleUltimoSalvar = os.clock()
 local ConsoleInicio = os.time()
-local ConsoleLabelRef = nil
 
--- ═══════════════════════════════════════════════
--- CONSOLE LITE (SISTEMA DE LOG)
--- ═══════════════════════════════════════════════
+local _nomecallOriginal = nil
+local _hookAtivo = false
+
 local EVENTOS_IMPORTANTES = {
     "ItemSpawned", "ItemDrop", "ShootingStar", "onEventEffect",
     "Prompt", "Reward", "Drop", "Spawn", "Boss", "Zaja",
     "Quest", "Dialog", "UnlockMode", "Rebirth",
+    "Skill", "ExecuteSkill", "Attack", "LockedOn",
+    "Orb", "Sphere", "Wish", "DragonBall",
 }
 
-local function consoleAdd(tipo, msg)
-    if not Config.ConsoleAtivo then return end
-    local linha = string.format("[%s] [%s] %s", os.date("%H:%M:%S"), tipo, msg)
-    table.insert(ConsoleBuf, linha)
-    if #ConsoleBuf > 2000 then table.remove(ConsoleBuf, 1) end
-    if ConsoleLabelRef then
-        ConsoleLabelRef.Text = table.concat(ConsoleBuf, "\n")
+local ultimosRegistros = {}
+local function deveRegistrar(chave)
+    local agora = os.clock()
+    if ultimosRegistros[chave] and (agora - ultimosRegistros[chave]) < 3 then
+        return false
     end
+    ultimosRegistros[chave] = agora
+    return true
 end
 
 local function deveCapturar(nome)
@@ -142,40 +151,97 @@ local function deveCapturar(nome)
     return false
 end
 
-local oldNamecall
-oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-    local m
-    local okM = pcall(function() m = getnamecallmethod() end)
-    if okM and (m == "FireServer" or m == "Fire" or m == "InvokeServer") then
-        local ok, path = pcall(game.GetFullName, self)
-        if ok and deveCapturar(path) then
-            local args = {}
-            for i = 1, math.min(select("#", ...), 5) do
-                local v = select(i, ...)
-                local t = typeof(v)
-                if t == "Instance" then
-                    local ok2, fn = pcall(game.GetFullName, v)
-                    table.insert(args, ok2 and fn or tostring(v))
-                elseif t == "Vector3" then
-                    table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
-                else
-                    table.insert(args, tostring(v))
+local function consoleAdd(tipo, msg)
+    if not ConsoleCfg.Ativo then return end
+    local chave = tipo .. ":" .. msg:sub(1, 60)
+    if not deveRegistrar(chave) then return end
+    local linha = string.format("[%s] [%s] %s", os.date("%H:%M:%S"), tipo, msg)
+    table.insert(ConsoleBuf, linha)
+    if #ConsoleBuf > ConsoleCfg.MaxLinhas then
+        table.remove(ConsoleBuf, 1)
+    end
+end
+
+-- Hook protegido (pcall interno + referência salva)
+_nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
+    pcall(function()
+        if not ConsoleCfg.Ativo then return end
+        local m = getnamecallmethod()
+        if m == "FireServer" or m == "Fire" or m == "InvokeServer" then
+            local okp, path = pcall(game.GetFullName, self)
+            if okp and deveCapturar(path) then
+                local args = {}
+                for i = 1, math.min(select("#", ...), 5) do
+                    local v = select(i, ...)
+                    local t = typeof(v)
+                    if t == "Instance" then
+                        local ok2, fn = pcall(game.GetFullName, v)
+                        table.insert(args, ok2 and fn or tostring(v))
+                    elseif t == "Vector3" then
+                        table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
+                    elseif t == "table" then
+                        local sub = {}
+                        for k, vv in pairs(v) do
+                            table.insert(sub, tostring(k).."="..tostring(vv))
+                        end
+                        table.insert(args, "{"..table.concat(sub, ",").."}")
+                    else
+                        table.insert(args, tostring(v))
+                    end
+                end
+                consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(args, " | "))
+            end
+        end
+    end)
+    return _nomecallOriginal(self, ...)
+end)
+_hookAtivo = true
+
+function _restaurarHook()
+    if _hookAtivo and _nomecallOriginal then
+        pcall(function()
+            hookmetamethod(game, "__namecall", _nomecallOriginal)
+        end)
+        _hookAtivo = false
+    end
+end
+
+-- Scanner de drops/esferas
+task.spawn(function()
+    local conhecidos = {}
+    while Ativo do
+        task.wait(3)
+        if ConsoleCfg.Ativo then
+            for _, obj in ipairs(WS:GetDescendants()) do
+                if (obj:IsA("BasePart") or obj:IsA("Model")) and not conhecidos[obj] then
+                    conhecidos[obj] = true
+                    local nome = obj.Name:lower()
+                    if nome:find("orb") or nome:find("sphere") or nome:find("wish")
+                    or nome:find("dragon") or nome:find("star") or nome:find("crystal")
+                    or nome:find("esfera") then
+                        local pos = obj:IsA("BasePart") and obj.Position
+                            or (obj.PrimaryPart and obj.PrimaryPart.Position)
+                        if pos then
+                            consoleAdd("DROP",
+                                obj.Name .. " | Pai: "..obj.Parent.Name ..
+                                " | " .. string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
+                        end
+                    end
                 end
             end
-            consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "") .. " | " .. table.concat(args, " | "))
         end
     end
-    return oldNamecall(self, ...)
 end)
 
--- Auto-Save Logs
+-- Auto-save
 task.spawn(function()
     while Ativo do
         task.wait(5)
-        if Config.ConsoleAtivo and (os.clock() - ConsoleUltimoSalvar) >= Config.ConsoleIntervalo then
+        if ConsoleCfg.Ativo and (os.clock() - ConsoleUltimoSalvar) >= ConsoleCfg.IntervaloSalvar then
             if #ConsoleBuf > 0 then
-                local nome = "DBH_Log_" .. ConsoleInicio .. ".txt"
-                pcall(function() writefile(nome, table.concat(ConsoleBuf, "\n")) end)
+                local nome = "DBH_console_" .. ConsoleInicio .. ".txt"
+                local conteudo = table.concat(ConsoleBuf, "\n")
+                pcall(function() writefile(nome, conteudo) end)
                 ConsoleUltimoSalvar = os.clock()
             end
         end
@@ -1272,16 +1338,51 @@ function UI.dropdown(tab, opts)
 end
 
 -- ═══════════════════════════════════════════════
--- KILL SWITCH
+-- BLOCO 2: LIBERA TODAS AS TECLAS/BOTÕES
+-- ═══════════════════════════════════════════════
+local function _soltarTeclas()
+    pcall(function()
+        VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game)
+        VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+        VIM:SendKeyEvent(false, Enum.KeyCode.A, false, game)
+        VIM:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+        VIM:SendKeyEvent(false, Enum.KeyCode.D, false, game)
+        VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+    end)
+    -- Solta qualquer clique preso no centro
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+            local vp = cam.ViewportSize
+            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0)
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════
+-- BLOCO 3: KILL SWITCH (matarTudo)
 -- ═══════════════════════════════════════════════
 local function matarTudo()
     Ativo = false
-    Config.AutoFarm = false; Config.AutoBoss = false; Config.AutoSkill = false; Config.AutoTour = false
+
+    Config.AutoFarm = false; Config.AutoSkill = false; Config.AutoTour = false
     Config.AutoRebirth = false; Config.AutoQuest = false; Config.AutoCollect = false
     Config.AutoTransform = false; Config.AutoEquip = false; Config.Noclip = false
     Config.ShowESP = false; Config.Godmode = false; Config.Stick = false
     Config.HitboxPlayer = false; Config.HitboxGigante = false
+    Config.AutoBoss = false
 
+    -- Restaura hook do console (libera HUD do jogo)
+    if _restaurarHook then _restaurarHook() end
+
+    -- Solta teclas/cliques presos
+    _soltarTeclas()
+
+    -- Para lock-on ativo
+    if pararLock then pcall(pararLock) end
+
+    -- Mata corpos físicos
     local char = plr.Character
     if char then
         local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -1291,13 +1392,16 @@ local function matarTudo()
             end
         end
         if hitboxOriginal then
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.Size = hitboxOriginal; hrp.CanCollide = true end
+            local hrp2 = char:FindFirstChild("HumanoidRootPart")
+            if hrp2 then hrp2.Size = hitboxOriginal; hrp2.CanCollide = true end
         end
     end
+
+    -- Remove GUIs
     if gui then gui:Destroy() end
     if espGui then espGui:Destroy() end
-    print("[DBH] Script encerrado.")
+
+    print("[DBH] ✅ Script encerrado. HUD restaurado.")
 end
 
 -- ═══════════════════════════════════════════════
@@ -1312,7 +1416,60 @@ local rebirthTab   = UI.newTab(win, "🔄", "Rebirth")
 local questTab     = UI.newTab(win, "📜", "Quest")
 local collectTab   = UI.newTab(win, "💎", "Collect")
 local transformTab = UI.newTab(win, "🌀", "Transform")
-local consoleTab   = UI.newTab(win, "📜", "Console")
+
+-- ═══════════════════════════════════════════════
+-- BLOCO 4: ABA CONSOLE
+-- ═══════════════════════════════════════════════
+local consoleTab   = UI.newTab(win, "🖥", "Console")
+
+UI.section(consoleTab, "🖥   CONSOLE LITE")
+UI.toggle(consoleTab, {name = "Captura Ativa", default = true, callback = function(v)
+    ConsoleCfg.Ativo = v
+end})
+
+UI.slider(consoleTab, {
+    name = "Auto-save a cada",
+    min = 30, max = 300, default = 60, suffix = " s",
+    callback = function(v) ConsoleCfg.IntervaloSalvar = v end
+})
+
+UI.button(consoleTab, {name = "💾 Salvar Agora", callback = function()
+    if #ConsoleBuf > 0 then
+        local nome = "DBH_manual_" .. os.time() .. ".txt"
+        local conteudo = table.concat(ConsoleBuf, "\n")
+        local ok = pcall(function() writefile(nome, conteudo) end)
+        if ok then
+            print("[CONSOLE] Salvo: " .. nome)
+        else
+            pcall(function() if setclipboard then setclipboard(conteudo) end end)
+            print("[CONSOLE] Copiado pro clipboard")
+        end
+    end
+end})
+
+UI.button(consoleTab, {name = "🗑 Limpar Buffer", callback = function()
+    ConsoleBuf = {}
+end})
+
+UI.section(consoleTab, "📋   LOG AO VIVO")
+local consoleLabel = UI.label(consoleTab, {text = "Iniciando...", height = 300})
+
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        local linhas = {}
+        local inicio = math.max(1, #ConsoleBuf - 20)
+        for i = inicio, #ConsoleBuf do
+            table.insert(linhas, ConsoleBuf[i])
+        end
+        if #linhas == 0 then
+            consoleLabel.Text = "(sem eventos ainda)"
+        else
+            consoleLabel.Text = table.concat(linhas, "\n")
+        end
+    end
+end)
+
 local miscTab      = UI.newTab(win, "🛠", "Misc")
 local configTab    = UI.newTab(win, "⚙", "Config")
 local statsTab     = UI.newTab(win, "📊", "Stats")
@@ -1446,11 +1603,6 @@ UI.dropdown(transformTab, {
     default = "SSJAngel",
     callback = function(opt) Config.TransformMode = opt end
 })
-
--- ═══ CONSOLE LOG ═══
-UI.section(consoleTab, "📜   CONSOLE LOGS")
-UI.toggle(consoleTab, {name = "Capturar Remotes", default = true, callback = function(v) Config.ConsoleAtivo = v end})
-ConsoleLabelRef = UI.label(consoleTab, {text = "Iniciando captura de dados de rede...", height = 220})
 
 -- ═══ MISC ═══
 UI.section(miscTab, "🛠   UTILITÁRIOS")
@@ -1605,7 +1757,7 @@ task.spawn(function()
                         local prox = areas[areaIdx]
                         if prox then
                             irParaArea(prox)
-                            task.wait(Config.EspaSpawn)
+                            task.wait(Config.EsperaSpawn)
                         end
                     end
                 end
@@ -1710,4 +1862,4 @@ task.spawn(function()
     end
 end)
 
-print("[DBH] ✅ Dragon Blox Hub v6 carregado com Rayfield AMOLED UI intacta!")
+print("[DBH] ✅ Dragon Blox Hub v6 atualizado com restauração de HUD!")
