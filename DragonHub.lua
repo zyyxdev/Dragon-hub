@@ -164,8 +164,8 @@ end
 
 if hookmetamethod then
     _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
-        local args = {...}
         local n = select("#", ...)
+        local capturedArgs = {...}
         
         pcall(function()
             if not ConsoleCfg.Ativo then return end
@@ -173,40 +173,32 @@ if hookmetamethod then
             if m == "FireServer" or m == "Fire" or m == "InvokeServer" then
                 local okp, path = pcall(game.GetFullName, self)
                 if okp and deveCapturar(path) then
-                    local parts = {}
+                    local args = {}
                     for i = 1, math.min(n, 5) do
-                        local v = args[i]
+                        local v = capturedArgs[i]
                         local t = typeof(v)
                         if t == "Instance" then
                             local ok2, fn = pcall(game.GetFullName, v)
-                            table.insert(parts, ok2 and fn or tostring(v))
+                            table.insert(args, ok2 and fn or tostring(v))
                         elseif t == "Vector3" then
-                            table.insert(parts, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
+                            table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
                         elseif t == "table" then
                             local sub = {}
                             for k, vv in pairs(v) do
                                 table.insert(sub, tostring(k).."="..tostring(vv))
                             end
-                            table.insert(parts, "{"..table.concat(sub,",").."}")
+                            table.insert(args, "{"..table.concat(sub, ",").."}")
                         else
-                            table.insert(parts, tostring(v))
+                            table.insert(args, tostring(v))
                         end
                     end
-                    consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(parts, " | "))
+                    consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(args, " | "))
                 end
             end
         end)
-        
         return _nomecallOriginal(self, ...)
     end)
     _hookAtivo = true
-end
-
-local function _restaurarHook()
-    if _hookAtivo and _nomecallOriginal and hookmetamethod then
-        pcall(function() hookmetamethod(game, "__namecall", _nomecallOriginal) end)
-        _hookAtivo = false
-    end
 end
 
 -- Scanner de drops
