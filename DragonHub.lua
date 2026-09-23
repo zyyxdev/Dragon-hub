@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════
---                DRAGON BLOX HUB - v6.0 (CONSOLIDATED)
+--                DRAGON BLOX HUB - v6.0 (FIXED & CONSOLIDATED)
 -- ════════════════════════════════════════════════════════════════
 
 local RS = game:GetService("ReplicatedStorage")
@@ -15,60 +15,45 @@ local mainFrame = nil
 local gui = nil
 
 -- ═══════════════════════════════════════════════
--- REMOTES CONFIRMADOS & CARREGAMENTO SEGURO
+-- BUSCA SEGURA DE REMOTES (KNIT & DIRECT)
 -- ═══════════════════════════════════════════════
-
-local function GetKnitServices()
-    local Packages = RS:WaitForChild("Packages", 10)
-    if not Packages then return nil end
+local function getServiceRemote(serviceName, remoteName, isRF)
+    local packages = RS:FindFirstChild("Packages")
+    if not packages then return nil end
+    local index = packages:FindFirstChild("_Index")
+    if not index then return nil end
     
-    local IndexFolder = Packages:WaitForChild("_Index", 10)
-    if not IndexFolder then return nil end
-    
-    for _, child in ipairs(IndexFolder:GetChildren()) do
-        if child.Name:find("sleitnick_knit") then
-            local knit = child:FindFirstChild("knit")
-            if knit and knit:FindFirstChild("Services") then
-                return knit.Services
+    for _, folder in ipairs(index:GetChildren()) do
+        if folder.Name:find("sleitnick_knit") then
+            local services = folder:FindFirstChild("knit") and folder.knit:FindFirstChild("Services")
+            if services then
+                local svc = services:FindFirstChild(serviceName)
+                if svc then
+                    local folderName = isRF and "RF" or "RE"
+                    local targetFolder = svc:FindFirstChild(folderName)
+                    if targetFolder then
+                        return targetFolder:FindFirstChild(remoteName)
+                    end
+                end
             end
         end
     end
     return nil
 end
 
-local KnitPath = GetKnitServices()
+local RE_ExecuteSkill        = getServiceRemote("SkillManagerV2", "ExecuteSkill", false)
+local RE_ExecuteSkillSpecial = getServiceRemote("SkillManagerV2", "ExecuteSkill_Special", false)
+local RE_LockedOnChanged     = getServiceRemote("SkillManager", "LockedOnChanged", false)
+local RE_Prompt              = getServiceRemote("PromptService", "Prompt", false)
+local RF_RequestRebirth      = getServiceRemote("PlayerLevelService", "RequestRebirth", true)
+local RE_Toolbar             = getServiceRemote("ToolService", "UpdatePlayerToolbarSelection", false)
+local RE_SuperFlight         = getServiceRemote("FlightService", "SuperFlight", false)
+local RE_SelectMode          = getServiceRemote("ModeTransformService", "SelectMode", false)
 
--- Declaração com fallback seguro (evita que a variável seja nil)
-local SkillMgrV2        = KnitPath and KnitPath:FindFirstChild("SkillManagerV2") and KnitPath.SkillManagerV2:FindFirstChild("RE")
-local SkillMgr          = KnitPath and KnitPath:FindFirstChild("SkillManager") and KnitPath.SkillManager:FindFirstChild("RE")
-local PromptSVC         = KnitPath and KnitPath:FindFirstChild("PromptService") and KnitPath.PromptService:FindFirstChild("RE")
-local PlayerLevelSVC    = KnitPath and KnitPath:FindFirstChild("PlayerLevelService") and KnitPath.PlayerLevelService:FindFirstChild("RF")
-local ToolSVC           = KnitPath and KnitPath:FindFirstChild("ToolService") and KnitPath.ToolService:FindFirstChild("RE")
-local FlightSVC         = KnitPath and KnitPath:FindFirstChild("FlightService") and KnitPath.FlightService:FindFirstChild("RE")
-local ModeTransform     = KnitPath and KnitPath:FindFirstChild("ModeTransformService") and KnitPath.ModeTransformService:FindFirstChild("RE")
-
-local SkillRemote       = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
-
--- Funções auxiliares para disparar remotes sem dar crash no script
-local function SafeFireServer(remote, ...)
-    if remote and typeof(remote) == "Instance" and remote:IsA("RemoteEvent") then
-        remote:FireServer(...)
-    else
-        warn("[DragonHub] Tentativa de disparar RemoteEvent nulo ou inválido.")
-    end
-end
-
-local function SafeInvokeServer(remote, ...)
-    if remote and typeof(remote) == "Instance" and remote:IsA("RemoteFunction") then
-        return remote:InvokeServer(...)
-    else
-        warn("[DragonHub] Tentativa de invocar RemoteFunction nula ou inválida.")
-        return nil
-    end
-end
+local SkillRemote = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
 -- ═══════════════════════════════════════════════
--- CONFIG (flat)
+-- CONFIGURAÇÕES GLOBAIS
 -- ═══════════════════════════════════════════════
 local Config = {
     -- Farm
@@ -81,7 +66,7 @@ local Config = {
     M1_Delay        = 0.35,
     Skill_Delay     = 1.2,
     Skill_Slot      = 1,
-    MobAlvo         = nil,       -- filtro por nome (nil = todos)
+    MobAlvo         = nil,
 
     -- Tour
     AutoTour        = false,
@@ -141,7 +126,7 @@ local hitboxOriginal = nil
 local ultimaSpecial = nil
 
 -- ═══════════════════════════════════════════════
--- BLOCO 1: CONSOLE LITE (com restauração segura)
+-- BLOCO 1: CONSOLE LITE
 -- ═══════════════════════════════════════════════
 local ConsoleCfg = {
     Ativo = true,
@@ -192,43 +177,45 @@ local function consoleAdd(tipo, msg)
     end
 end
 
--- Hook protegido (pcall interno + referência salva)
-_nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
-    pcall(function()
-        if not ConsoleCfg.Ativo then return end
-        local m = getnamecallmethod()
-        if m == "FireServer" or m == "Fire" or m == "InvokeServer" then
-            local okp, path = pcall(game.GetFullName, self)
-            if okp and deveCapturar(path) then
-                local args = {}
-                for i = 1, math.min(select("#", ...), 5) do
-                    local v = select(i, ...)
-                    local t = typeof(v)
-                    if t == "Instance" then
-                        local ok2, fn = pcall(game.GetFullName, v)
-                        table.insert(args, ok2 and fn or tostring(v))
-                    elseif t == "Vector3" then
-                        table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
-                    elseif t == "table" then
-                        local sub = {}
-                        for k, vv in pairs(v) do
-                            table.insert(sub, tostring(k).."="..tostring(vv))
+-- Tentativa segura de registrar chamadas
+if hookmetamethod then
+    _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
+        pcall(function()
+            if not ConsoleCfg.Ativo then return end
+            local m = getnamecallmethod()
+            if m == "FireServer" or m == "Fire" or m == "InvokeServer" then
+                local okp, path = pcall(game.GetFullName, self)
+                if okp and deveCapturar(path) then
+                    local args = {}
+                    for i = 1, math.min(select("#", ...), 5) do
+                        local v = select(i, ...)
+                        local t = typeof(v)
+                        if t == "Instance" then
+                            local ok2, fn = pcall(game.GetFullName, v)
+                            table.insert(args, ok2 and fn or tostring(v))
+                        elseif t == "Vector3" then
+                            table.insert(args, string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z))
+                        elseif t == "table" then
+                            local sub = {}
+                            for k, vv in pairs(v) do
+                                table.insert(sub, tostring(k).."="..tostring(vv))
+                            end
+                            table.insert(args, "{"..table.concat(sub, ",").."}")
+                        else
+                            table.insert(args, tostring(v))
                         end
-                        table.insert(args, "{"..table.concat(sub, ",").."}")
-                    else
-                        table.insert(args, tostring(v))
                     end
+                    consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(args, " | "))
                 end
-                consoleAdd("REMOTE", path:gsub("ReplicatedStorage%.", "").." | "..table.concat(args, " | "))
             end
-        end
+        end)
+        return _nomecallOriginal(self, ...)
     end)
-    return _nomecallOriginal(self, ...)
-end)
-_hookAtivo = true
+    _hookAtivo = true
+end
 
-function _restaurarHook()
-    if _hookAtivo and _nomecallOriginal then
+local function _restaurarHook()
+    if _hookAtivo and _nomecallOriginal and hookmetamethod then
         pcall(function()
             hookmetamethod(game, "__namecall", _nomecallOriginal)
         end)
@@ -251,7 +238,7 @@ task.spawn(function()
                     or nome:find("esfera") then
                         local pos = obj:IsA("BasePart") and obj.Position
                             or (obj.PrimaryPart and obj.PrimaryPart.Position)
-                        if pos then
+                        if pos and obj.Parent then
                             consoleAdd("DROP",
                                 obj.Name .. " | Pai: "..obj.Parent.Name ..
                                 " | " .. string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
@@ -263,12 +250,12 @@ task.spawn(function()
     end
 end)
 
--- Auto-save
+-- Auto-save de logs
 task.spawn(function()
     while Ativo do
         task.wait(5)
         if ConsoleCfg.Ativo and (os.clock() - ConsoleUltimoSalvar) >= ConsoleCfg.IntervaloSalvar then
-            if #ConsoleBuf > 0 then
+            if #ConsoleBuf > 0 and writefile then
                 local nome = "DBH_console_" .. ConsoleInicio .. ".txt"
                 local conteudo = table.concat(ConsoleBuf, "\n")
                 pcall(function() writefile(nome, conteudo) end)
@@ -322,7 +309,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- HITBOX DOS MOBS (gigante local)
+-- HITBOX DOS MOBS
 -- ═══════════════════════════════════════════════
 local function aplicarHitboxMobs()
     if not Config.HitboxGigante then return end
@@ -349,7 +336,7 @@ local function aplicarHitboxMobs()
 end
 
 -- ═══════════════════════════════════════════════
--- ÍMÃ DE MOB (hitbox do player)
+-- HITBOX DO PLAYER
 -- ═══════════════════════════════════════════════
 local function aplicarHitboxPlayer()
     local char = plr.Character
@@ -550,10 +537,10 @@ local function godmodePosicional(mob)
 end
 
 -- ═══════════════════════════════════════════════
--- M1 (SkillId=2)
+-- M1 ATTACK
 -- ═══════════════════════════════════════════════
 local function m1(alvo)
-    if not podeAtacar() then return end
+    if not podeAtacar() or not SkillRemote then return end
     
     local char = plr.Character
     if not char then return end
@@ -599,11 +586,11 @@ end
 
 local function usarSkill(skillId, slot, targetPos, mobModel)
     local char = plr.Character
-    if not char then return end
+    if not char or not RE_ExecuteSkill then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    if skillId ~= ultimaSpecial then
+    if skillId ~= ultimaSpecial and RE_ExecuteSkillSpecial then
         pcall(function() RE_ExecuteSkillSpecial:FireServer(char, skillId) end)
         ultimaSpecial = skillId
         task.wait(0.08)
@@ -620,8 +607,8 @@ local function usarSkill(skillId, slot, targetPos, mobModel)
                 or nil
             if anim then
                 params = {
-                    HoldAnimation = folder["Hold_" .. anim],
-                    ReleaseAnimation = folder["Release_" .. anim],
+                    HoldAnimation = folder:FindFirstChild("Hold_" .. anim),
+                    ReleaseAnimation = folder:FindFirstChild("Release_" .. anim),
                     HumCFrame = hrp.CFrame,
                     ResumeOnTimePassed = (anim == "Kamehameha") and 3 or 0.1,
                     targetPos = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
@@ -663,7 +650,9 @@ local function pararLock()
 end
 
 local function lockOn(mobModel)
-    pcall(function() RE_LockedOnChanged:FireServer(mobModel) end)
+    if RE_LockedOnChanged then
+        pcall(function() RE_LockedOnChanged:FireServer(mobModel) end)
+    end
     pararLock()
     if not mobModel or not mobModel:FindFirstChild("HumanoidRootPart") then return end
     LockAlvo = mobModel
@@ -679,7 +668,7 @@ local function lockOn(mobModel)
 end
 
 -- ═══════════════════════════════════════════════
--- KI CHARGE (tecla C)
+-- KI CHARGE
 -- ═══════════════════════════════════════════════
 local function getKiAtual()
     local char = plr.Character
@@ -709,7 +698,7 @@ local function recarregarKi()
     end
 
     local inicio = os.clock()
-    VIM:SendKeyEvent(true, Enum.KeyCode.C, false, game)
+    pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.C, false, game) end)
 
     while KiCfg.Recarregando and Ativo do
         local cur, max = getKiAtual()
@@ -719,7 +708,7 @@ local function recarregarKi()
         task.wait(0.15)
     end
 
-    VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
     KiCfg.Recarregando = false
     task.wait(0.3)
 end
@@ -849,26 +838,30 @@ local function checarRebirth()
 end
 
 local function fazerRebirth()
-    pcall(function()
-        RE_Prompt:FireServer({
-            UniqueTag = "HudRebirth", Title = "Rebirth",
-            LeftButton = "Details", MiddleButton = "Confirm",
-            Prompt = "HudRebirth", RightButton = "Cancel",
-            Description = "Confirm Rebirth?",
-        }, "Confirm")
-    end)
+    if RE_Prompt then
+        pcall(function()
+            RE_Prompt:FireServer({
+                UniqueTag = "HudRebirth", Title = "Rebirth",
+                LeftButton = "Details", MiddleButton = "Confirm",
+                Prompt = "HudRebirth", RightButton = "Cancel",
+                Description = "Confirm Rebirth?",
+            }, "Confirm")
+        end)
+    end
     task.wait(0.3)
-    pcall(function()
-        RF_RequestRebirth:InvokeServer(true)
-    end)
+    if RF_RequestRebirth then
+        pcall(function()
+            RF_RequestRebirth:InvokeServer(true)
+        end)
+    end
 end
 
 -- ═══════════════════════════════════════════════
 -- COLLECT
 -- ═══════════════════════════════════════════════
-local OnEventEffect = KnitPath.PeriodicEventService and KnitPath.PeriodicEventService.RE.onEventEffect
-local ItemSpawned  = KnitPath.ItemDropService and KnitPath.ItemDropService.RE.ItemSpawned
-local ClaimItem    = KnitPath.ItemDropService and KnitPath.ItemDropService.RF.ClaimItem
+local OnEventEffect = getServiceRemote("PeriodicEventService", "onEventEffect", false)
+local ItemSpawned  = getServiceRemote("ItemDropService", "ItemSpawned", false)
+local ClaimItem    = getServiceRemote("ItemDropService", "ClaimItem", true)
 
 task.spawn(function()
     task.wait(3)
@@ -1016,7 +1009,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
--- UI LIBRARY (Rayfield AMOLED)
+-- UI LIBRARY
 -- ═══════════════════════════════════════════════
 local UI = {}
 UI.Theme = {
@@ -1380,7 +1373,6 @@ local function _soltarTeclas()
         VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
         VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
     end)
-    -- Solta qualquer clique preso no centro
     pcall(function()
         local cam = workspace.CurrentCamera
         if cam then
@@ -1403,16 +1395,11 @@ local function matarTudo()
     Config.HitboxPlayer = false; Config.HitboxGigante = false
     Config.AutoBoss = false
 
-    -- Restaura hook do console (libera HUD do jogo)
     if _restaurarHook then _restaurarHook() end
-
-    -- Solta teclas/cliques presos
     _soltarTeclas()
 
-    -- Para lock-on ativo
     if pararLock then pcall(pararLock) end
 
-    -- Mata corpos físicos
     local char = plr.Character
     if char then
         local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -1427,7 +1414,6 @@ local function matarTudo()
         end
     end
 
-    -- Remove GUIs
     if gui then gui:Destroy() end
     if espGui then espGui:Destroy() end
 
@@ -1440,6 +1426,11 @@ end
 local win = UI.newWindow()
 mainFrame = win.frame
 
+-- DECLARAÇÃO PRÉVIA DAS VARIÁVEIS DE DROPDOWN PARA EVITAR NIL REFERENCING
+local mobDropdown = nil
+local areaDropdown = nil
+local questDropdown = nil
+
 local farmTab      = UI.newTab(win, "⚔", "Farm")
 local tourTab      = UI.newTab(win, "🗺", "Tour")
 local rebirthTab   = UI.newTab(win, "🔄", "Rebirth")
@@ -1447,9 +1438,7 @@ local questTab     = UI.newTab(win, "📜", "Quest")
 local collectTab   = UI.newTab(win, "💎", "Collect")
 local transformTab = UI.newTab(win, "🌀", "Transform")
 
--- ═══════════════════════════════════════════════
--- BLOCO 4: ABA CONSOLE
--- ═══════════════════════════════════════════════
+-- CONSOLE TAB
 local consoleTab   = UI.newTab(win, "🖥", "Console")
 
 UI.section(consoleTab, "🖥   CONSOLE LITE")
@@ -1467,11 +1456,11 @@ UI.button(consoleTab, {name = "💾 Salvar Agora", callback = function()
     if #ConsoleBuf > 0 then
         local nome = "DBH_manual_" .. os.time() .. ".txt"
         local conteudo = table.concat(ConsoleBuf, "\n")
-        local ok = pcall(function() writefile(nome, conteudo) end)
-        if ok then
+        if writefile then
+            pcall(function() writefile(nome, conteudo) end)
             print("[CONSOLE] Salvo: " .. nome)
-        else
-            pcall(function() if setclipboard then setclipboard(conteudo) end end)
+        elseif setclipboard then
+            setclipboard(conteudo)
             print("[CONSOLE] Copiado pro clipboard")
         end
     end
@@ -1518,7 +1507,6 @@ UI.toggle(farmTab, {name = "Auto Lock-On", default = true, callback = function(v
 UI.toggle(farmTab, {name = "Mostrar ESP", default = false, callback = function(v) Config.ShowESP = v end})
 
 UI.section(farmTab, "🎯   MOB ALVO")
-local mobDropdown
 mobDropdown = UI.dropdown(farmTab, {
     name = "Filtrar Mob",
     options = function() return listarMobsUnicos() end,
@@ -1528,7 +1516,7 @@ mobDropdown = UI.dropdown(farmTab, {
     end
 })
 UI.button(farmTab, {name = "🔄 Atualizar Lista de Mobs", callback = function()
-    mobDropdown.set("(todos)")
+    if mobDropdown then mobDropdown.set("(todos)") end
     Config.MobAlvo = nil
 end})
 
@@ -1550,7 +1538,6 @@ UI.slider(tourTab, {name = "Espera por Área", min = 1, max = 15, default = 3, s
 
 UI.section(tourTab, "📍   ÁREAS")
 UI.button(tourTab, {name = "🔄 Re-escaneiar Áreas", callback = function() descobrirAreas() end})
-local areaDropdown
 areaDropdown = UI.dropdown(tourTab, {
     name = "Ir para Área",
     options = function()
@@ -1589,7 +1576,6 @@ local infoRebirth = UI.label(rebirthTab, {text = "Rebirth: --\nStats: --\nAlvo: 
 
 -- ═══ QUEST ═══
 UI.section(questTab, "📜   QUEST")
-local questDropdown
 questDropdown = UI.dropdown(questTab, {
     name = "Quest",
     options = function()
@@ -1654,9 +1640,11 @@ UI.slider(miscTab, {name = "WalkSpeed", min = 16, max = 200, default = 16, callb
 
 UI.section(miscTab, "🌌   VOO NATIVO")
 UI.button(miscTab, {name = "Ativar Voo Nativo (5s)", callback = function()
-    pcall(function() RE_SuperFlight:FireServer(true) end)
-    task.wait(5)
-    pcall(function() RE_SuperFlight:FireServer(false) end)
+    if RE_SuperFlight then
+        pcall(function() RE_SuperFlight:FireServer(true) end)
+        task.wait(5)
+        pcall(function() RE_SuperFlight:FireServer(false) end)
+    end
 end})
 
 -- ═══ CONFIG ═══
@@ -1687,10 +1675,10 @@ UI.section(sobreTab, "🖥   SERVIDOR")
 local infoServidor = UI.label(sobreTab, {text = "Carregando...", height = 120})
 
 -- ═══════════════════════════════════════════════
--- LOOPS FINAIS
+-- LOOPS PRINCIPAIS DE FUNCIONAMENTO
 -- ═══════════════════════════════════════════════
 
--- Combate principal
+-- Combate
 task.spawn(function()
     local ultimoM1 = 0
     local ultimoSkill = 0
@@ -1847,7 +1835,7 @@ task.spawn(function()
     end
 end)
 
--- Stats + Rebirth info
+-- Display & Stats Tracker
 task.spawn(function()
     while Ativo do
         local char = plr.Character
@@ -1884,12 +1872,15 @@ task.spawn(function()
         end
 
         local jobId = game.JobId ~= "" and game.JobId:sub(1, 8) .. "..." or "Privado"
+        local ping = 0
+        pcall(function() ping = math.floor(plr:GetNetworkPing() * 1000) end)
+
         infoServidor.Text = "Hora: " .. os.date("%H:%M:%S") ..
             "\nServidor: " .. jobId ..
             "\nJogadores: " .. #Players:GetPlayers() ..
-            "\nPing: " .. math.floor(plr:GetNetworkPing() * 1000) .. " ms"
+            "\nPing: " .. ping .. " ms"
         task.wait(2)
     end
 end)
 
-print("[DBH] ✅ Dragon Blox Hub v6 atualizado com restauração de HUD!")
+print("[DBH] ✅ Dragon Blox Hub v6 corrigido e carregado com sucesso!")
