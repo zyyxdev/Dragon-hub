@@ -1,11 +1,11 @@
 -- ════════════════════════════════════════════════════════════════
---           DRAGON BLOX — DUMPER FINAL (v2.0 - DEDUP)
+--           DRAGON BLOX — DUMPER FINAL v3 (UNIFICADO)
 -- ════════════════════════════════════════════════════════════════
 -- Captura arquitetural + tráfego + workspace em 1 script.
--- Otimizado: rate-limit, batch de logs, sem hook duplo, dedup.
+-- v3: dedup por hash, scan 1s, filtro Toolbar, scan global.
 -- ════════════════════════════════════════════════════════════════
 
-print("[DUMPER] Iniciando...")
+print("[DUMPER v3] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -14,7 +14,6 @@ local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
 local plr = Players.LocalPlayer
 
--- Parent seguro
 local targetParent
 if gethui then
     targetParent = gethui()
@@ -33,31 +32,29 @@ local State = {
     capturando = false,
     hookAtivo = false,
     scanning = false,
-
-    -- Buffers
-    logBuf = {},         -- buffer de logs pra flush em batch
-    trfBuf = {},         -- tráfego capturado
-    arquitetural = {},   -- paths arquiteturais
-    workspaceScan = {},  -- items/bosses vistos
-
-    -- Filtros
+    
+    logBuf = {},
+    trfBuf = {},
+    arquitetural = {},
+    unicos = {},        -- [hash] = entry
+    
     filtros = {
         skills = true,
         drops = true,
         bossEvent = true,
         swordOrb = true,
-        toolbar = true,      -- novo filtro toolbar ativado por padrão
-        ruido = false,       -- se true, loga TUDO
+        toolbar = true,
+        ruido = false,
     },
 }
 
 local _nomecallOriginal = nil
 local ultimoPath = {}
-local RATE_LIMIT = 0.1  -- 10 logs/s por path no máximo
-local MAX_TRF = 2000
+local RATE_LIMIT = 0.1
+local MAX_UNICOS = 3000
 
 -- ═══════════════════════════════════════════════
--- FILTRO DE RUÍDO (nunca loga)
+-- FILTRO DE RUÍDO
 -- ═══════════════════════════════════════════════
 local RUIDO_KEYWORDS = {
     "Ping", "DataChanged", "PlayAnimation", "PlayEffect",
@@ -75,17 +72,19 @@ local function ehRuido(path)
 end
 
 -- ═══════════════════════════════════════════════
--- CLASSIFICADOR DE LOG (cor por tipo)
+-- CLASSIFICADOR
 -- ═══════════════════════════════════════════════
 local function classificar(path)
+    if path:find("UpdatePlayerToolbar") or path:find("ToolService") then return "TOOLBAR" end
     if path:find("SkillRemote") then return "M1" end
     if path:find("ExecuteSkill") then return "SKILL" end
-    if path:find("ItemSpawned") or path:find("ClaimItem") or path:find("WishService") then return "DROP" end
-    if path:find("Boss") or path:find("Zaja") or path:find("Destroyer") or path:find("Event") then return "BOSS" end
+    if path:find("ItemSpawned") or path:find("ClaimItem") 
+    or path:find("WishService") or path:find("ItemDropService") then return "DROP" end
+    if path:find("Boss") or path:find("Zaja") or path:find("Destroyer") then return "BOSS" end
     if path:find("Weapon") or path:find("Orb") then return "SWORD_ORB" end
     if path:find("Rebirth") or path:find("Prompt") then return "REBIRTH" end
     if path:find("LockedOn") then return "LOCK" end
-    if path:find("ToolService") or path:find("UpdatePlayerToolbar") then return "TOOLBAR" end
+    if path:find("Event") then return "EVENT" end
     return "OTHER"
 end
 
@@ -97,7 +96,8 @@ local CORES = {
     SWORD_ORB = "FFE45C",
     REBIRTH = "FF9642",
     LOCK = "8AFF8A",
-    TOOLBAR = "FFD700",
+    TOOLBAR = "FF9AC6",
+    EVENT = "9A9AA0",
     OTHER = "9A9AA0",
     ERROR = "FF5C5C",
     INFO = "74B8FF",
@@ -124,7 +124,7 @@ local function ser(v, d)
         local p, n = {}, 0
         for k, vv in pairs(v) do
             n = n + 1
-            if n > 10 then p[#p+1] = "..." break end
+            if n > 8 then p[#p+1] = "..." break end
             p[#p+1] = tostring(k).."="..ser(vv, d+1)
         end
         return "{"..table.concat(p,",").."}"
@@ -134,49 +134,46 @@ local function ser(v, d)
 end
 
 -- ═══════════════════════════════════════════════
--- LOG BUFFER (com batching pra evitar lag)
+-- BUFFERS
 -- ═══════════════════════════════════════════════
 local function addLog(cat, msg)
     table.insert(State.logBuf, {
-        cat = cat,
-        msg = msg,
-        hora = os.date("%H:%M:%S"),
-        t = os.clock(),
+        cat = cat, msg = msg,
+        hora = os.date("%H:%M:%S"), t = os.clock(),
     })
     if #State.logBuf > 500 then
         table.remove(State.logBuf, 1)
     end
 end
 
--- ═══════════════════════════════════════════════
--- DEDUP (evita repetir o mesmo evento)
--- ═══════════════════════════════════════════════
-local vistos = {}
-
+-- DEDUP: mesma chave só conta uma vez
 local function addTrafego(cat, path, args)
+    -- Ignora "Event" sem args (ruído puro)
+    if cat == "EVENT" and (args == "" or args == nil) then return end
+    
     local chave = cat.."|"..path.."|"..args
     
-    -- Se já viu, incrementa contador e atualiza timestamp
-    if vistos[chave] then
-        vistos[chave].count = vistos[chave].count + 1
-        vistos[chave].ultimo = os.date("%H:%M:%S")
+    if State.unicos[chave] then
+        State.unicos[chave].count = State.unicos[chave].count + 1
+        State.unicos[chave].ultimo = os.date("%H:%M:%S")
         return
     end
     
-    -- Primeira vez: registra
     local entry = {
-        cat = cat,
-        path = path,
-        args = args,
+        cat = cat, path = path, args = args,
         count = 1,
         primeiro = os.date("%H:%M:%S"),
         ultimo = os.date("%H:%M:%S"),
     }
-    vistos[chave] = entry
+    State.unicos[chave] = entry
     table.insert(State.trfBuf, entry)
     
-    if #State.trfBuf > MAX_TRF then
-        table.remove(State.trfBuf, 1)
+    if #State.trfBuf > MAX_UNICOS then
+        local removido = table.remove(State.trfBuf, 1)
+        -- Encontra e remove do mapa unicos
+        for k, v in pairs(State.unicos) do
+            if v == removido then State.unicos[k] = nil break end
+        end
     end
 end
 
@@ -185,29 +182,22 @@ end
 -- ═══════════════════════════════════════════════
 if hookmetamethod then
     _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
-        -- Captura args ANTES do pcall (varargs não herdam em closures)
         local n = select("#", ...)
         local capturedArgs = {...}
-
+        
         if State.capturando then
             pcall(function()
                 local m = getnamecallmethod()
-                if m ~= "FireServer" and m ~= "Fire" and m ~= "InvokeServer" then
-                    return
-                end
-
+                if m ~= "FireServer" and m ~= "Fire" and m ~= "InvokeServer" then return end
+                
                 local okp, path = pcall(game.GetFullName, self)
                 if not okp then return end
                 if ehRuido(path) then return end
-
-                -- Rate limit
+                
                 local agora = os.clock()
-                if ultimoPath[path] and (agora - ultimoPath[path]) < RATE_LIMIT then
-                    return
-                end
+                if ultimoPath[path] and (agora - ultimoPath[path]) < RATE_LIMIT then return end
                 ultimoPath[path] = agora
-
-                -- Classifica e checa filtro
+                
                 local cat = classificar(path)
                 local aceito = false
                 if cat == "M1" and State.filtros.skills then aceito = true end
@@ -215,14 +205,14 @@ if hookmetamethod then
                 if cat == "DROP" and State.filtros.drops then aceito = true end
                 if cat == "BOSS" and State.filtros.bossEvent then aceito = true end
                 if cat == "SWORD_ORB" and State.filtros.swordOrb then aceito = true end
+                if cat == "TOOLBAR" and State.filtros.toolbar then aceito = true end
                 if cat == "REBIRTH" then aceito = true end
                 if cat == "LOCK" and State.filtros.skills then aceito = true end
-                if cat == "TOOLBAR" and State.filtros.toolbar then aceito = true end
+                if cat == "EVENT" then aceito = true end
                 if State.filtros.ruido then aceito = true end
-
+                
                 if not aceito then return end
-
-                -- Serializa args
+                
                 local parts = {}
                 for i = 1, math.min(n, 8) do
                     parts[#parts+1] = ser(capturedArgs[i])
@@ -231,54 +221,61 @@ if hookmetamethod then
                 addTrafego(cat, linha, table.concat(parts, " | "))
             end)
         end
-
+        
         return _nomecallOriginal(self, ...)
     end)
     State.hookAtivo = true
-    print("[DUMPER] Hook __namecall ativado")
+    print("[DUMPER v3] Hook ativado")
 end
 
 -- ═══════════════════════════════════════════════
--- SCANNER DE WORKSPACE (drops + boss event)
+-- SCANNER DE WORKSPACE (1s, global)
 -- ═══════════════════════════════════════════════
 task.spawn(function()
     local conhecidos = {}
     while true do
-        task.wait(1)
-
+        task.wait(1)  -- era 5s, agora 1s
+        
         if State.capturando then
-            -- 1) Drops no chão
-            for _, obj in ipairs(WS:GetDescendants()) do
-                if (obj:IsA("BasePart") or obj:IsA("Model")) and not conhecidos[obj] then
+            -- Varre TUDO (não só Workspace) por objetos novos
+            for _, obj in ipairs(game:GetDescendants()) do
+                if (obj:IsA("BasePart") or obj:IsA("Model") or obj:IsA("MeshPart")) 
+                and not conhecidos[obj] then
                     conhecidos[obj] = true
+                    
                     local nome = obj.Name
+                    local nomeLower = nome:lower()
                     local parentNome = obj.Parent and obj.Parent.Name or ""
-                    local parentPai = obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Name or ""
-
-                    -- Filtra só coisas relevantes
-                    local ehDropReal = 
+                    local gpNome = obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Name or ""
+                    
+                    -- 1) ITEM / ESFERA / DROP
+                    local ehItem = 
                         parentNome == "PartStorage"
                         or parentNome == "ShootingStar"
                         or parentNome:find("ItemDrop")
                         or parentNome == "Pad"
-                        or parentPai == "PartStorage"
-                        or parentPai == "ShootingStar"
-                        or nome:find("Orb")
-                        or nome:find("Star")
-                        or nome:find("DragonBall")
-                        or nome:find("Meteor")
-
-                    if ehDropReal and State.filtros.drops then
+                        or gpNome == "PartStorage"
+                        or gpNome == "ShootingStar"
+                        or nomeLower:find("orb")
+                        or nomeLower:find("sphere")
+                        or nomeLower:find("star")
+                        or nomeLower:find("dragonball")
+                        or nomeLower:find("wish")
+                        or nomeLower:find("meteor")
+                        or nomeLower:find("esfera")
+                        or nomeLower:find("drop")
+                        or nomeLower:find("item")
+                    
+                    if ehItem and State.filtros.drops then
                         local pos = obj:IsA("BasePart") and obj.Position
                             or (obj.PrimaryPart and obj.PrimaryPart.Position)
                         if pos then
                             addLog("DROP", string.format("%s | Pai: %s | V3(%.0f,%.0f,%.0f)",
-                                nome, parentNome, pos.X, pos.Y, pos.Z))
+                                obj:GetFullName(), parentNome, pos.X, pos.Y, pos.Z))
                         end
                     end
-
-                    -- 2) Boss de evento
-                    local nomeLower = nome:lower()
+                    
+                    -- 2) BOSS (event + normal)
                     if (nomeLower:find("zaja") or nomeLower:find("destroyer")
                         or nomeLower:find("eventboss") or nomeLower:find("raidboss"))
                         and State.filtros.bossEvent then
@@ -300,23 +297,23 @@ local function scanArquitetural()
     if State.scanning then return end
     State.scanning = true
     State.arquitetural = {}
-
+    
     addLog("INFO", "Iniciando scan arquitetural...")
-
+    
     task.spawn(function()
         local t0 = os.clock()
         local total = 0
-
+        
         local function varrer(inst, path, depth)
             if depth > 8 or not inst then return end
             local ok, children = pcall(function() return inst:GetChildren() end)
             if not ok then return end
-
+            
             for _, child in ipairs(children) do
                 local cls = child.ClassName
                 local nome = child.Name
                 local childPath = path.."."..nome
-
+                
                 if cls ~= "Folder" then
                     if cls == "RemoteEvent" or cls == "RemoteFunction"
                     or cls == "UnreliableRemoteEvent"
@@ -326,16 +323,16 @@ local function scanArquitetural()
                         total = total + 1
                     end
                 end
-
+                
                 if cls == "Folder" or cls == "Model" then
                     varrer(child, childPath, depth + 1)
                 end
             end
         end
-
+        
         pcall(function() varrer(RS, "RS", 0) end)
         pcall(function() varrer(WS, "WS", 0) end)
-
+        
         local dur = os.clock() - t0
         addLog("SUCCESS", string.format("Scan: %.2fs — %d itens", dur, total))
         State.scanning = false
@@ -348,24 +345,25 @@ end
 local function salvarArquivo()
     local L = {}
     table.insert(L, "═══════════════════════════════════════")
-    table.insert(L, "  DUMP FINAL — Sessão: "..State.sessao)
+    table.insert(L, "  DUMP v3 — Sessão: "..State.sessao)
     table.insert(L, "═══════════════════════════════════════")
     table.insert(L, "Player: "..plr.Name)
     table.insert(L, "PlaceId: "..game.PlaceId)
     table.insert(L, "Data: "..os.date("%Y-%m-%d %H:%M:%S"))
-    table.insert(L, "Total tráfego: "..#State.trfBuf)
+    table.insert(L, "Total único: "..#State.trfBuf)
     table.insert(L, "Total arquitetural: "..#State.arquitetural)
     table.insert(L, "")
-
-    -- Agrupa tráfego por categoria
+    
+    -- Agrupa por categoria
     local porCat = {}
     for _, t in ipairs(State.trfBuf) do
         porCat[t.cat] = porCat[t.cat] or {}
         table.insert(porCat[t.cat], t)
     end
-
+    
     table.insert(L, "═══ TRÁFEGO POR CATEGORIA ═══")
-    for _, cat in ipairs({"M1", "SKILL", "DROP", "BOSS", "SWORD_ORB", "REBIRTH", "LOCK", "TOOLBAR", "OTHER"}) do
+    for _, cat in ipairs({"M1", "SKILL", "DROP", "BOSS", "SWORD_ORB", 
+                          "TOOLBAR", "REBIRTH", "LOCK", "EVENT", "OTHER"}) do
         if porCat[cat] then
             table.insert(L, "")
             table.insert(L, "### "..cat.." ("..#porCat[cat]..")")
@@ -380,16 +378,16 @@ local function salvarArquivo()
             end
         end
     end
-
+    
     table.insert(L, "")
     table.insert(L, "═══ ARQUITETURAL ═══")
     for _, linha in ipairs(State.arquitetural) do
         table.insert(L, linha)
     end
-
+    
     local conteudo = table.concat(L, "\n")
     local nome = "Dump_"..State.sessao.."_"..os.time()..".txt"
-
+    
     local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
     if ok then
         return "Salvo: "..nome.." ("..#conteudo.." bytes)"
@@ -427,7 +425,7 @@ local T = {
 }
 
 local main = Instance.new("Frame", gui)
-main.Size = UDim2.new(0, 480, 0, 520)
+main.Size = UDim2.new(0, 480, 0, 540)
 main.Position = UDim2.new(0, 20, 0, 60)
 main.BackgroundColor3 = T.bg
 main.BackgroundTransparency = 0.1
@@ -447,13 +445,12 @@ local titulo = Instance.new("TextLabel", header)
 titulo.Size = UDim2.new(1, -100, 1, 0)
 titulo.Position = UDim2.new(0, 14, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "  🐉  DRAGON DUMPER"
+titulo.Text = "  🐉  DUMPER v3"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 13
 titulo.TextXAlignment = Enum.TextXAlignment.Left
 
--- Botões header
 local btnMin = Instance.new("TextButton", header)
 btnMin.Size = UDim2.new(0, 24, 0, 24)
 btnMin.Position = UDim2.new(1, -60, 0.5, -12)
@@ -533,13 +530,14 @@ end)
 
 mkActionBtn(354, 114, Color3.fromRGB(120, 60, 180), "🗑 LIMPAR", function()
     State.trfBuf = {}
+    State.unicos = {}
     State.logBuf = {}
     addLog("INFO", "Buffers limpos")
 end)
 
 -- Filtros
 local filtroFrame = Instance.new("Frame", main)
-filtroFrame.Size = UDim2.new(1, -24, 0, 30)
+filtroFrame.Size = UDim2.new(1, -24, 0, 56)
 filtroFrame.Position = UDim2.new(0, 12, 0, 132)
 filtroFrame.BackgroundColor3 = T.panel
 filtroFrame.BorderSizePixel = 0
@@ -548,14 +546,15 @@ Instance.new("UICorner", filtroFrame).CornerRadius = UDim.new(0, 6)
 local filtrosUI = Instance.new("UIListLayout", filtroFrame)
 filtrosUI.FillDirection = Enum.FillDirection.Horizontal
 filtrosUI.Padding = UDim.new(0, 4)
+filtrosUI.Wraps = true
 local fpad = Instance.new("UIPadding", filtroFrame)
 fpad.PaddingLeft = UDim.new(0, 6)
-fpad.PaddingTop = UDim.new(0, 3)
+fpad.PaddingTop = UDim.new(0, 4)
 
-local function mkFiltro(nome, key)
+local function mkFiltro(nome, key, cor)
     local b = Instance.new("TextButton", filtroFrame)
-    b.Size = UDim2.new(0, 58, 0, 24) -- Diminuido levemente a width para caber mais botoes
-    b.BackgroundColor3 = State.filtros[key] and T.success or T.elev
+    b.Size = UDim2.new(0, 68, 0, 24)
+    b.BackgroundColor3 = State.filtros[key] and (cor or T.success) or T.elev
     b.Text = nome
     b.TextColor3 = Color3.new(1,1,1)
     b.Font = Enum.Font.GothamBold
@@ -564,21 +563,21 @@ local function mkFiltro(nome, key)
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
     b.MouseButton1Click:Connect(function()
         State.filtros[key] = not State.filtros[key]
-        b.BackgroundColor3 = State.filtros[key] and T.success or T.elev
+        b.BackgroundColor3 = State.filtros[key] and (cor or T.success) or T.elev
     end)
 end
 
-mkFiltro("Skills", "skills")
-mkFiltro("Drops", "drops")
-mkFiltro("Boss", "bossEvent")
-mkFiltro("Sword/Orb", "swordOrb")
-mkFiltro("Toolbar", "toolbar") -- Novo filtro visível na UI
-mkFiltro("Ruído", "ruido")
+mkFiltro("Skills", "skills", Color3.fromRGB(120, 60, 180))
+mkFiltro("Drops", "drops", Color3.fromRGB(80, 200, 120))
+mkFiltro("Boss", "bossEvent", Color3.fromRGB(220, 60, 60))
+mkFiltro("Sword/Orb", "swordOrb", Color3.fromRGB(255, 200, 60))
+mkFiltro("Toolbar", "toolbar", Color3.fromRGB(255, 150, 200))
+mkFiltro("Ruído", "ruido", Color3.fromRGB(120, 120, 120))
 
 -- Log ao vivo
 local logFrame = Instance.new("Frame", main)
 logFrame.Size = UDim2.new(1, -24, 1, -290)
-logFrame.Position = UDim2.new(0, 12, 0, 172)
+logFrame.Position = UDim2.new(0, 12, 0, 196)
 logFrame.BackgroundColor3 = T.panel
 logFrame.BorderSizePixel = 0
 Instance.new("UICorner", logFrame).CornerRadius = UDim.new(0, 8)
@@ -605,7 +604,7 @@ logText.TextWrapped = true
 logText.RichText = true
 logText.AutomaticSize = Enum.AutomaticSize.Y
 
--- Flutuante (minimizado)
+-- Flutuante
 local flut = Instance.new("TextButton", gui)
 flut.Size = UDim2.new(0, 46, 0, 46)
 flut.Position = UDim2.new(0, 20, 0.4, 0)
@@ -621,7 +620,7 @@ flut.Draggable = true
 Instance.new("UICorner", flut).CornerRadius = UDim.new(1, 0)
 local fstk = Instance.new("UIStroke", flut) fstk.Color = T.accent fstk.Thickness = 1
 
--- Drag header
+-- Drag
 local drag, dStart, sStart = false, nil, nil
 header.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
@@ -643,35 +642,30 @@ UIS.InputEnded:Connect(function(i)
 end)
 
 btnMin.MouseButton1Click:Connect(function()
-    main.Visible = false
-    flut.Visible = true
+    main.Visible = false; flut.Visible = true
 end)
 flut.MouseButton1Click:Connect(function()
-    main.Visible = true
-    flut.Visible = false
+    main.Visible = true; flut.Visible = false
 end)
 
--- Kill switch
 btnKill.MouseButton1Click:Connect(function()
     State.capturando = false
     if _nomecallOriginal and hookmetamethod then
         pcall(function() hookmetamethod(game, "__namecall", _nomecallOriginal) end)
     end
     gui:Destroy()
-    print("[DUMPER] Encerrado e hook restaurado")
+    print("[DUMPER v3] Encerrado e hook restaurado")
 end)
 
 -- ═══════════════════════════════════════════════
 -- LOOPS
 -- ═══════════════════════════════════════════════
--- Render do log (batch a cada 0.5s)
+-- Render
 task.spawn(function()
     while gui.Parent do
         task.wait(0.5)
-
-        -- Junta logs + tráfego recente
         local linhas = {}
-
+        
         -- Últimos 30 tráfegos
         local iniT = math.max(1, #State.trfBuf - 30)
         for i = iniT, #State.trfBuf do
@@ -679,10 +673,10 @@ task.spawn(function()
             local cor = CORES[t.cat] or CORES.OTHER
             local suf = t.count > 1 and (" (x"..t.count..")") or ""
             table.insert(linhas, string.format(
-                "<font color='#888'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#AAA'>%s%s</font>",
-                t.primeiro, cor, t.cat, t.path:sub(-40), suf))
+                "<font color='#888'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#AAA'>%s</font><font color='#5FDC78'>%s</font>",
+                t.primeiro, cor, t.cat, t.path:sub(-38), suf))
         end
-
+        
         -- Últimos 20 logs
         local iniL = math.max(1, #State.logBuf - 20)
         for i = iniL, #State.logBuf do
@@ -690,28 +684,28 @@ task.spawn(function()
             local cor = CORES[l.cat] or CORES.INFO
             table.insert(linhas, string.format(
                 "<font color='#666'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#CCC'>%s</font>",
-                l.hora, cor, l.cat, l.msg))
+                l.hora, cor, l.cat, l.msg:sub(1, 70)))
         end
-
+        
         if #linhas == 0 then
             logText.Text = "<font color='#666'>Aguardando eventos...</font>"
         else
             logText.Text = table.concat(linhas, "\n")
         end
-
+        
         logScroll.CanvasSize = UDim2.new(0, 0, 0, logText.AbsoluteSize.Y + 10)
         logScroll.CanvasPosition = Vector2.new(0, math.max(0, logScroll.CanvasSize.Y.Offset))
     end
 end)
 
--- Status counter
+-- Header counter
 task.spawn(function()
     while gui.Parent do
         task.wait(1)
-        titulo.Text = string.format("  🐉  DRAGON DUMPER | %d trf | %d arq | %s",
-            #State.trfBuf, #State.arquitetural,
+        titulo.Text = string.format("  🐉  DUMPER v3 | %d únicos | %s",
+            #State.trfBuf,
             State.capturando and "🔴 REC" or "⚪")
     end
 end)
 
-print("[DUMPER] ✅ Pronto. Digite sessão → SCAN → CAPTURAR → ações no jogo → SALVAR")
+print("[DUMPER v3] ✅ Pronto. Digite sessão → SCAN → CAPTURAR → ações → SALVAR")
