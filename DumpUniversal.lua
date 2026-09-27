@@ -1,8 +1,8 @@
 -- ════════════════════════════════════════════════════════════════
---           DRAGON BLOX — DUMPER FINAL (v1.0)
+--           DRAGON BLOX — DUMPER FINAL (v2.0 - DEDUP)
 -- ════════════════════════════════════════════════════════════════
 -- Captura arquitetural + tráfego + workspace em 1 script.
--- Otimizado: rate-limit, batch de logs, sem hook duplo.
+-- Otimizado: rate-limit, batch de logs, sem hook duplo, dedup.
 -- ════════════════════════════════════════════════════════════════
 
 print("[DUMPER] Iniciando...")
@@ -33,19 +33,20 @@ local State = {
     capturando = false,
     hookAtivo = false,
     scanning = false,
-    
+
     -- Buffers
     logBuf = {},         -- buffer de logs pra flush em batch
     trfBuf = {},         -- tráfego capturado
     arquitetural = {},   -- paths arquiteturais
     workspaceScan = {},  -- items/bosses vistos
-    
+
     -- Filtros
     filtros = {
         skills = true,
         drops = true,
         bossEvent = true,
         swordOrb = true,
+        toolbar = true,      -- novo filtro toolbar ativado por padrão
         ruido = false,       -- se true, loga TUDO
     },
 }
@@ -84,6 +85,7 @@ local function classificar(path)
     if path:find("Weapon") or path:find("Orb") then return "SWORD_ORB" end
     if path:find("Rebirth") or path:find("Prompt") then return "REBIRTH" end
     if path:find("LockedOn") then return "LOCK" end
+    if path:find("ToolService") or path:find("UpdatePlayerToolbar") then return "TOOLBAR" end
     return "OTHER"
 end
 
@@ -95,6 +97,7 @@ local CORES = {
     SWORD_ORB = "FFE45C",
     REBIRTH = "FF9642",
     LOCK = "8AFF8A",
+    TOOLBAR = "FFD700",
     OTHER = "9A9AA0",
     ERROR = "FF5C5C",
     INFO = "74B8FF",
@@ -145,13 +148,33 @@ local function addLog(cat, msg)
     end
 end
 
+-- ═══════════════════════════════════════════════
+-- DEDUP (evita repetir o mesmo evento)
+-- ═══════════════════════════════════════════════
+local vistos = {}
+
 local function addTrafego(cat, path, args)
-    table.insert(State.trfBuf, {
+    local chave = cat.."|"..path.."|"..args
+    
+    -- Se já viu, incrementa contador e atualiza timestamp
+    if vistos[chave] then
+        vistos[chave].count = vistos[chave].count + 1
+        vistos[chave].ultimo = os.date("%H:%M:%S")
+        return
+    end
+    
+    -- Primeira vez: registra
+    local entry = {
         cat = cat,
         path = path,
         args = args,
-        t = os.date("%H:%M:%S"),
-    })
+        count = 1,
+        primeiro = os.date("%H:%M:%S"),
+        ultimo = os.date("%H:%M:%S"),
+    }
+    vistos[chave] = entry
+    table.insert(State.trfBuf, entry)
+    
     if #State.trfBuf > MAX_TRF then
         table.remove(State.trfBuf, 1)
     end
@@ -165,25 +188,25 @@ if hookmetamethod then
         -- Captura args ANTES do pcall (varargs não herdam em closures)
         local n = select("#", ...)
         local capturedArgs = {...}
-        
+
         if State.capturando then
             pcall(function()
                 local m = getnamecallmethod()
                 if m ~= "FireServer" and m ~= "Fire" and m ~= "InvokeServer" then
                     return
                 end
-                
+
                 local okp, path = pcall(game.GetFullName, self)
                 if not okp then return end
                 if ehRuido(path) then return end
-                
+
                 -- Rate limit
                 local agora = os.clock()
                 if ultimoPath[path] and (agora - ultimoPath[path]) < RATE_LIMIT then
                     return
                 end
                 ultimoPath[path] = agora
-                
+
                 -- Classifica e checa filtro
                 local cat = classificar(path)
                 local aceito = false
@@ -194,10 +217,11 @@ if hookmetamethod then
                 if cat == "SWORD_ORB" and State.filtros.swordOrb then aceito = true end
                 if cat == "REBIRTH" then aceito = true end
                 if cat == "LOCK" and State.filtros.skills then aceito = true end
+                if cat == "TOOLBAR" and State.filtros.toolbar then aceito = true end
                 if State.filtros.ruido then aceito = true end
-                
+
                 if not aceito then return end
-                
+
                 -- Serializa args
                 local parts = {}
                 for i = 1, math.min(n, 8) do
@@ -207,7 +231,7 @@ if hookmetamethod then
                 addTrafego(cat, linha, table.concat(parts, " | "))
             end)
         end
-        
+
         return _nomecallOriginal(self, ...)
     end)
     State.hookAtivo = true
@@ -220,8 +244,8 @@ end
 task.spawn(function()
     local conhecidos = {}
     while true do
-        task.wait(5)
-        
+        task.wait(1)
+
         if State.capturando then
             -- 1) Drops no chão
             for _, obj in ipairs(WS:GetDescendants()) do
@@ -230,7 +254,7 @@ task.spawn(function()
                     local nome = obj.Name
                     local parentNome = obj.Parent and obj.Parent.Name or ""
                     local parentPai = obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Name or ""
-                    
+
                     -- Filtra só coisas relevantes
                     local ehDropReal = 
                         parentNome == "PartStorage"
@@ -243,7 +267,7 @@ task.spawn(function()
                         or nome:find("Star")
                         or nome:find("DragonBall")
                         or nome:find("Meteor")
-                    
+
                     if ehDropReal and State.filtros.drops then
                         local pos = obj:IsA("BasePart") and obj.Position
                             or (obj.PrimaryPart and obj.PrimaryPart.Position)
@@ -252,7 +276,7 @@ task.spawn(function()
                                 nome, parentNome, pos.X, pos.Y, pos.Z))
                         end
                     end
-                    
+
                     -- 2) Boss de evento
                     local nomeLower = nome:lower()
                     if (nomeLower:find("zaja") or nomeLower:find("destroyer")
@@ -276,23 +300,23 @@ local function scanArquitetural()
     if State.scanning then return end
     State.scanning = true
     State.arquitetural = {}
-    
+
     addLog("INFO", "Iniciando scan arquitetural...")
-    
+
     task.spawn(function()
         local t0 = os.clock()
         local total = 0
-        
+
         local function varrer(inst, path, depth)
             if depth > 8 or not inst then return end
             local ok, children = pcall(function() return inst:GetChildren() end)
             if not ok then return end
-            
+
             for _, child in ipairs(children) do
                 local cls = child.ClassName
                 local nome = child.Name
                 local childPath = path.."."..nome
-                
+
                 if cls ~= "Folder" then
                     if cls == "RemoteEvent" or cls == "RemoteFunction"
                     or cls == "UnreliableRemoteEvent"
@@ -302,16 +326,16 @@ local function scanArquitetural()
                         total = total + 1
                     end
                 end
-                
+
                 if cls == "Folder" or cls == "Model" then
                     varrer(child, childPath, depth + 1)
                 end
             end
         end
-        
+
         pcall(function() varrer(RS, "RS", 0) end)
         pcall(function() varrer(WS, "WS", 0) end)
-        
+
         local dur = os.clock() - t0
         addLog("SUCCESS", string.format("Scan: %.2fs — %d itens", dur, total))
         State.scanning = false
@@ -332,34 +356,40 @@ local function salvarArquivo()
     table.insert(L, "Total tráfego: "..#State.trfBuf)
     table.insert(L, "Total arquitetural: "..#State.arquitetural)
     table.insert(L, "")
-    
+
     -- Agrupa tráfego por categoria
     local porCat = {}
     for _, t in ipairs(State.trfBuf) do
         porCat[t.cat] = porCat[t.cat] or {}
         table.insert(porCat[t.cat], t)
     end
-    
+
     table.insert(L, "═══ TRÁFEGO POR CATEGORIA ═══")
-    for _, cat in ipairs({"M1", "SKILL", "DROP", "BOSS", "SWORD_ORB", "REBIRTH", "LOCK", "OTHER"}) do
+    for _, cat in ipairs({"M1", "SKILL", "DROP", "BOSS", "SWORD_ORB", "REBIRTH", "LOCK", "TOOLBAR", "OTHER"}) do
         if porCat[cat] then
             table.insert(L, "")
             table.insert(L, "### "..cat.." ("..#porCat[cat]..")")
             for _, t in ipairs(porCat[cat]) do
-                table.insert(L, "["..t.t.."] "..t.path.." | "..t.args)
+                if t.count > 1 then
+                    table.insert(L, string.format("[%s ~ %s] (x%d) %s | %s",
+                        t.primeiro, t.ultimo, t.count, t.path, t.args))
+                else
+                    table.insert(L, string.format("[%s] %s | %s",
+                        t.primeiro, t.path, t.args))
+                end
             end
         end
     end
-    
+
     table.insert(L, "")
     table.insert(L, "═══ ARQUITETURAL ═══")
     for _, linha in ipairs(State.arquitetural) do
         table.insert(L, linha)
     end
-    
+
     local conteudo = table.concat(L, "\n")
     local nome = "Dump_"..State.sessao.."_"..os.time()..".txt"
-    
+
     local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
     if ok then
         return "Salvo: "..nome.." ("..#conteudo.." bytes)"
@@ -524,7 +554,7 @@ fpad.PaddingTop = UDim.new(0, 3)
 
 local function mkFiltro(nome, key)
     local b = Instance.new("TextButton", filtroFrame)
-    b.Size = UDim2.new(0, 68, 0, 24)
+    b.Size = UDim2.new(0, 58, 0, 24) -- Diminuido levemente a width para caber mais botoes
     b.BackgroundColor3 = State.filtros[key] and T.success or T.elev
     b.Text = nome
     b.TextColor3 = Color3.new(1,1,1)
@@ -542,6 +572,7 @@ mkFiltro("Skills", "skills")
 mkFiltro("Drops", "drops")
 mkFiltro("Boss", "bossEvent")
 mkFiltro("Sword/Orb", "swordOrb")
+mkFiltro("Toolbar", "toolbar") -- Novo filtro visível na UI
 mkFiltro("Ruído", "ruido")
 
 -- Log ao vivo
@@ -637,20 +668,21 @@ end)
 task.spawn(function()
     while gui.Parent do
         task.wait(0.5)
-        
+
         -- Junta logs + tráfego recente
         local linhas = {}
-        
+
         -- Últimos 30 tráfegos
         local iniT = math.max(1, #State.trfBuf - 30)
         for i = iniT, #State.trfBuf do
             local t = State.trfBuf[i]
             local cor = CORES[t.cat] or CORES.OTHER
+            local suf = t.count > 1 and (" (x"..t.count..")") or ""
             table.insert(linhas, string.format(
-                "<font color='#888'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#AAA'>%s</font> | <font color='#CCC'>%s</font>",
-                t.t, cor, t.cat, t.path:sub(-40), t.args:sub(1, 60)))
+                "<font color='#888'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#AAA'>%s%s</font>",
+                t.primeiro, cor, t.cat, t.path:sub(-40), suf))
         end
-        
+
         -- Últimos 20 logs
         local iniL = math.max(1, #State.logBuf - 20)
         for i = iniL, #State.logBuf do
@@ -660,13 +692,13 @@ task.spawn(function()
                 "<font color='#666'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#CCC'>%s</font>",
                 l.hora, cor, l.cat, l.msg))
         end
-        
+
         if #linhas == 0 then
             logText.Text = "<font color='#666'>Aguardando eventos...</font>"
         else
             logText.Text = table.concat(linhas, "\n")
         end
-        
+
         logScroll.CanvasSize = UDim2.new(0, 0, 0, logText.AbsoluteSize.Y + 10)
         logScroll.CanvasPosition = Vector2.new(0, math.max(0, logScroll.CanvasSize.Y.Offset))
     end
