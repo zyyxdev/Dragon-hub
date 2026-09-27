@@ -79,7 +79,7 @@ local Config = {
     AutoTour = false,
     AreaSelecionada = nil,
     RaioArea = 3000,
-    EspaSpawn = 3,
+    EsperaSpawn = 3,
 
     Godmode = false,
     Stick = false,
@@ -128,12 +128,11 @@ local ConsoleInicio = os.time()
 local _nomecallOriginal = nil
 local _hookAtivo = false
 
--- PATCH 4 — Adicionar "SkillRemote" e "M1" nos eventos capturados
 local EVENTOS_IMPORTANTES = {
     "ItemSpawned", "ItemDrop", "ShootingStar", "onEventEffect",
     "Prompt", "Reward", "Drop", "Spawn", "Boss", "Zaja",
     "Quest", "Dialog", "UnlockMode", "Rebirth",
-    "ExecuteSkill", "LockedOn", "SkillRemote",
+    "ExecuteSkill", "LockedOn",
     "Orb", "Sphere", "Wish", "DragonBall",
 }
 
@@ -202,7 +201,7 @@ if hookmetamethod then
     _hookAtivo = true
 end
 
--- PATCH 1 — Filtrar scanner de DROP (menos ruído)
+-- Scanner de drops
 task.spawn(function()
     local conhecidos = {}
     while Ativo do
@@ -211,28 +210,14 @@ task.spawn(function()
             for _, obj in ipairs(WS:GetDescendants()) do
                 if (obj:IsA("BasePart") or obj:IsA("Model")) and not conhecidos[obj] then
                     conhecidos[obj] = true
-                    local nome = obj.Name
-                    local parent = obj.Parent and obj.Parent.Name or ""
-                    local gp = obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Name or ""
-                    
-                    -- Só loga o que é drop/orb/item relevante
-                    local valeLogar = 
-                        parent == "PartStorage"
-                        or parent == "ShootingStar"
-                        or parent:find("ItemDrop")
-                        or parent == "Pad"
-                        or gp == "PartStorage"
-                        or gp == "ShootingStar"
-                        or nome:find("Orb")
-                        or nome:find("Star")
-                        or nome:find("DragonBall")
-                        or nome:find("Meteor")
-                    
-                    if valeLogar then
+                    local nome = obj.Name:lower()
+                    if nome:find("orb") or nome:find("sphere") or nome:find("wish")
+                    or nome:find("dragon") or nome:find("star") or nome:find("crystal")
+                    or nome:find("esfera") then
                         local pos = obj:IsA("BasePart") and obj.Position
                             or (obj.PrimaryPart and obj.PrimaryPart.Position)
                         if pos and obj.Parent then
-                            consoleAdd("DROP", nome .. " | Pai: "..parent ..
+                            consoleAdd("DROP", obj.Name .. " | Pai: "..obj.Parent.Name ..
                                 " | " .. string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
                         end
                     end
@@ -401,11 +386,7 @@ local function getMobMaisProximo()
     if wm then
         checar(wm:FindFirstChild("Mobs"), false)
         checar(wm:FindFirstChild("Boss Mobs"), true)
-        for _, pasta in ipairs(wm:GetChildren()) do
-            if pasta.Name:lower():find("boss") and pasta.Name ~= "Boss Mobs" then
-                checar(pasta, true)
-            end
-        end
+        checar(wm:FindFirstChild("Event Mobs"), true)
     end
     return maisProximo
 end
@@ -521,23 +502,15 @@ local function godmodePosicional(mob)
     hrp.CFrame = CFrame.new(targetPos, mhrp.Position)
 end
 
--- PATCH 3 — M1 ATTACK (com debug)
+-- ═══════════════════════════════════════════════
+-- M1 ATTACK (SkillRemote com SkillId=1)
+-- ═══════════════════════════════════════════════
 local function m1(alvo)
-    if not SkillRemote then 
-        consoleAdd("M1", "ERRO: SkillRemote é nil")
-        return 
-    end
-    
+    if not SkillRemote then return end
     local char = plr.Character
-    if not char then 
-        consoleAdd("M1", "ERRO: sem character")
-        return 
-    end
+    if not char then return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then 
-        consoleAdd("M1", "ERRO: sem HumanoidRootPart")
-        return 
-    end
+    if not hrp then return end
 
     local cam = workspace.CurrentCamera
     local aimPos = alvo and alvo.pos or (hrp.Position + hrp.CFrame.LookVector * 10)
@@ -550,7 +523,7 @@ local function m1(alvo)
             Aim = aimPos,
             Camera = camCF,
             Type = 1,
-            SkillId = "2",
+            SkillId = "1",
         })
     end)
     task.wait(0.05)
@@ -561,11 +534,9 @@ local function m1(alvo)
             Aim = aimPos,
             Camera = camCF,
             Type = 1,
-            SkillId = "2",
+            SkillId = "1",
         })
     end)
-    
-    consoleAdd("M1", "FireServer Began=true SkillId=2")
 end
 
 -- ═══════════════════════════════════════════════
@@ -853,8 +824,42 @@ local function fazerRebirth()
 end
 
 -- ═══════════════════════════════════════════════
--- COLLECT
+-- AUTO COLLECT (PartStorage / ItemDrop_*)
 -- ═══════════════════════════════════════════════
+local ItemsColetaveis = {
+    StandardWish = true,
+    PremiumWish = true,
+}
+local ColetarTudo = false
+local DropAlvo = nil
+local ultimoDropCheck = 0
+
+task.spawn(function()
+    while Ativo do
+        task.wait(0.3)
+        if not Config.AutoCollect then
+            DropAlvo = nil
+            task.wait(0.7)
+            continue
+        end
+
+        local ps = WS:FindFirstChild("PartStorage")
+        if ps then
+            for _, obj in ipairs(ps:GetChildren()) do
+                if obj.Name:find("ItemDrop_") then
+                    local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+                    if part then
+                        local d = (part.Position - (plr.Character and plr.Character.HumanoidRootPart.Position or Vector3.zero)).Magnitude
+                        if d < 500 then
+                            DropAlvo = { model = obj, pos = part.Position, dist = d }
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
 task.spawn(function()
     task.wait(3)
     if OnEventEffect then
@@ -1001,6 +1006,63 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════
+-- ESP DE DROPS
+-- ═══════════════════════════════════════════════
+local dropCache = {}
+
+local function criarESPDrop(obj)
+    local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+    if not part then return end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "DBH_DropESP"
+    bb.Size = UDim2.new(0, 120, 0, 30)
+    bb.StudsOffset = Vector3.new(0, 4, 0)
+    bb.AlwaysOnTop = true
+    bb.Adornee = part
+    bb.Parent = espGui
+
+    local lbl = Instance.new("TextLabel", bb)
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = Color3.fromRGB(255, 200, 80)
+    lbl.TextStrokeTransparency = 0.3
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Text = "💎 " .. obj.Name
+
+    dropCache[obj] = bb
+end
+
+task.spawn(function()
+    while Ativo do
+        task.wait(0.5)
+        if not Config.ShowESP then
+            for obj, bb in pairs(dropCache) do bb:Destroy() end
+            dropCache = {}
+            continue
+        end
+
+        local ps = WS:FindFirstChild("PartStorage")
+        if ps then
+            local vivos = {}
+            for _, obj in ipairs(ps:GetChildren()) do
+                if obj.Name:find("ItemDrop_") then
+                    vivos[obj] = true
+                    if not dropCache[obj] then criarESPDrop(obj) end
+                end
+            end
+            for obj, bb in pairs(dropCache) do
+                if not vivos[obj] or not obj.Parent then
+                    bb:Destroy()
+                    dropCache[obj] = nil
+                end
+            end
+        end
+    end
+end)
+
+-- ═══════════════════════════════════════════════
 -- UI LIBRARY
 -- ═══════════════════════════════════════════════
 local UI = {}
@@ -1051,6 +1113,23 @@ function UI.newWindow()
         TextColor3 = UI.Theme.Text, Font = FONT_BOLD, TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
     }, header)
+
+    local dropIndicator = I("TextLabel", {
+        Size = UDim2.new(0, 60, 0, 20),
+        Position = UDim2.new(1, -120, 0.5, -10),
+        BackgroundTransparency = 1,
+        Text = "",
+        TextColor3 = Color3.fromRGB(255, 200, 80),
+        Font = FONT_BOLD,
+        TextSize = 11,
+    }, header)
+
+    task.spawn(function()
+        while Ativo do
+            task.wait(1)
+            dropIndicator.Text = DropAlvo and "💎 drop" or ""
+        end
+    end)
 
     local btnClose = I("TextButton", {
         Size = UDim2.new(0, 22, 0, 22), Position = UDim2.new(1, -30, 0.5, -11),
@@ -1522,8 +1601,22 @@ UI.toggle(questTab, {name = "Auto Aceitar Quest", default = false, callback = fu
 
 -- ═══ COLLECT ═══
 UI.section(collectTab, "💎   AUTO COLLECT")
-UI.toggle(collectTab, {name = "Auto Coletar", default = false, callback = function(v) Config.AutoCollect = v end})
-UI.label(collectTab, {text = "Detecta esferas/meteoros automaticamente.", height = 50})
+UI.toggle(collectTab, {name = "Auto Coletar Drops", default = false, callback = function(v) Config.AutoCollect = v end})
+UI.label(collectTab, {text = "Coleta ItemDrop_* do PartStorage\nInclui esferas Standard/Premium + materiais.", height = 60})
+
+UI.section(collectTab, "📊   STATUS")
+local collectStatus = UI.label(collectTab, {text = "Aguardando...", height = 50})
+
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if DropAlvo then
+            collectStatus.Text = "💎 Drop a " .. math.floor(DropAlvo.dist) .. " studs"
+        else
+            collectStatus.Text = "Nenhum drop no mapa"
+        end
+    end
+end)
 
 -- ═══ TRANSFORM ═══
 UI.section(transformTab, "🌀   TRANSFORMAÇÃO")
@@ -1635,6 +1728,15 @@ task.spawn(function()
             continue
         end
 
+        -- Prioriza drop se AutoCollect ligado
+        if Config.AutoCollect and DropAlvo then
+            if DropAlvo.dist > 5 then
+                voarPara(DropAlvo.pos, Config.FlySpeed)
+                task.wait(0.1)
+                continue
+            end
+        end
+
         -- Ki check
         local cur, max = getKiAtual()
         local pct = max > 0 and (cur / max) or 1
@@ -1681,7 +1783,6 @@ task.spawn(function()
             godmodePosicional(mob.model)
         end
 
-        -- PATCH 5 — Confirmado disparo do M1 no loop de combate
         if (Config.AutoFarm or Config.AutoBoss) and (os.clock() - ultimoM1) >= Config.M1_Delay then
             m1(mob)
             ultimoM1 = os.clock()
@@ -1695,45 +1796,32 @@ task.spawn(function()
     end
 end)
 
--- PATCH 2 — Auto Tour com rescan e log
+-- ═══════════════════════════════════════════════
+-- AUTO TOUR
+-- ═══════════════════════════════════════════════
 task.spawn(function()
-    local ultimoRescan = 0
     while Ativo do
         task.wait(2)
         if Config.AutoTour then
-            -- Re-escaneia se vazio OU a cada 30s
-            if #areas == 0 or (os.clock() - ultimoRescan) > 30 then
-                descobrirAreas()
-                ultimoRescan = os.clock()
-                consoleAdd("TOUR", "Escaneado: " .. #areas .. " áreas")
-            end
-            
-            if #areas == 0 then
-                -- não achou nada, espera
-            elseif Config.AreaSelecionada then
-                if areaAtual ~= Config.AreaSelecionada then
-                    consoleAdd("TOUR", "Indo para " .. Config.AreaSelecionada.nome)
-                    irParaArea(Config.AreaSelecionada)
-                end
-            else
-                local n = mobsNaArea(areaAtual, 200)
-                if n == 0 or not areaAtual then
-                    areaIdx = areaIdx + 1
-                    if areaIdx > #areas then
-                        areaIdx = 1
-                        descobrirAreas()
-                    end
-                    local prox = areas[areaIdx]
-                    if prox then
-                        consoleAdd("TOUR", "Indo para " .. prox.nome)
-                        irParaArea(prox)
-                        task.wait(Config.EspaSpawn)
+            if #areas == 0 then descobrirAreas() end
+            if #areas > 0 then
+                if Config.AreaSelecionada then
+                    if areaAtual ~= Config.AreaSelecionada then irParaArea(Config.AreaSelecionada) end
+                else
+                    local n = mobsNaArea(areaAtual, 200)
+                    if n == 0 or not areaAtual then
+                        areaIdx = areaIdx + 1
+                        if areaIdx > #areas then areaIdx = 1; descobrirAreas() end
+                        local prox = areas[areaIdx]
+                        if prox then
+                            irParaArea(prox)
+                            task.wait(Config.EspaSpawn)
+                        end
                     end
                 end
-            end
-            
-            if areaAtual then
-                infoArea.Text = "Área: " .. areaAtual.nome .. "\nMobs: " .. mobsNaArea(areaAtual, 200)
+                if areaAtual then
+                    infoArea.Text = "Área: " .. areaAtual.nome .. "\nMobs: " .. mobsNaArea(areaAtual, 200)
+                end
             end
         end
     end
