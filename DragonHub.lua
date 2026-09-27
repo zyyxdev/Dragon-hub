@@ -733,4 +733,357 @@ function UI.label(tab, opts)
         TextWrapped=true, Text=opts.text or "",
     }, tab.frame)
     corner(l, UDim.new(0,7))
-    I("UIPadding", {PaddingLeft=UDim.new(0,8), PaddingTop=UDim.new(
+    I("UIPadding", {PaddingLeft=UDim.new(0,8), PaddingTop=UDim.new(0,6), PaddingRight=UDim.new(0,8), PaddingBottom=UDim.new(0,6)}, l)
+    return l
+end
+
+function UI.dropdown(tab, opts)
+    local cur = opts.default or "(todos)"
+    local b = I("TextButton", {
+        Size=UDim2.new(1,0,0,30), BackgroundColor3=T.elev,
+        Text="  "..opts.name..": "..cur, TextColor3=T.text,
+        Font=Enum.Font.Gotham, TextSize=11, TextXAlignment=Enum.TextXAlignment.Left,
+        BorderSizePixel=0, AutoButtonColor=false,
+    }, tab.frame)
+    corner(b, UDim.new(0,7))
+    local function upd() b.Text = "  "..opts.name..": "..cur end
+    b.MouseButton1Click:Connect(function()
+        local pop = I("Frame", {
+            Size=UDim2.new(0,220,0,260), Position=UDim2.new(0.5,-110,0.5,-130),
+            BackgroundColor3=T.panel, BorderSizePixel=0, ZIndex=100, Active=true,
+        }, gui)
+        corner(pop, UDim.new(0,10))
+        I("UIStroke", {Color=T.accent, Thickness=1}, pop)
+        I("TextLabel", {
+            Size=UDim2.new(1,0,0,24), BackgroundTransparency=1,
+            Text=opts.name, TextColor3=T.accent, Font=Enum.Font.GothamBold, TextSize=12,
+        }, pop)
+        local sc = I("ScrollingFrame", {
+            Size=UDim2.new(1,-14,1,-44), Position=UDim2.new(0,7,0,26),
+            BackgroundTransparency=1, BorderSizePixel=0,
+            ScrollBarThickness=3, ScrollBarImageColor3=T.border,
+            CanvasSize=UDim2.new(0,0,0,0),
+        }, pop)
+        local ll = I("UIListLayout", {Padding=UDim.new(0,3)}, sc)
+        local lista = opts.options
+        if type(lista) == "function" then lista = lista() end
+        for _, opt in ipairs(lista) do
+            local ob = I("TextButton", {
+                Size=UDim2.new(1,0,0,28), BackgroundColor3=T.elev,
+                Text=tostring(opt), TextColor3=T.text, Font=Enum.Font.Gotham,
+                TextSize=11, BorderSizePixel=0, AutoButtonColor=true,
+            }, sc)
+            corner(ob, UDim.new(0,6))
+            ob.MouseButton1Click:Connect(function()
+                cur = opt; upd(); pop:Destroy()
+                if opts.callback then opts.callback(opt) end
+            end)
+        end
+        sc.CanvasSize = UDim2.new(0,0,0,ll.AbsoluteContentSize.Y+10)
+        local bx = I("TextButton", {
+            Size=UDim2.new(0,36,0,20), Position=UDim2.new(1,-42,0,3),
+            BackgroundColor3=T.danger, Text="×", TextColor3=Color3.new(1,1,1),
+            Font=Enum.Font.GothamBold, TextSize=12, BorderSizePixel=0,
+        }, pop)
+        corner(bx, UDim.new(0,5))
+        bx.MouseButton1Click:Connect(function() pop:Destroy() end)
+    end)
+    return {set=function(v) cur=v; upd() end}
+end
+
+-- [esp gui]
+espGui = Instance.new("ScreenGui")
+espGui.Name = "DBH_ESP"
+espGui.ResetOnSpawn = false
+espGui.Parent = CoreGui
+
+-- [build ui]
+local win = UI.newWindow()
+mainFrame = win.frame
+
+local farmTab = UI.newTab(win, "⚔", "Farm")
+local collectTab = UI.newTab(win, "💎", "Collect")
+local rebirthTab = UI.newTab(win, "🔄", "Rebirth")
+local configTab = UI.newTab(win, "⚙", "Config")
+local sobreTab = UI.newTab(win, "ℹ", "Sobre")
+
+farmTab.btn.BackgroundColor3 = T.elev
+farmTab.btn.TextColor3 = T.accent
+farmTab.frame.Visible = true
+
+-- [farm]
+UI.section(farmTab, "⚔ COMBATE")
+UI.toggle(farmTab, {name="Auto Farm", default=false, callback=function(v) Config.AutoFarm = v end})
+UI.toggle(farmTab, {name="Auto M1", default=true, callback=function(v) Config.AutoM1 = v end})
+UI.toggle(farmTab, {name="Auto Boss", default=false, callback=function(v) Config.AutoBoss = v end})
+UI.toggle(farmTab, {name="Auto Skill", default=false, callback=function(v) Config.AutoSkill = v end})
+UI.toggle(farmTab, {name="Auto Lock-On", default=true, callback=function(v) Config.AutoLock = v end})
+UI.toggle(farmTab, {name="ESP Mobs", default=false, callback=function(v) Config.ShowESP = v end})
+
+UI.section(farmTab, "🎯 MOB ALVO")
+UI.dropdown(farmTab, {
+    name = "Filtrar",
+    options = function() return listarMobs() end,
+    default = "(todos)",
+    callback = function(o) Config.MobAlvo = (o == "(todos)") and nil or o end,
+})
+
+UI.section(farmTab, "📏 RANGES")
+UI.slider(farmTab, {name="M1 Range", min=8, max=40, default=15, suffix=" st", callback=function(v) Config.M1_Range = v end})
+UI.slider(farmTab, {name="M1 Delay", min=10, max=80, default=35, suffix=" ms", callback=function(v) Config.M1_Delay = v/100 end})
+UI.slider(farmTab, {name="Skill Delay", min=10, max=50, default=15, suffix=" x0.1s", callback=function(v) Config.Skill_Delay = v/10 end})
+
+-- [collect]
+UI.section(collectTab, "💎 AUTO COLLECT")
+UI.toggle(collectTab, {name="Ativar", default=false, callback=function(v) Config.AutoCollect = v end})
+UI.toggle(collectTab, {name="ESP Drops", default=true, callback=function(v) Config.ShowDropESP = v end})
+UI.label(collectTab, {text="Detecta ItemDrop_* em PartStorage\ne voa até esferas automaticamente.", height=44})
+
+-- [rebirth]
+UI.section(rebirthTab, "🔄 AUTO REBIRTH")
+UI.toggle(rebirthTab, {name="Ativar", default=false, callback=function(v) Config.AutoRebirth = v end})
+UI.slider(rebirthTab, {name="Multiplicador", min=1, max=10, default=3, callback=function(v) Config.RebirthMult = v end})
+UI.button(rebirthTab, {name="🔄 Forçar Rebirth", callback=function() fazerRebirth() end})
+local infoReb = UI.label(rebirthTab, {text="Aguardando...", height=50})
+
+-- [config]
+UI.section(configTab, "✈ MOVIMENTO")
+UI.slider(configTab, {name="Voo", min=50, max=500, default=120, suffix=" st/s", callback=function(v) Config.FlySpeed = v end})
+UI.toggle(configTab, {name="Forçar WalkSpeed", default=false, callback=function(v) Config.OverrideSpeed = v end})
+UI.slider(configTab, {name="WalkSpeed", min=16, max=200, default=16, callback=function(v) Config.WalkSpeed = v end})
+
+UI.section(configTab, "💠 KI")
+UI.slider(configTab, {name="Ki mínimo %", min=10, max=80, default=30, suffix="%", callback=function(v) KiCfg.Limite = v/100 end})
+UI.slider(configTab, {name="Ki alvo %", min=50, max=100, default=95, suffix="%", callback=function(v) KiCfg.Alvo = v/100 end})
+UI.slider(configTab, {name="Tempo máx.", min=2, max=15, default=5, suffix=" s", callback=function(v) KiCfg.TempoMax = v end})
+
+UI.section(configTab, "🛠 UTILITÁRIOS")
+UI.toggle(configTab, {name="Noclip", default=false, callback=function(v) Config.Noclip = v end})
+
+UI.section(configTab, "🌌 VOO NATIVO")
+UI.button(configTab, {name="SuperFlight (5s)", callback=function()
+    if RE_SuperFlight then
+        pcall(function() RE_SuperFlight:FireServer(true) end)
+        task.wait(5)
+        pcall(function() RE_SuperFlight:FireServer(false) end)
+    end
+end})
+
+UI.section(configTab, "🛑 SISTEMA")
+UI.button(configTab, {name="Encerrar Hub", callback=function()
+    Ativo = false
+    if gui then gui:Destroy() end
+    if espGui then espGui:Destroy() end
+end})
+
+-- [sobre]
+UI.section(sobreTab, "📊 SEUS STATUS")
+local infoP = UI.label(sobreTab, {text="Carregando...", height=80})
+
+UI.section(sobreTab, "🖥 SERVIDOR")
+local infoS = UI.label(sobreTab, {text="Carregando...", height=50})
+
+-- [loop combate]
+task.spawn(function()
+    local ultimoM1 = 0
+    local ultimoSkill = 0
+    local alvoTravado = nil
+
+    while Ativo do
+        task.wait(0.05)
+
+        if not Config.AutoFarm and not Config.AutoBoss and not Config.AutoSkill then
+            alvoTravado = nil
+            pararVoo()
+            task.wait(0.4)
+            continue
+        end
+
+        local cur, max = getKi()
+        local pct = max > 0 and (cur/max) or 1
+        if pct < KiCfg.Limite and Config.AutoSkill then
+            lockOn(nil)
+            pararVoo()
+            recarregarKi()
+            ultimoSkill = os.clock()
+            continue
+        end
+
+        local mob = getMob()
+        if not mob then
+            pararVoo()
+            task.wait(0.3)
+            continue
+        end
+
+        local _, hrp = getChar()
+        if not hrp then continue end
+
+        if Config.AutoLock and alvoTravado ~= mob.baseName then
+            lockOn(mob.model)
+            alvoTravado = mob.baseName
+        end
+
+        if mob.dist > Config.M1_Range then
+            voarPara(mob.pos)
+            task.wait(0.05)
+            continue
+        end
+
+        pararVoo()
+        hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
+
+        if Config.AutoM1 and (Config.AutoFarm or Config.AutoBoss)
+        and (os.clock() - ultimoM1) >= Config.M1_Delay then
+            m1(mob)
+            ultimoM1 = os.clock()
+        end
+
+        if Config.AutoSkill and (os.clock() - ultimoSkill) >= Config.Skill_Delay then
+            local s = proximaSkill()
+            usarSkill(s, mob)
+            ultimoSkill = os.clock()
+        end
+    end
+end)
+
+-- [noclip]
+task.spawn(function()
+    while Ativo do
+        task.wait(0.2)
+        if Config.Noclip then
+            local c = plr.Character
+            if c then
+                for _, p in ipairs(c:GetDescendants()) do
+                    if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+                end
+            end
+        end
+    end
+end)
+
+-- [walkspeed]
+task.spawn(function()
+    while Ativo do
+        task.wait(0.5)
+        if Config.OverrideSpeed then
+            local c = plr.Character
+            if c then
+                local h = c:FindFirstChildOfClass("Humanoid")
+                if h then h.WalkSpeed = Config.WalkSpeed end
+            end
+        end
+    end
+end)
+
+-- [rebirth]
+task.spawn(function()
+    while Ativo do
+        task.wait(5)
+        if Config.AutoRebirth then
+            local pronto = checarRebirth()
+            if pronto then
+                fazerRebirth()
+                task.wait(10)
+            end
+        end
+    end
+end)
+
+-- [esp mobs]
+task.spawn(function()
+    while Ativo do
+        task.wait(0.4)
+        if not Config.ShowESP then
+            for m in pairs(espCache) do removerESP(m) end
+            continue
+        end
+        local vivos = {}
+        local wm = WS:FindFirstChild("World Mobs")
+        if wm then
+            for _, p in ipairs(wm:GetChildren()) do
+                for _, m in ipairs(p:GetChildren()) do
+                    if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart") then
+                        vivos[m] = true
+                        if not espCache[m] then criarESP(m) end
+                    end
+                end
+            end
+        end
+        for m in pairs(espCache) do
+            if not vivos[m] then removerESP(m) end
+        end
+    end
+end)
+
+-- [esp drops + autocollect]
+task.spawn(function()
+    while Ativo do
+        task.wait(0.5)
+        if Config.ShowDropESP then atualizarDropESP() end
+        if Config.AutoCollect then tentarColetar() end
+    end
+end)
+
+-- [tour]
+task.spawn(function()
+    while Ativo do
+        task.wait(2)
+        if Config.AutoTour and (Config.AutoFarm or Config.AutoBoss or Config.AutoSkill) then
+            if not getMob() then
+                local areas = {}
+                local wm = WS:FindFirstChild("World Mobs")
+                local _, hrp = getChar()
+                if wm and hrp then
+                    for _, cat in ipairs(wm:GetChildren()) do
+                        for _, sub in ipairs(cat:GetChildren()) do
+                            for _, d in ipairs(sub:GetDescendants()) do
+                                if d:IsA("Model") and d:FindFirstChild("HumanoidRootPart") then
+                                    local dist = (d.HumanoidRootPart.Position - hrp.Position).Magnitude
+                                    if dist < Config.RaioArea then
+                                        table.insert(areas, {pos=d.HumanoidRootPart.Position, dist=dist})
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    table.sort(areas, function(a,b) return a.dist < b.dist end)
+                    if #areas > 0 then
+                        voarPara(areas[1].pos, Config.FlySpeed * 0.8)
+                        task.wait(Config.EspaSpawn)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- [stats]
+task.spawn(function()
+    while Ativo do
+        task.wait(2)
+        local st = plr:FindFirstChild("Stats")
+        if st then
+            local function g(n)
+                local v = st:FindFirstChild(n)
+                return v and tostring(v.Value) or "0"
+            end
+            infoP.Text = string.format(
+                "Level: %s\nRebirth: %s\nStrength: %s\nKi: %s\nEndurance: %s\nAgility: %s",
+                g("Level"), g("Rebirth"), g("Strength"), g("Ki"), g("Endurance"), g("Agility"))
+        end
+        local jobId = game.JobId ~= "" and game.JobId:sub(1,8).."..." or "Privado"
+        local ping = 0
+        pcall(function() ping = math.floor(plr:GetNetworkPing() * 1000) end)
+        infoS.Text = string.format("%s • %s\nServ: %s • %d players • %d ms",
+            os.date("%d/%m/%Y"), os.date("%H:%M:%S"),
+            jobId, #Players:GetPlayers(), ping)
+        local _, info = checarRebirth()
+        if info then
+            infoReb.Text = "Rebirth: "..info.reb.."\nTotal: "..info.total.."\nAlvo: "..info.alvo
+        end
+    end
+end)
+
+print("[DBH] ✅ Hub carregado!")
