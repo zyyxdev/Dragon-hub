@@ -1,4 +1,4 @@
-print("[DUMPER v6.3] Iniciando...")
+print("[DUMPER v6.4] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -25,9 +25,9 @@ local State = {
     nomesCache = {},
     contadorBruto = 0,
     filtros = {
-        dungeon = true, skills = true, drops = true,
-        bossEvent = true, swordOrb = true, toolbar = true,
-        rebirth = true, ruido = false,
+        dungeon = true, skills = false, drops = false,
+        bossEvent = false, swordOrb = false, toolbar = false,
+        rebirth = false, ruido = false,
     },
     catAtiva = "captura",
     filtroLogCat = "todos",
@@ -54,7 +54,6 @@ local function log(cat, msg)
     print(string.format("[DUMPER/%s] %s", cat, msg))
 end
 
--- Haptic com throttle (evita lag de 0ms)
 local _ultimoHaptic = 0
 local _hapticSuportado = nil
 
@@ -215,7 +214,7 @@ local function processarChamada(self, ...)
 end
 
 -- ═══════════════════════════════════════════════
--- HOOK
+-- HOOK LAZY (instala só ao capturar)
 -- ═══════════════════════════════════════════════
 local function instalarHook()
     if State.hookAtivo then return end
@@ -237,13 +236,13 @@ local function instalarHook()
         if ok and _nomecallOriginal then
             State.hookAtivo = true
             State.hookMetodo = "hookmetamethod"
-            log("SUCCESS", "✅ Hook __namecall ativo")
+            log("SUCCESS", "✅ Hook ativo")
             return
         end
     end
 
+    -- Fallback: hookfunction
     if hookfunction then
-        print("[DUMPER] ⚠ hookmetamethod falhou, tentando fallback...")
         local rem = RS:FindFirstChild("Remotes")
         local alvo = rem and rem:FindFirstChild("SkillRemote")
         if alvo then
@@ -263,7 +262,7 @@ local function instalarHook()
     end
 
     State.hookMetodo = "FALHOU"
-    log("ERROR", "❌ Nenhum método de hook funcionou")
+    log("ERROR", "❌ Hook falhou")
 end
 
 local function removerHook()
@@ -281,13 +280,11 @@ end
 local function diagnostico()
     log("INFO", "Executor: "..tostring(identifyexecutor and identifyexecutor() or "?"))
     log("INFO", "hookmetamethod: "..tostring(hookmetamethod ~= nil))
-    log("INFO", "getnamecallmethod: "..tostring(getnamecallmethod ~= nil))
-    log("INFO", "hookfunction: "..tostring(hookfunction ~= nil))
     log("INFO", "Hook: "..tostring(State.hookAtivo).." ("..State.hookMetodo..")")
 end
 
 -- ═══════════════════════════════════════════════
--- SCANNER WORKSPACE
+-- SCANNER (só roda com captura ativa)
 -- ═══════════════════════════════════════════════
 task.spawn(function()
     local conhecidos = {}
@@ -319,8 +316,6 @@ task.spawn(function()
                     local ehDrop = nome:find("ItemDrop_")
                         or nome:lower():find("wish")
                         or nome:lower():find("orb")
-                        or nome:lower():find("sphere")
-                        or nome:lower():find("esfera")
                     if ehDrop and not conhecidos[obj] and obj:IsA("Model") then
                         conhecidos[obj] = true
                         local base = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
@@ -393,7 +388,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v6.3 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v6.4 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -480,11 +475,11 @@ local function salvarArquivo()
     local nome = "Dump_"..State.sessao.."_"..os.time()..".txt"
     local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
     if ok then
-        log("SUCCESS", "Salvo: "..nome.." ("..#conteudo.."b)")
+        log("SUCCESS", "Salvo: "..nome)
         return true
     end
     pcall(function() setclipboard(conteudo) end)
-    log("SUCCESS", "Clipboard ("..#conteudo.."b)")
+    log("SUCCESS", "Clipboard")
     return true
 end
 
@@ -528,7 +523,6 @@ local function safeUI(fn)
     end
 end
 
--- Responsivo
 local viewport = workspace.CurrentCamera.ViewportSize
 local W = math.min(420, viewport.X * 0.92)
 local H = math.min(520, viewport.Y * 0.85)
@@ -548,7 +542,7 @@ mStroke.Color = T.border
 mStroke.Thickness = 1
 mStroke.Transparency = 0.4
 
--- HOME BAR estilo iPhone
+-- HOME BAR
 local homeBar = Instance.new("TextButton")
 homeBar.Size = UDim2.new(0, 160, 0, 26)
 homeBar.Position = UDim2.new(0.5, -80, 1, -34)
@@ -590,13 +584,6 @@ homeBar.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
     pulsarHomeBar()
     main.Visible = not main.Visible
-    if main.Visible then
-        main.Size = UDim2.new(0, W * 0.95, 0, H * 0.95)
-        TweenService:Create(main,
-            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { Size = UDim2.new(0, W, 0, H) }
-        ):Play()
-    end
 end))
 
 -- HEADER
@@ -745,7 +732,7 @@ content.BorderSizePixel = 0
 content.Parent = main
 Instance.new("UICorner", content).CornerRadius = UDim.new(0, 10)
 
--- Painel CAPTURA
+-- CAPTURA
 local painelCaptura = Instance.new("Frame")
 painelCaptura.Size = UDim2.new(1, 0, 1, 0)
 painelCaptura.BackgroundTransparency = 1
@@ -785,7 +772,7 @@ local hint = Instance.new("TextLabel")
 hint.Size = UDim2.new(1, -24, 0, 30)
 hint.Position = UDim2.new(0, 12, 0, 112)
 hint.BackgroundTransparency = 1
-hint.Text = "Após iniciar, faça ações no jogo — ataque, use skills, entre na dungeon."
+hint.Text = "Após iniciar, faça ações no jogo."
 hint.TextColor3 = T.textMuted
 hint.TextSize = 10
 hint.Font = Enum.Font.GothamMedium
@@ -830,11 +817,10 @@ feedText.TextSize = 10
 feedText.TextXAlignment = Enum.TextXAlignment.Left
 feedText.TextYAlignment = Enum.TextYAlignment.Top
 feedText.TextWrapped = true
-feedText.RichText = false
 feedText.Text = ""
 feedText.Parent = feedScroll
 
--- Painel FILTROS
+-- FILTROS
 local painelFiltros = Instance.new("Frame")
 painelFiltros.Size = UDim2.new(1, 0, 1, 0)
 painelFiltros.BackgroundTransparency = 1
@@ -922,7 +908,7 @@ criarFiltro("🎒", "Toolbar", "Troca de slots", "toolbar")
 criarFiltro("🔄", "Rebirth", "Prompt + RequestRebirth", "rebirth")
 criarFiltro("🔊", "Ruído", "⚠ Loga TUDO (pode lagar)", "ruido")
 
--- Painel LOGS
+-- LOGS
 local painelLogs = Instance.new("Frame")
 painelLogs.Size = UDim2.new(1, 0, 1, 0)
 painelLogs.BackgroundTransparency = 1
@@ -998,11 +984,10 @@ logsText.TextSize = 10
 logsText.TextXAlignment = Enum.TextXAlignment.Left
 logsText.TextYAlignment = Enum.TextYAlignment.Top
 logsText.TextWrapped = true
-logsText.RichText = false
 logsText.Text = ""
 logsText.Parent = logsScroll
 
--- Painel ARQUIVO
+-- ARQUIVO
 local painelArquivo = Instance.new("Frame")
 painelArquivo.Size = UDim2.new(1, 0, 1, 0)
 painelArquivo.BackgroundTransparency = 1
@@ -1081,7 +1066,7 @@ mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego capturado", T.warn, T
     log("INFO", "Buffers limpos")
 end)
 
--- Painel DIAG
+-- DIAG
 local painelDiag = Instance.new("Frame")
 painelDiag.Size = UDim2.new(1, 0, 1, 0)
 painelDiag.BackgroundTransparency = 1
@@ -1123,7 +1108,7 @@ local btnTeste = Instance.new("TextButton")
 btnTeste.Size = UDim2.new(1, -24, 0, 32)
 btnTeste.Position = UDim2.new(0, 12, 1, -88)
 btnTeste.BackgroundColor3 = T.elev
-btnTeste.Text = "🔬  Testar hook (dispara SkillRemote)"
+btnTeste.Text = "🔬  Testar hook"
 btnTeste.TextColor3 = T.warn
 btnTeste.Font = Enum.Font.GothamBold
 btnTeste.TextSize = 10
@@ -1149,26 +1134,22 @@ footTxt.TextSize = 10
 footTxt.TextXAlignment = Enum.TextXAlignment.Left
 footTxt.Parent = footer
 
--- CRIAR ITENS SIDEBAR
+-- SIDEBAR ITENS
 criarItemSidebar("captura", "📡", "Captura", function()
     if State.capturando then return "REC • "..State.contadorBruto end
     return State.contadorBruto > 0 and (State.contadorBruto.." bruto") or "parado"
 end)
-
 criarItemSidebar("filtros", "🎛", "Filtros", function()
     local ativos = 0
     for _, v in pairs(State.filtros) do if v then ativos = ativos + 1 end end
     return ativos.." ativos"
 end)
-
 criarItemSidebar("logs", "📊", "Logs", function()
     return #State.trfBuf.." únicos"
 end)
-
 criarItemSidebar("arquivo", "📁", "Arquivo", function()
     return #State.arquitetural > 0 and (#State.arquitetural.." mapeados") or "não escaneado"
 end)
-
 criarItemSidebar("diag", "🩺", "Diagnóstico", function()
     return State.hookAtivo and "hook ok" or "sem hook"
 end)
@@ -1214,12 +1195,10 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
     State.sessao = inputSessao.Text ~= "" and inputSessao.Text or State.sessao
     State.capturando = not State.capturando
     if State.capturando then
-        print("═══════════════════════════════════")
         print("[DUMPER] 🔴 CAPTURA INICIADA")
-        print("═══════════════════════════════════")
         instalarHook()
     else
-        print("[DUMPER] ⚪ CAPTURA PARADA (bruto="..State.contadorBruto..")")
+        print("[DUMPER] ⚪ CAPTURA PARADA")
         removerHook()
     end
     atualizarBtnCap()
@@ -1235,7 +1214,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v6.3] Encerrado")
+    print("[DUMPER v6.4] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1248,27 +1227,18 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     table.insert(info, "Hook instalado:   "..tostring(State.hookAtivo))
     table.insert(info, "Método:           "..State.hookMetodo)
     table.insert(info, "PlaceId:          "..game.PlaceId)
-    table.insert(info, "")
-    table.insert(info, "── Remotes em RS.Remotes ──")
-    local rem = RS:FindFirstChild("Remotes")
-    if rem then
-        for _, c in ipairs(rem:GetChildren()) do
-            if c:IsA("RemoteEvent") or c:IsA("RemoteFunction") then
-                table.insert(info, "  • "..c.Name.."  ("..c.ClassName..")")
-            end
-        end
-    else
-        table.insert(info, "  RS.Remotes não encontrado")
-    end
     diagText.Text = table.concat(info, "\n")
     diagnostico()
 end))
 
 btnTeste.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
+    if not State.hookAtivo then
+        print("[DUMPER] ⚠ Inicie a captura antes de testar")
+        return
+    end
     local rem = RS:FindFirstChild("Remotes")
-    if not rem then return end
-    local sr = rem:FindFirstChild("SkillRemote")
+    local sr = rem and rem:FindFirstChild("SkillRemote")
     if not sr then return end
     print("[DUMPER] 🔬 Disparando SkillRemote de teste...")
     pcall(function()
@@ -1278,7 +1248,7 @@ btnTeste.MouseButton1Click:Connect(safeUI(function()
         })
     end)
     task.wait(0.3)
-    print("[DUMPER] Teste enviado. Se não apareceu [CAP/M1] acima, hook falhou.")
+    print("[DUMPER] Se não apareceu [CAP/M1], hook falhou.")
 end))
 
 -- DRAG
@@ -1308,9 +1278,7 @@ UIS.InputEnded:Connect(function(i)
     end
 end)
 
--- ═══════════════════════════════════════════════
--- LOOP PRINCIPAL (1.2s, só atualiza se mudou)
--- ═══════════════════════════════════════════════
+-- LOOP
 local _ultimoCount = -1
 local _ultimaCat = nil
 local _ultimoSidebar = -1
@@ -1318,15 +1286,10 @@ local _ultimoSidebar = -1
 task.spawn(function()
     while gui.Parent do
         task.wait(1.2)
-
-        -- Sempre atualiza footer (leve)
-        footTxt.Text = string.format(
-            "%d bruto • %d únicos • %s",
+        footTxt.Text = string.format("%d bruto • %d únicos • %s",
             State.contadorBruto, #State.trfBuf, State.hookMetodo)
 
-        -- Pula render se nada mudou
         if #State.trfBuf == _ultimoCount and State.catAtiva == _ultimaCat then
-            -- Sidebar só se contador mudou
             if State.contadorBruto ~= _ultimoSidebar then
                 atualizarSidebar()
                 _ultimoSidebar = State.contadorBruto
@@ -1336,7 +1299,6 @@ task.spawn(function()
         _ultimoCount = #State.trfBuf
         _ultimaCat = State.catAtiva
 
-        -- Feed
         if painelCaptura.Visible then
             local linhas = {}
             local ini = math.max(1, #State.trfBuf - 12)
@@ -1347,13 +1309,10 @@ task.spawn(function()
                 table.insert(linhas, string.format("[%s] %s %s — %s%s",
                     t.primeiro, info.icone, t.cat, t.path:sub(-36), suf))
             end
-            feedText.Text = #linhas == 0
-                and "Aguardando..."
-                or table.concat(linhas, "\n")
+            feedText.Text = #linhas == 0 and "Aguardando..." or table.concat(linhas, "\n")
             feedScroll.CanvasSize = UDim2.new(0, 0, 0, feedText.TextBounds.Y + 20)
         end
 
-        -- Logs
         if painelLogs.Visible then
             local linhasL = {}
             local filtro = State.filtroLogCat
@@ -1367,9 +1326,7 @@ task.spawn(function()
                         t.primeiro, info.icone, t.cat, suf, t.path))
                 end
             end
-            logsText.Text = #linhasL == 0
-                and "Sem entradas."
-                or table.concat(linhasL, "")
+            logsText.Text = #linhasL == 0 and "Sem entradas." or table.concat(linhasL, "")
             logsScroll.CanvasSize = UDim2.new(0, 0, 0, logsText.TextBounds.Y + 20)
         end
 
@@ -1383,5 +1340,4 @@ end)
 atualizarSidebar()
 atualizarConteudo()
 
-print("[DUMPER v6.3] ✅ Pronto")
-print("[DUMPER] HomeBar no rodapé alterna a UI.")
+print("[DUMPER v6.4] ✅ Pronto — hook só instala ao capturar")
