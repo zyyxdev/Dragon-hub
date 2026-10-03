@@ -61,17 +61,30 @@ local Config = {
     AttackRange = 8,
     SkillDelay = 1.5,
     TrackerAuto = true,
+    SkillMode = "off",
+    SkillSingle = "UniqueSets_2_1",
+    SkillCombo = "dps",
 }
 
 -- [SKILLS]
 local SKILLS = {
-    { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3, slot = 1, trocaSlot = true },
-    { nome = "UniqueSets_2_2", pause = 1, slot = 1, trocaSlot = true },
-    { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1, slot = 1, trocaSlot = true },
-    { nome = "Weapons_3_2", pause = 0.7, slot = 2, trocaSlot = true },
-    { nome = "Weapons_3_3", pause = 0.5, slot = 2, trocaSlot = true },
+    ["UniqueSets_2_1"] = { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3, slot = 1 },
+    ["UniqueSets_2_2"] = { nome = "UniqueSets_2_2", pause = 1, slot = 1 },
+    ["UniqueSets_2_3"] = { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1, slot = 1 },
+    ["Weapons_3_2"] = { nome = "Weapons_3_2", pause = 0.7, slot = 2 },
+    ["Weapons_3_3"] = { nome = "Weapons_3_3", pause = 0.5, slot = 2 },
 }
 
+local COMBOS = {
+    dps = { "UniqueSets_2_1", "UniqueSets_2_3", "UniqueSets_2_2", "Weapons_3_2", "Weapons_3_3" },
+    default = { "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3" },
+    kame = { "UniqueSets_2_1" },
+    spirit = { "UniqueSets_2_3" },
+    arma = { "Weapons_3_2", "Weapons_3_3" },
+    burst = { "UniqueSets_2_1", "UniqueSets_2_3" },
+}
+
+local comboIdx = 1
 local slotAtual = 1
 
 local BossTimers = {
@@ -85,7 +98,6 @@ local BossTimers = {
     _default = 180,
 }
 
--- [PATCH] Lista de keywords corrigida — sem "droid" e "atom"
 local BOSS_KEYWORDS = {
     "coolest","jinbu","turles","boku","apejaw","kataba",
     "yeti","opa","brolo","gero","nash","frieza","cell","buu","beerus",
@@ -208,11 +220,11 @@ local function usarSkill(skill, alvo)
     local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    if skill.trocaSlot and skill.slot and skill.slot ~= slotAtual then
+    if skill.slot and skill.slot ~= slotAtual then
         if ToolbarRemote then
             safe(function() ToolbarRemote:FireServer(skill.slot) end)
             slotAtual = skill.slot
-            task.wait(0.2)
+            task.wait(0.25)
         end
     end
 
@@ -916,14 +928,88 @@ local function criarLabel(parent, texto, altura)
     return lbl
 end
 
+local function criarDropdown(parent, texto, opcoes, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 40)
+    frame.BackgroundColor3 = P.elev
+    frame.BackgroundTransparency = 0.2
+    frame.BorderSizePixel = 0
+    frame.ClipsDescendants = false
+    frame.ZIndex = 2
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = texto .. ": " .. (opcoes[1] or "?")
+    btn.TextColor3 = P.text
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamMedium
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Parent = frame
+    local bPad = Instance.new("UIPadding") bPad.PaddingLeft = UDim.new(0, 12) bPad.Parent = btn
+
+    local lista = Instance.new("Frame")
+    lista.Size = UDim2.new(1, 0, 0, math.min(#opcoes * 26, 180))
+    lista.Position = UDim2.new(0, 0, 1, 4)
+    lista.BackgroundColor3 = P.panel
+    lista.BorderSizePixel = 0
+    lista.Visible = false
+    lista.ZIndex = 50
+    lista.Parent = frame
+    Instance.new("UICorner", lista).CornerRadius = UDim.new(0, 8)
+    Instance.new("UIStroke", {Color = P.stroke, Thickness = 1}, lista)
+
+    local lscroll = Instance.new("ScrollingFrame")
+    lscroll.Size = UDim2.new(1, 0, 1, 0)
+    lscroll.BackgroundTransparency = 1
+    lscroll.BorderSizePixel = 0
+    lscroll.ScrollBarThickness = 3
+    lscroll.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 26)
+    lscroll.Parent = lista
+    local ll = Instance.new("UIListLayout") ll.Parent = lscroll
+
+    for _, opt in ipairs(opcoes) do
+        local ob = Instance.new("TextButton")
+        ob.Size = UDim2.new(1, 0, 0, 26)
+        ob.BackgroundTransparency = 1
+        ob.Text = tostring(opt)
+        ob.TextColor3 = P.text
+        ob.TextSize = 11
+        ob.Font = Enum.Font.GothamMedium
+        ob.TextXAlignment = Enum.TextXAlignment.Left
+        ob.Parent = lscroll
+        local opad = Instance.new("UIPadding") opad.PaddingLeft = UDim.new(0, 12) opad.Parent = ob
+        ob.MouseButton1Click:Connect(function()
+            btn.Text = texto .. ": " .. tostring(opt)
+            lista.Visible = false
+            if callback then callback(opt) end
+        end)
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        lista.Visible = not lista.Visible
+    end)
+end
+
 -- [ABA FARM]
 local farmTab = criarAba("farm", "⚔ Farm")
 criarSecao(farmTab, "Farm")
 criarToggle(farmTab, "Auto Farm", false, function(v) Config.AutoFarm = v end)
 criarToggle(farmTab, "Auto Boss", false, function(v) Config.AutoBoss = v end)
-criarToggle(farmTab, "Auto Skills", false, function(v) Config.AutoSkills = v end)
 criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
 criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
+
+criarSecao(farmTab, "Auto Skills")
+criarDropdown(farmTab, "Modo", {"off", "single", "combo"}, function(v) Config.SkillMode = v end)
+criarDropdown(farmTab, "Skill Única", {
+    "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3"
+}, function(v) Config.SkillSingle = v end)
+criarDropdown(farmTab, "Combo", {
+    "dps", "default", "kame", "spirit", "arma", "burst"
+}, function(v) Config.SkillCombo = v end)
+
 criarSecao(farmTab, "Combate Avançado")
 criarToggle(farmTab, "Auto Lock-On", true, function(v) Config.AutoLock = v end)
 criarToggle(farmTab, "Noclip com farm", true, function(v) Config.Noclip = v end)
@@ -1247,7 +1333,7 @@ task.spawn(function()
     end
 end)
 
--- [AUTOCOLLECT — patch: só roda se farm desligado]
+-- [AUTOCOLLECT]
 task.spawn(function()
     while Ativo do
         task.wait(1)
@@ -1276,16 +1362,25 @@ task.spawn(function()
     end
 end)
 
--- [SKILLS]
+-- [SKILLS LOOP]
 task.spawn(function()
-    local idx = 1
     while Ativo and task.wait(Config.SkillDelay) do
-        if Config.AutoSkills and not emRegen then
+        if Config.SkillMode ~= "off" and not emRegen then
             local alvo = getAlvo()
             if alvo and alvo.Parent then
-                usarSkill(SKILLS[idx], alvo)
-                idx = idx + 1
-                if idx > #SKILLS then idx = 1 end
+                if Config.SkillMode == "single" then
+                    local sk = SKILLS[Config.SkillSingle]
+                    if sk then usarSkill(sk, alvo) end
+                elseif Config.SkillMode == "combo" then
+                    local lista = COMBOS[Config.SkillCombo]
+                    if lista and #lista > 0 then
+                        local nome = lista[comboIdx]
+                        comboIdx = comboIdx + 1
+                        if comboIdx > #lista then comboIdx = 1 end
+                        local sk = SKILLS[nome]
+                        if sk then usarSkill(sk, alvo) end
+                    end
+                end
             end
         end
     end
