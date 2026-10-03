@@ -1,9 +1,11 @@
+-- [CORE]
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
 local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
+local VIM = game:GetService("VirtualInputManager")
 local plr = Players.LocalPlayer
 
 local function safe(fn)
@@ -12,6 +14,7 @@ local function safe(fn)
     return ok
 end
 
+-- [REMOTES]
 local KnitSVC
 safe(function()
     local Knit = RS.Packages._Index["sleitnick_knit@1.4.7"].knit
@@ -24,10 +27,12 @@ local RequestRebirth       = KnitSVC and KnitSVC.PlayerLevelService and KnitSVC.
 local PromptRemote         = KnitSVC and KnitSVC.PromptService and KnitSVC.PromptService.RE.Prompt
 local SuperFlight          = KnitSVC and KnitSVC.FlightService and KnitSVC.FlightService.RE.SuperFlight
 local SelectMode           = KnitSVC and KnitSVC.ModeTransformService and KnitSVC.ModeTransformService.RE.SelectMode
+local ToolbarRemote        = KnitSVC and KnitSVC.ToolService and KnitSVC.ToolService.RE.UpdatePlayerToolbarSelection
 local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
 local Ativo = true
 
+-- [CONFIG]
 local Config = {
     AutoFarm = false,
     AutoBoss = false,
@@ -38,7 +43,6 @@ local Config = {
     RebirthMultiplier = 3,
     ESPMobs = false,
     ESPItems = false,
-    AutoCollect = false,
     AutoRegen = false,
     KiMin = 0.3,
     SafeHeight = 100,
@@ -46,12 +50,29 @@ local Config = {
     FlySpeed = 250,
     AttackRange = 8,
     SkillDelay = 1.5,
+    TrackerAuto = true,
+    BossSelecionado = nil,
 }
 
+-- [SKILLS - PATCH 03]
 local SKILLS = {
-    { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3 },
-    { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1 },
-    { nome = "UniqueSets_2_2", pause = 1 },
+    { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3, trocarSlot = 1 },
+    { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1, trocarSlot = 1 },
+    { nome = "UniqueSets_2_2", pause = 1, trocarSlot = 1 },
+    { nome = "Weapons_3_2", pause = 0.7, trocarSlot = 2 },
+    { nome = "Weapons_3_3", pause = 0.5, trocarSlot = 2 },
+}
+
+-- [BOSS TIMERS - PATCH 06]
+local BossTimers = {
+    Karrot = 299,
+    Zero = 59,
+    ["Brawly X01"] = 300,
+    Zaja = 600,
+    Destroyer = 600,
+    Puriza = 420,
+    ["Puriza Minion"] = 60,
+    _default = 180,
 }
 
 local BOSS_KEYWORDS = {
@@ -111,6 +132,7 @@ local function voarPara(destino, velocidade)
     end)
 end
 
+-- [ATACAR - preservado]
 local function atacar(alvo)
     if not SkillRemote or not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -139,11 +161,17 @@ local function atacar(alvo)
     end)
 end
 
+-- [USAR SKILL - PATCH 03]
 local function usarSkill(skill, alvo)
     if not ExecuteSkill or not alvo or not alvo.Parent then return end
     if not alvo:FindFirstChild("HumanoidRootPart") then return end
     local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
+
+    if skill.trocarSlot and ToolbarRemote then
+        safe(function() ToolbarRemote:FireServer(skill.trocarSlot) end)
+        task.wait(0.15)
+    end
 
     local tpos = alvo.HumanoidRootPart.Position
     safe(function() ExecuteSkill_Special:FireServer(plr.Name, skill.nome) end)
@@ -157,6 +185,7 @@ local function usarSkill(skill, alvo)
     safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, false) end)
 end
 
+-- [KI]
 local function getKi()
     local char = plr.Character
     if not char then return nil, nil end
@@ -168,6 +197,7 @@ local function getKi()
     return curr.Value, max.Value
 end
 
+-- [REGEN - PATCH 02]
 local function iniciarRegen()
     if emRegen then return end
     emRegen = true
@@ -196,10 +226,15 @@ local function iniciarRegen()
             task.wait(0.1)
         end
         bv.Velocity = Vector3.new(0, 0, 0)
+
+        pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.C, false, game) end)
+
         while emRegen and Ativo and hrp.Parent do
             hrp.CFrame = CFrame.new(posSegura)
             task.wait(0.2)
         end
+
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
         bv:Destroy()
     end)
 end
@@ -207,8 +242,10 @@ end
 local function pararRegen()
     if not emRegen then return end
     emRegen = false
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
 end
 
+-- [MOBS TRACKING]
 local mobs = {}
 local function registrarMob(mob)
     if not mob:IsA("Model") then return end
@@ -260,21 +297,7 @@ local function getAlvo()
     return closest
 end
 
-local function calcularRequisito(reb) return (reb * 3000000) + 2000000 end
-local function checarRebirth()
-    local stats = plr:FindFirstChild("Stats")
-    if not stats then return false, nil end
-    local reb = stats:FindFirstChild("Rebirth")
-    local str = stats:FindFirstChild("Strength")
-    local ki = stats:FindFirstChild("Ki")
-    if not reb or not str or not ki then return false, nil end
-    local r = reb.Value
-    local total = str.Value + ki.Value
-    local minimo = calcularRequisito(r)
-    local alvo = minimo * Config.RebirthMultiplier
-    return total >= alvo, { rebirth = r, total = total, minimo = minimo, alvo = alvo }
-end
-
+-- [ESP GUI]
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
 espGui.ResetOnSpawn = false
@@ -311,12 +334,34 @@ local function removerESP(mob)
     if espCache[mob] then espCache[mob]:Destroy(); espCache[mob] = nil end
 end
 
-local function getItemLabel(itemName)
-    if itemName:find("Wish") then return "💠 "..itemName, Color3.fromRGB(120, 200, 255)
-    elseif itemName:find("ExpMat") then return "📗 "..itemName, Color3.fromRGB(120, 220, 120)
-    elseif itemName:find("PowerScroll") then return "📜 "..itemName, Color3.fromRGB(255, 220, 100)
-    elseif itemName:find("Orb") then return "🔮 "..itemName, Color3.fromRGB(200, 120, 255)
-    else return "📦 "..itemName, Color3.fromRGB(220, 220, 220) end
+-- [ITEM LABEL - PATCH 01]
+local function getItemLabel(item)
+    local itemName = ""
+    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name") or item:FindFirstChild("ItemType")
+    if sv and sv:IsA("StringValue") then
+        itemName = sv.Value
+    end
+
+    if itemName == "" then
+        local sphere = item:FindFirstChild("Sphere.003") or item:FindFirstChildWhichIsA("MeshPart")
+        if sphere then itemName = sphere.Name end
+    end
+
+    if itemName == "" or itemName:find("ItemDrop_") then
+        itemName = item.Name
+    end
+
+    if itemName:find("Wish") or itemName:find("wish") then
+        return "💠 "..itemName, Color3.fromRGB(120, 200, 255)
+    elseif itemName:find("ExpMat") then
+        return "📗 "..itemName, Color3.fromRGB(120, 220, 120)
+    elseif itemName:find("PowerScroll") then
+        return "📜 "..itemName, Color3.fromRGB(255, 220, 100)
+    elseif itemName:find("Orb") then
+        return "🔮 "..itemName, Color3.fromRGB(200, 120, 255)
+    else
+        return "📦 "..itemName, Color3.fromRGB(220, 220, 220)
+    end
 end
 
 local function atualizarDropESP()
@@ -343,8 +388,7 @@ local function atualizarDropESP()
                         lbl.Font = Enum.Font.GothamBold
                         lbl.TextSize = 12
 
-                        local tipoItem = item:FindFirstChild("ItemName") and item.ItemName.Value or item.Name
-                        local txt, cor = getItemLabel(tipoItem)
+                        local txt, cor = getItemLabel(item)
                         lbl.Text = txt
                         lbl.TextColor3 = cor
 
@@ -359,6 +403,7 @@ local function atualizarDropESP()
     end
 end
 
+-- [UI]
 local oldGui = CoreGui:FindFirstChild("DragonBloxHub")
 if oldGui then oldGui:Destroy() end
 
@@ -673,6 +718,73 @@ local function criarLabel(parent, texto, altura)
     return lbl
 end
 
+local function criarDropdown(parent, texto, opcoes, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -8, 0, 40)
+    frame.BackgroundColor3 = COR.Botao
+    frame.BackgroundTransparency = 0.35
+    frame.BorderSizePixel = 0
+    frame.ClipsDescendants = false
+    frame.ZIndex = 2
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = texto .. ": " .. (opcoes[1] or "?")
+    btn.TextColor3 = COR.Texto
+    btn.TextSize = 12
+    btn.Font = Enum.Font.Gotham
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Parent = frame
+    local bPad = Instance.new("UIPadding") bPad.PaddingLeft = UDim.new(0, 12) bPad.Parent = btn
+
+    local lista = Instance.new("Frame")
+    lista.Size = UDim2.new(1, 0, 0, math.min(#opcoes * 28, 200))
+    lista.Position = UDim2.new(0, 0, 1, 4)
+    lista.BackgroundColor3 = COR.Painel
+    lista.BorderSizePixel = 0
+    lista.Visible = false
+    lista.ZIndex = 50
+    lista.Parent = frame
+    Instance.new("UICorner", lista).CornerRadius = UDim.new(0, 6)
+
+    local lscroll = Instance.new("ScrollingFrame")
+    lscroll.Size = UDim2.new(1, 0, 1, 0)
+    lscroll.BackgroundTransparency = 1
+    lscroll.BorderSizePixel = 0
+    lscroll.ScrollBarThickness = 3
+    lscroll.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 28)
+    lscroll.Parent = lista
+    local ll = Instance.new("UIListLayout") ll.Parent = lscroll
+
+    for _, opt in ipairs(opcoes) do
+        local ob = Instance.new("TextButton")
+        ob.Size = UDim2.new(1, 0, 0, 28)
+        ob.BackgroundTransparency = 1
+        ob.Text = tostring(opt)
+        ob.TextColor3 = COR.Texto
+        ob.TextSize = 12
+        ob.Font = Enum.Font.Gotham
+        ob.TextXAlignment = Enum.TextXAlignment.Left
+        ob.Parent = lscroll
+        local opad = Instance.new("UIPadding") opad.PaddingLeft = UDim.new(0, 12) opad.Parent = ob
+        ob.MouseButton1Click:Connect(function()
+            btn.Text = texto .. ": " .. tostring(opt)
+            lista.Visible = false
+            if callback then callback(opt) end
+        end)
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        lista.Visible = not lista.Visible
+    end)
+
+    return btn
+end
+
+-- [ABA FARM]
 local farmTab = criarAba("farm", "⚔️ Farm")
 
 criarSecao(farmTab, "Farm")
@@ -684,7 +796,7 @@ criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
 
 criarSecao(farmTab, "Visual")
 criarToggle(farmTab, "ESP Mobs", false, function(v) Config.ESPMobs = v end)
-criarToggle(farmTab, "ESP Itens (drops)", false, function(v) Config.ESPItems = v end)
+criarToggle(farmTab, "ESP Itens", false, function(v) Config.ESPItems = v end)
 
 criarSecao(farmTab, "Movimento")
 criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
@@ -695,54 +807,165 @@ criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     end
 end)
 
+-- [ABA REBIRTH - PATCH 04]
 local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
 
 criarSecao(rebirthTab, "Auto Rebirth")
-criarToggle(rebirthTab, "Ativar", false, function(v)
-    Config.AutoRebirth = v
-    if not v then return end
-    task.spawn(function()
-        while Ativo and Config.AutoRebirth do
-            local pronto = checarRebirth()
-            if pronto and RequestRebirth then
-                safe(function()
-                    if PromptRemote then
-                        PromptRemote:FireServer({
-                            UniqueTag = "HudRebirth",
-                            Prompt = "HudRebirth",
-                            MiddleButton = "Confirm",
-                            RightButton = "Cancel",
-                        }, "Confirm")
-                    end
-                end)
-                task.wait(0.5)
-                safe(function() RequestRebirth:InvokeServer(true) end)
-                task.wait(8)
-            end
-            task.wait(10)
-        end
-    end)
-end)
-
+criarToggle(rebirthTab, "Ativar", false, function(v) Config.AutoRebirth = v end)
 criarSlider(rebirthTab, "Acumular (x requisito)", 1, 10, 3, 1, function(v) Config.RebirthMultiplier = v end)
-criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
+criarBotao(rebirthTab, "🔄 Forçar Rebirth", function()
     if RequestRebirth then safe(function() RequestRebirth:InvokeServer(true) end) end
 end)
 
-local infoRebirth = criarLabel(rebirthTab, "Rebirth: --\nStats: --\nAlvo: --", 80)
+local infoRebirth = criarLabel(rebirthTab, "Aguardando...", 80)
 
 task.spawn(function()
     while Ativo do
-        local _, info = checarRebirth()
-        if info then
-            infoRebirth.Text = "Rebirth: " .. info.rebirth ..
-                "\nSeus stats: " .. info.total ..
-                "\nAlvo (" .. Config.RebirthMultiplier .. "x): " .. info.alvo
+        task.wait(5)
+        local stats = plr:FindFirstChild("Stats")
+        if stats then
+            local reb = stats:FindFirstChild("Rebirth")
+            local str = stats:FindFirstChild("Strength")
+            local ki = stats:FindFirstChild("Ki")
+            local endur = stats:FindFirstChild("Endurance")
+            local agi = stats:FindFirstChild("Agility")
+
+            if reb and str and ki then
+                local total = str.Value + ki.Value
+                    + (endur and endur.Value or 0)
+                    + (agi and agi.Value or 0)
+                local minimo = (reb.Value * 3000000) + 2000000
+                local alvo = minimo * Config.RebirthMultiplier
+
+                infoRebirth.Text = string.format(
+                    "Rebirth: %d\nTotal: %s\nAlvo: %s\n%s",
+                    reb.Value,
+                    tostring(math.floor(total)),
+                    tostring(math.floor(alvo)),
+                    total >= alvo and "✅ Pronto!" or "⏳ Acumulando..."
+                )
+
+                if Config.AutoRebirth and total >= alvo then
+                    print("[DBH] 🎯 Auto Rebirth! Total=" .. math.floor(total))
+                    safe(function()
+                        if PromptRemote then
+                            PromptRemote:FireServer({
+                                UniqueTag = "HudRebirth",
+                                Title = "Rebirth " .. reb.Value .. " -> " .. (reb.Value + 1),
+                                LeftButton = "Details",
+                                MiddleButton = "Confirm",
+                                Prompt = "HudRebirth",
+                                RightButton = "Cancel",
+                                Description = "Confirm Rebirth?",
+                            }, "Confirm")
+                        end
+                    end)
+                    task.wait(0.5)
+                    safe(function()
+                        if RequestRebirth then RequestRebirth:InvokeServer(true) end
+                    end)
+                    task.wait(15)
+                end
+            end
         end
-        task.wait(3)
     end
 end)
 
+-- [ABA TRACKER - PATCH 06]
+local trackerTab = criarAba("tracker", "⏱ Tracker")
+
+local bossEstado = {}
+local bossVistos = {}
+
+criarSecao(trackerTab, "🎯 Detecção")
+criarToggle(trackerTab, "Auto-detectar bosses", true, function(v) Config.TrackerAuto = v end)
+
+criarSecao(trackerTab, "⏱ Timers Ativos")
+local timerLabel = criarLabel(trackerTab, "Nenhum boss em respawn.", 120)
+
+criarSecao(trackerTab, "✈ Voar até Boss")
+criarDropdown(trackerTab, "Boss", {
+    "(nenhum)", "Karrot", "Zero", "Brawly X01", "Zaja", "Destroyer", "Puriza", "Puriza Minion"
+}, function(opt)
+    Config.BossSelecionado = (opt == "(nenhum)") and nil or opt
+end)
+
+criarBotao(trackerTab, "✈️ Ir para o boss selecionado", function()
+    if not Config.BossSelecionado then return end
+    local wm = WS:FindFirstChild("World Mobs")
+    if not wm then return end
+    for _, pasta in ipairs(wm:GetChildren()) do
+        for _, mob in ipairs(pasta:GetChildren()) do
+            if mob:IsA("Model") and mob.Name:gsub("%-?%d+$", "") == Config.BossSelecionado then
+                local hrp = mob:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    voarPara(hrp.Position)
+                    return
+                end
+            end
+        end
+    end
+    print("[DBH] Boss "..Config.BossSelecionado.." não encontrado")
+end)
+
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if Config.TrackerAuto ~= false then
+            local wm = WS:FindFirstChild("World Mobs")
+            if wm then
+                local vivos = {}
+                for _, pasta in ipairs(wm:GetChildren()) do
+                    if pasta.Name == "Boss Mobs" or pasta.Name == "Event Mobs" then
+                        for _, mob in ipairs(pasta:GetChildren()) do
+                            if mob:IsA("Model") then
+                                local base = mob.Name:gsub("%-?%d+$", "")
+                                vivos[base] = true
+                                bossVistos[base] = true
+                            end
+                        end
+                    end
+                end
+                for nome in pairs(bossVistos) do
+                    if not vivos[nome] and not bossEstado[nome] then
+                        local tempo = BossTimers[nome] or BossTimers._default
+                        bossEstado[nome] = {morreuEm = os.clock(), respawnEm = tempo}
+                        bossVistos[nome] = nil
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        local agora = os.clock()
+        local linhas = {}
+        local total = 0
+        for nome, info in pairs(bossEstado) do
+            local passado = agora - info.morreuEm
+            local restante = info.respawnEm - passado
+            if restante > 0 then
+                local min = math.floor(restante / 60)
+                local seg = math.floor(restante % 60)
+                linhas[#linhas+1] = string.format("%-15s %d:%02d", nome, min, seg)
+                total = total + 1
+            else
+                bossEstado[nome] = nil
+            end
+        end
+        if total == 0 then
+            timerLabel.Text = "Nenhum boss em respawn."
+        else
+            table.sort(linhas)
+            timerLabel.Text = table.concat(linhas, "\n")
+        end
+    end
+end)
+
+-- [ABA CONFIG]
 local configTab = criarAba("config", "⚙️ Config")
 
 criarSecao(configTab, "Movimento")
@@ -767,6 +990,7 @@ criarBotao(configTab, "🔴 MATAR SCRIPT", function()
     espGui:Destroy()
 end)
 
+-- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ️ Sobre")
 
 criarSecao(sobreTab, "Criadores")
@@ -846,6 +1070,7 @@ UserInputService.InputChanged:Connect(function(input)
     end
 end)
 
+-- [LOOPS]
 task.spawn(function()
     while Ativo and task.wait(0.3) do
         if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
@@ -894,6 +1119,19 @@ task.spawn(function()
         if Config.AutoTransform and SelectMode then
             safe(function() SelectMode:FireServer(Config.TransformMode) end)
         end
+    end
+end)
+
+-- [AUTO TRANSFORM AO NASCER - PATCH 05]
+task.spawn(function()
+    while Ativo do
+        plr.CharacterAdded:Wait()
+        task.wait(3)
+        if Config.AutoTransform and SelectMode then
+            safe(function() SelectMode:FireServer(Config.TransformMode) end)
+            print("[DBH] 🔄 Transform aplicada pós-spawn")
+        end
+        task.wait(2)
     end
 end)
 
