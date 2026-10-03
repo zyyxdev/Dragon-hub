@@ -1,17 +1,15 @@
-print("[DUMPER v6.1] Iniciando...")
+print("[DUMPER v6.2] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local UIS = game:GetService("UserInputService")
+local HapticService = game:GetService("HapticService")
 local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
 local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
--- ═══════════════════════════════════════════════
--- ESTADO
--- ═══════════════════════════════════════════════
 local State = {
     sessao = "Sessao",
     capturando = false,
@@ -31,8 +29,8 @@ local State = {
     filtroLogCat = "todos",
 }
 
-local _hookFire = nil
-local _hookInvoke = nil
+local _nomecallOriginal = nil
+local _hookFireInst = nil
 local ultimoPath = {}
 local RATE_LIMIT = 0.15
 local MAX_UNICOS = 2000
@@ -50,6 +48,29 @@ end
 
 local function log(cat, msg)
     print(string.format("[DUMPER/%s] %s", cat, msg))
+end
+
+-- Feedback tátil (vibração + visual)
+local function haptic(tipo)
+    tipo = tipo or "sucesso"
+    -- Vibração mobile (se disponível)
+    pcall(function()
+        if HapticService:IsMotorSupported(Enum.UserInputType.Touch, Enum.VibrationMotor.Small) then
+            HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 0.4)
+            task.delay(0.08, function()
+                HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 0)
+            end)
+        end
+    end)
+    -- Vibração longa pra erro
+    if tipo == "erro" then
+        pcall(function()
+            HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0.7)
+            task.delay(0.15, function()
+                HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0)
+            end)
+        end)
+    end
 end
 
 -- ═══════════════════════════════════════════════
@@ -103,9 +124,6 @@ local CAT_INFO = {
     OTHER     = { icone = "❔", cor = "9A9AA0", nome = "Outros" },
 }
 
--- ═══════════════════════════════════════════════
--- SERIALIZAR
--- ═══════════════════════════════════════════════
 local function ser(v, d)
     d = d or 0
     if d > 2 then return "..." end
@@ -130,9 +148,6 @@ local function ser(v, d)
     return "["..t.."] "..tostring(v)
 end
 
--- ═══════════════════════════════════════════════
--- ADICIONAR TRAFEGO
--- ═══════════════════════════════════════════════
 local function addTrafego(cat, path, args)
     State.contadorBruto = State.contadorBruto + 1
     if cat == "EVENT" and (args == "" or args == nil) then return end
@@ -194,55 +209,63 @@ local function processarChamada(self, ...)
 end
 
 -- ═══════════════════════════════════════════════
--- HOOK
+-- HOOK — hookmetamethod (ÚNICO que funciona no Delta)
 -- ═══════════════════════════════════════════════
 local function instalarHook()
     if State.hookAtivo then return end
-    if not hookfunction then
-        State.hookMetodo = "SEM-HOOKFUNCTION"
-        log("ERROR", "Executor sem hookfunction")
-        return
+
+    if hookmetamethod and getnamecallmethod then
+        local ok = pcall(function()
+            _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
+                local metodo = getnamecallmethod()
+                if metodo == "FireServer" or metodo == "InvokeServer" or metodo == "Fire" then
+                    if State.capturando then
+                        pcall(processarChamada, self, ...)
+                    end
+                end
+                return _nomecallOriginal(self, ...)
+            end)
+        end)
+        if ok and _nomecallOriginal then
+            State.hookAtivo = true
+            State.hookMetodo = "hookmetamethod"
+            log("SUCCESS", "✅ Hook __namecall ativo")
+            print("[DUMPER] ✅ Hook ativo (hookmetamethod)")
+            return
+        end
     end
 
-    local re = Instance.new("RemoteEvent")
-    local rf = Instance.new("RemoteFunction")
-    local okFire, okInv = false, false
-
-    pcall(function()
-        _hookFire = hookfunction(re.FireServer, function(self, ...)
-            pcall(processarChamada, self, ...)
-            return _hookFire(self, ...)
-        end)
-        okFire = true
-    end)
-
-    pcall(function()
-        _hookInvoke = hookfunction(rf.InvokeServer, function(self, ...)
-            pcall(processarChamada, self, ...)
-            return _hookInvoke(self, ...)
-        end)
-        okInv = true
-    end)
-
-    if okFire or okInv then
-        State.hookAtivo = true
-        State.hookMetodo = "hookfunction"
-        log("SUCCESS", "✅ Hook ativo (Fire="..tostring(okFire).." Invoke="..tostring(okInv)..")")
-    else
-        State.hookMetodo = "FALHOU"
-        log("ERROR", "❌ Hook falhou")
+    -- Fallback: hookfunction em remote específico
+    if hookfunction then
+        print("[DUMPER] ⚠ hookmetamethod falhou, tentando fallback...")
+        local rem = RS:FindFirstChild("Remotes")
+        local alvo = rem and rem:FindFirstChild("SkillRemote")
+        if alvo then
+            local ok = pcall(function()
+                _hookFireInst = hookfunction(alvo.FireServer, function(self, ...)
+                    pcall(processarChamada, self, ...)
+                    return _hookFireInst(self, ...)
+                end)
+            end)
+            if ok and _hookFireInst then
+                State.hookAtivo = true
+                State.hookMetodo = "hookfunction-1remote"
+                log("SUCCESS", "✅ Hook em SkillRemote")
+                return
+            end
+        end
     end
+
+    State.hookMetodo = "FALHOU"
+    log("ERROR", "❌ Nenhum método de hook funcionou")
 end
 
 local function removerHook()
-    if _hookFire and hookfunction then
-        pcall(function() hookfunction(Instance.new("RemoteEvent").FireServer, _hookFire) end)
-        _hookFire = nil
+    if _nomecallOriginal and hookmetamethod then
+        pcall(function() hookmetamethod(game, "__namecall", _nomecallOriginal) end)
+        _nomecallOriginal = nil
     end
-    if _hookInvoke and hookfunction then
-        pcall(function() hookfunction(Instance.new("RemoteFunction").InvokeServer, _hookInvoke) end)
-        _hookInvoke = nil
-    end
+    _hookFireInst = nil
     State.hookAtivo = false
 end
 
@@ -250,26 +273,15 @@ end
 -- DIAGNÓSTICO
 -- ═══════════════════════════════════════════════
 local function diagnostico()
-    log("INFO", "════════ DIAGNÓSTICO ════════")
     log("INFO", "Executor: "..tostring(identifyexecutor and identifyexecutor() or "?"))
-    log("INFO", "hookfunction: "..tostring(hookfunction ~= nil))
     log("INFO", "hookmetamethod: "..tostring(hookmetamethod ~= nil))
-    log("INFO", "Hook instalado: "..tostring(State.hookAtivo))
-    log("INFO", "Método: "..State.hookMetodo)
-    local rem = RS:FindFirstChild("Remotes")
-    if rem then
-        local lista = {}
-        for _, c in ipairs(rem:GetChildren()) do
-            if c:IsA("RemoteEvent") or c:IsA("RemoteFunction") then
-                table.insert(lista, c.Name.." ("..c.ClassName..")")
-            end
-        end
-        log("INFO", "Remotes em RS.Remotes ("..#lista.."): "..table.concat(lista, ", "))
-    end
+    log("INFO", "getnamecallmethod: "..tostring(getnamecallmethod ~= nil))
+    log("INFO", "hookfunction: "..tostring(hookfunction ~= nil))
+    log("INFO", "Hook: "..tostring(State.hookAtivo).." ("..State.hookMetodo..")")
 end
 
 -- ═══════════════════════════════════════════════
--- SCANNER WORKSPACE
+-- SCANNER WORKSPACE (filtra Dashing e efeitos)
 -- ═══════════════════════════════════════════════
 task.spawn(function()
     local conhecidos = {}
@@ -297,7 +309,14 @@ task.spawn(function()
 
             if ps and State.filtros.drops then
                 for _, obj in ipairs(ps:GetChildren()) do
-                    if not conhecidos[obj] and obj:IsA("Model") then
+                    -- FILTRA Dashing e outros efeitos
+                    local nome = obj.Name
+                    local ehDrop = nome:find("ItemDrop_")
+                        or nome:lower():find("wish")
+                        or nome:lower():find("orb")
+                        or nome:lower():find("sphere")
+                        or nome:lower():find("esfera")
+                    if ehDrop and not conhecidos[obj] and obj:IsA("Model") then
                         conhecidos[obj] = true
                         local base = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
                         if base then
@@ -323,10 +342,6 @@ task.spawn(function()
                     end
                 end
             end
-
-            if #State.trfBuf > MAX_UNICOS * 0.8 then
-                State.nomesCache = {}
-            end
         end
     end
 end)
@@ -336,7 +351,7 @@ end)
 -- ═══════════════════════════════════════════════
 local function scanArquitetural()
     State.arquitetural = {}
-    log("INFO", "Scan arquitetural iniciado...")
+    log("INFO", "Scan iniciado...")
     task.spawn(function()
         local t0 = os.clock()
         local total = 0
@@ -349,14 +364,10 @@ local function scanArquitetural()
                 local cls = c.ClassName
                 if cls == "RemoteEvent" or cls == "RemoteFunction"
                 or cls == "UnreliableRemoteEvent" then
-                    table.insert(State.arquitetural, {
-                        tipo = "REMOTE", cls = cls, path = path.."."..c.Name
-                    })
+                    table.insert(State.arquitetural, { tipo = "REMOTE", cls = cls, path = path.."."..c.Name })
                     total = total + 1
                 elseif cls == "ModuleScript" then
-                    table.insert(State.arquitetural, {
-                        tipo = "MODULE", cls = cls, path = path.."."..c.Name
-                    })
+                    table.insert(State.arquitetural, { tipo = "MODULE", cls = cls, path = path.."."..c.Name })
                     total = total + 1
                 end
                 if cls == "Folder" or cls == "Model" then
@@ -370,14 +381,14 @@ local function scanArquitetural()
 end
 
 -- ═══════════════════════════════════════════════
--- SALVAR (estrutura organizada)
+-- SALVAR
 -- ═══════════════════════════════════════════════
 local function salvarArquivo()
     local L = {}
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v6.1 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v6.2 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -401,7 +412,6 @@ local function salvarArquivo()
     add("╔══════════════════════════════════════════════════════╗")
     add("║              📡 TRÁFEGO CAPTURADO                    ║")
     add("╚══════════════════════════════════════════════════════╝")
-    add("")
 
     local ordem = {"DUNGEON","M1","SKILL","DROP","BOSS","SWORD_ORB",
                    "TOOLBAR","REBIRTH","LOCK","EVENT","OTHER"}
@@ -438,27 +448,20 @@ local function salvarArquivo()
 
         local remotes, modules = {}, {}
         for _, item in ipairs(State.arquitetural) do
-            if item.tipo == "REMOTE" then
-                table.insert(remotes, item)
-            else
-                table.insert(modules, item)
-            end
+            if item.tipo == "REMOTE" then table.insert(remotes, item)
+            else table.insert(modules, item) end
         end
 
         if #remotes > 0 then
             add("┏━━ 📡 REMOTES ── "..#remotes.." ━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-            for _, r in ipairs(remotes) do
-                add("┃ ["..r.cls.."] "..r.path)
-            end
+            for _, r in ipairs(remotes) do add("┃ ["..r.cls.."] "..r.path) end
             add("┗"..string.rep("━", 54).."┛")
             add("")
         end
 
         if #modules > 0 then
             add("┏━━ 📦 MODULES ── "..#modules.." ━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-            for _, m in ipairs(modules) do
-                add("┃ "..m.path)
-            end
+            for _, m in ipairs(modules) do add("┃ "..m.path) end
             add("┗"..string.rep("━", 54).."┛")
         end
     end
@@ -473,10 +476,11 @@ local function salvarArquivo()
     local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
     if ok then
         log("SUCCESS", "Salvo: "..nome.." ("..#conteudo.."b)")
-        return
+        return true
     end
     pcall(function() setclipboard(conteudo) end)
     log("SUCCESS", "Clipboard ("..#conteudo.."b)")
+    return true
 end
 
 -- ═══════════════════════════════════════════════
@@ -515,13 +519,11 @@ local T = {
 local function safeUI(fn)
     return function(...)
         local ok, err = pcall(fn, ...)
-        if not ok then
-            print("[DUMPER/UI-ERRO] "..tostring(err))
-        end
+        if not ok then print("[DUMPER/UI-ERRO] "..tostring(err)) end
     end
 end
 
--- [OTIMIZAÇÃO] escala responsiva mobile
+-- Responsivo
 local viewport = workspace.CurrentCamera.ViewportSize
 local W = math.min(420, viewport.X * 0.92)
 local H = math.min(520, viewport.Y * 0.85)
@@ -533,6 +535,7 @@ main.BackgroundColor3 = T.bg
 main.BackgroundTransparency = 0.08
 main.BorderSizePixel = 0
 main.Active = true
+main.Visible = false
 main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
 local mStroke = Instance.new("UIStroke", main)
@@ -540,7 +543,60 @@ mStroke.Color = T.border
 mStroke.Thickness = 1
 mStroke.Transparency = 0.4
 
--- HEADER
+-- ═══ HOME BAR (estilo iPhone) ═══
+local homeBar = Instance.new("TextButton")
+homeBar.Size = UDim2.new(0, 160, 0, 26)
+homeBar.Position = UDim2.new(0.5, -80, 1, -34)
+homeBar.BackgroundColor3 = T.bg
+homeBar.BackgroundTransparency = 0.5
+homeBar.BorderSizePixel = 0
+homeBar.Text = ""
+homeBar.AutoButtonColor = false
+homeBar.Active = true
+homeBar.ZIndex = 100
+homeBar.Parent = gui
+Instance.new("UICorner", homeBar).CornerRadius = UDim.new(1, 0)
+local hbStroke = Instance.new("UIStroke", homeBar)
+hbStroke.Color = T.accent
+hbStroke.Thickness = 1
+hbStroke.Transparency = 0.5
+
+local hbBar = Instance.new("Frame")
+hbBar.Size = UDim2.new(0, 120, 0, 5)
+hbBar.Position = UDim2.new(0.5, -60, 0.5, -2.5)
+hbBar.BackgroundColor3 = T.accent
+hbBar.BackgroundTransparency = 0.1
+hbBar.BorderSizePixel = 0
+hbBar.Parent = homeBar
+Instance.new("UICorner", hbBar).CornerRadius = UDim.new(1, 0)
+
+-- Pulse visual
+local function pulsarHomeBar()
+    local tw = game:GetService("TweenService")
+    tw:Create(hbBar, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
+        BackgroundTransparency = 0.6
+    }):Play()
+    task.delay(0.15, function()
+        tw:Create(hbBar, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+            BackgroundTransparency = 0.1
+        }):Play()
+    end)
+end
+
+homeBar.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
+    pulsarHomeBar()
+    main.Visible = not main.Visible
+    if main.Visible then
+        main.Size = UDim2.new(0, W * 0.95, 0, H * 0.95)
+        game:GetService("TweenService"):Create(main,
+            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { Size = UDim2.new(0, W, 0, H) }
+        ):Play()
+    end
+end))
+
+-- ═══ HEADER ═══
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 42)
 header.BackgroundTransparency = 1
@@ -602,7 +658,7 @@ btnKill.AutoButtonColor = false
 btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 6)
 
--- SIDEBAR
+-- ═══ SIDEBAR ═══
 local sidebar = Instance.new("Frame")
 sidebar.Size = UDim2.new(0, 118, 1, -78)
 sidebar.Position = UDim2.new(0, 12, 0, 50)
@@ -639,8 +695,6 @@ local function criarItemSidebar(id, icone, nome, subtituloFn)
     ic.BackgroundTransparency = 1
     ic.Text = icone
     ic.TextSize = 16
-    ic.TextColor3 = T.text
-    ic.Font = Enum.Font.GothamBold
     ic.Parent = btn
 
     local nm = Instance.new("TextLabel")
@@ -668,6 +722,7 @@ local function criarItemSidebar(id, icone, nome, subtituloFn)
     sidebarItens[id] = { btn = btn, sub = sub, subFn = subtituloFn }
 
     btn.MouseButton1Click:Connect(safeUI(function()
+        haptic("sucesso")
         State.catAtiva = id
         atualizarSidebar()
         atualizarConteudo()
@@ -676,7 +731,7 @@ local function criarItemSidebar(id, icone, nome, subtituloFn)
     return btn
 end
 
--- CONTEÚDO
+-- ═══ CONTEÚDO ═══
 local content = Instance.new("Frame")
 content.Size = UDim2.new(1, -142, 1, -78)
 content.Position = UDim2.new(0, 130, 0, 50)
@@ -845,6 +900,7 @@ local function criarFiltro(icone, nome, descricao, key)
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
     f.MouseButton1Click:Connect(safeUI(function()
+        haptic("sucesso")
         State.filtros[key] = not State.filtros[key]
         local ativo = State.filtros[key]
         f.BackgroundColor3 = ativo and T.elevHover or T.elev
@@ -862,7 +918,7 @@ criarFiltro("🎒", "Toolbar", "Troca de slots", "toolbar")
 criarFiltro("🔄", "Rebirth", "Prompt + RequestRebirth", "rebirth")
 criarFiltro("🔊", "Ruído", "⚠ Loga TUDO (pode lagar)", "ruido")
 
--- Painel LOGS
+-- Painel LOGS (corrigido: tabs quebram linha)
 local painelLogs = Instance.new("Frame")
 painelLogs.Size = UDim2.new(1, 0, 1, 0)
 painelLogs.BackgroundTransparency = 1
@@ -870,18 +926,20 @@ painelLogs.Visible = false
 painelLogs.Parent = content
 
 local logTabs = Instance.new("Frame")
-logTabs.Size = UDim2.new(1, -24, 0, 28)
+logTabs.Size = UDim2.new(1, -24, 0, 60)
 logTabs.Position = UDim2.new(0, 12, 0, 12)
 logTabs.BackgroundTransparency = 1
 logTabs.Parent = painelLogs
 local ltLayout = Instance.new("UIListLayout", logTabs)
 ltLayout.FillDirection = Enum.FillDirection.Horizontal
 ltLayout.Padding = UDim.new(0, 4)
+ltLayout.Wraps = true               -- QUEBRA LINHA
+ltLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
 
 local filtroLogBtns = {}
 local function criarTabLog(cat, label)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 58, 1, 0)
+    b.Size = UDim2.new(0, 52, 0, 26)  -- menor pra caber
     b.BackgroundColor3 = T.elev
     b.BackgroundTransparency = 0.3
     b.Text = label
@@ -894,6 +952,7 @@ local function criarTabLog(cat, label)
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
     filtroLogBtns[cat] = b
     b.MouseButton1Click:Connect(safeUI(function()
+        haptic("sucesso")
         State.filtroLogCat = cat
         for c, bt in pairs(filtroLogBtns) do
             bt.BackgroundColor3 = (c == cat) and T.accent2 or T.elev
@@ -903,15 +962,15 @@ local function criarTabLog(cat, label)
 end
 
 criarTabLog("todos", "todos")
-criarTabLog("DUNGEON", "dung")
+criarTabLog("DUNGEON", "dungeon")
 criarTabLog("SKILL", "skill")
 criarTabLog("DROP", "drop")
 criarTabLog("BOSS", "boss")
 criarTabLog("M1", "m1")
 
 local logsScroll = Instance.new("ScrollingFrame")
-logsScroll.Size = UDim2.new(1, -24, 1, -54)
-logsScroll.Position = UDim2.new(0, 12, 0, 46)
+logsScroll.Size = UDim2.new(1, -24, 1, -86)
+logsScroll.Position = UDim2.new(0, 12, 0, 78)
 logsScroll.BackgroundColor3 = T.bg
 logsScroll.BackgroundTransparency = 0.5
 logsScroll.BorderSizePixel = 0
@@ -939,14 +998,14 @@ logsText.RichText = true
 logsText.Text = ""
 logsText.Parent = logsScroll
 
--- Painel ARQUIVO
+-- Painel ARQUIVO (com feedback tátil)
 local painelArquivo = Instance.new("Frame")
 painelArquivo.Size = UDim2.new(1, 0, 1, 0)
 painelArquivo.BackgroundTransparency = 1
 painelArquivo.Visible = false
 painelArquivo.Parent = content
 
-local function mkBotaoAcao(y, icone, nome, desc, cor, cb)
+local function mkBotaoAcao(y, icone, nome, desc, cor, corFeedback, cb)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(1, -24, 0, 54)
     b.Position = UDim2.new(0, 12, 0, y)
@@ -988,19 +1047,30 @@ local function mkBotaoAcao(y, icone, nome, desc, cor, cb)
     ds.TextXAlignment = Enum.TextXAlignment.Left
     ds.Parent = b
 
-    b.MouseButton1Click:Connect(safeUI(cb))
+    local origCor = T.elev
+    b.MouseButton1Click:Connect(safeUI(function()
+        haptic("sucesso")
+        -- Feedback visual (pisca)
+        local tw = game:GetService("TweenService")
+        tw:Create(b, TweenInfo.new(0.08), { BackgroundColor3 = corFeedback }):Play()
+        task.delay(0.15, function()
+            tw:Create(b, TweenInfo.new(0.3), { BackgroundColor3 = origCor }):Play()
+        end)
+        if cb then cb() end
+    end))
 end
 
-mkBotaoAcao(12, "📁", "Scan Arquitetural", "Mapeia todos os remotes e modules", T.info, function()
+mkBotaoAcao(12, "📁", "Scan Arquitetural", "Mapeia remotes e modules", T.info, T.info, function()
     scanArquitetural()
 end)
 
-mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt com estrutura organizada", T.accent, function()
+mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt organizado", T.accent, T.success, function()
     State.sessao = inputSessao.Text ~= "" and inputSessao.Text or State.sessao
-    salvarArquivo()
+    local ok = salvarArquivo()
+    if not ok then haptic("erro") end
 end)
 
-mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego e arquitetural", T.warn, function()
+mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego capturado", T.warn, T.warn, function()
     State.trfBuf = {}
     State.unicos = {}
     State.arquitetural = {}
@@ -1021,7 +1091,7 @@ diagText.Size = UDim2.new(1, -24, 1, -80)
 diagText.Position = UDim2.new(0, 12, 0, 12)
 diagText.BackgroundColor3 = T.bg
 diagText.BackgroundTransparency = 0.5
-diagText.Text = "Clique em 'Rodar diagnóstico' abaixo."
+diagText.Text = "Toque em 'Rodar diagnóstico'."
 diagText.TextColor3 = T.text
 diagText.Font = Enum.Font.Code
 diagText.TextSize = 10
@@ -1101,7 +1171,6 @@ criarItemSidebar("diag", "🩺", "Diagnóstico", function()
     return State.hookAtivo and "hook ok" or "sem hook"
 end)
 
--- ATUALIZAR SIDEBAR
 function atualizarSidebar()
     for id, item in pairs(sidebarItens) do
         local ativo = (State.catAtiva == id)
@@ -1113,7 +1182,6 @@ function atualizarSidebar()
     end
 end
 
--- ATUALIZAR CONTEÚDO
 function atualizarConteudo()
     painelCaptura.Visible = (State.catAtiva == "captura")
     painelFiltros.Visible = (State.catAtiva == "filtros")
@@ -1122,7 +1190,6 @@ function atualizarConteudo()
     painelDiag.Visible = (State.catAtiva == "diag")
 end
 
--- BTN CAPTURAR
 local function atualizarBtnCap()
     if State.capturando then
         btnCap.BackgroundColor3 = T.danger
@@ -1141,6 +1208,7 @@ local function atualizarBtnCap()
 end
 
 btnCap.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
     State.sessao = inputSessao.Text ~= "" and inputSessao.Text or State.sessao
     State.capturando = not State.capturando
     if State.capturando then
@@ -1156,21 +1224,25 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
 end))
 
 btnMin.MouseButton1Click:Connect(safeUI(function()
-    main.Visible = not main.Visible
+    haptic("sucesso")
+    main.Visible = false
 end))
 
 btnKill.MouseButton1Click:Connect(safeUI(function()
+    haptic("erro")
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v6.1] Encerrado")
+    print("[DUMPER v6.2] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
     local info = {}
     table.insert(info, "Executor:  "..tostring(identifyexecutor and identifyexecutor() or "?"))
-    table.insert(info, "hookfunction:     "..tostring(hookfunction ~= nil))
     table.insert(info, "hookmetamethod:   "..tostring(hookmetamethod ~= nil))
+    table.insert(info, "getnamecallmethod: "..tostring(getnamecallmethod ~= nil))
+    table.insert(info, "hookfunction:     "..tostring(hookfunction ~= nil))
     table.insert(info, "Hook instalado:   "..tostring(State.hookAtivo))
     table.insert(info, "Método:           "..State.hookMetodo)
     table.insert(info, "PlaceId:          "..game.PlaceId)
@@ -1191,6 +1263,7 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
 end))
 
 btnTeste.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
     local rem = RS:FindFirstChild("Remotes")
     if not rem then return end
     local sr = rem:FindFirstChild("SkillRemote")
@@ -1233,22 +1306,23 @@ UIS.InputEnded:Connect(function(i)
     end
 end)
 
--- [OTIMIZAÇÃO] só re-renderiza quando muda algo
+-- Loop otimizado
 local _ultimoCount = -1
 local _ultimaCat = nil
 
 task.spawn(function()
     while gui.Parent do
         task.wait(0.7)
-
-        -- Pula se nada mudou
         if #State.trfBuf == _ultimoCount and State.catAtiva == _ultimaCat then
+            -- Atualiza só footer mesmo sem mudança
+            footTxt.Text = string.format(
+                "%d bruto • %d únicos • %s",
+                State.contadorBruto, #State.trfBuf, State.hookMetodo)
             continue
         end
         _ultimoCount = #State.trfBuf
         _ultimaCat = State.catAtiva
 
-        -- Feed: só renderiza se visível
         if painelCaptura.Visible then
             local linhas = {}
             local ini = math.max(1, #State.trfBuf - 12)
@@ -1266,7 +1340,6 @@ task.spawn(function()
             feedScroll.CanvasSize = UDim2.new(0, 0, 0, feedText.TextBounds.Y + 20)
         end
 
-        -- Logs: só renderiza se visível
         if painelLogs.Visible then
             local linhasL = {}
             local filtro = State.filtroLogCat
@@ -1287,7 +1360,6 @@ task.spawn(function()
             logsScroll.CanvasSize = UDim2.new(0, 0, 0, logsText.TextBounds.Y + 20)
         end
 
-        -- Footer + sidebar
         footTxt.Text = string.format(
             "%d bruto • %d únicos • %s",
             State.contadorBruto, #State.trfBuf, State.hookMetodo)
@@ -1297,6 +1369,7 @@ end)
 
 atualizarSidebar()
 atualizarConteudo()
+main.Visible = true  -- abre visível na primeira vez
 
-print("[DUMPER v6.1] ✅ Pronto")
-print("[DUMPER] Captura → INICIAR | ações no jogo | PARAR | Arquivo → SALVAR")
+print("[DUMPER v6.2] ✅ Pronto")
+print("[DUMPER] HomeBar na parte inferior alterna UI. Hook: hookmetamethod.")
