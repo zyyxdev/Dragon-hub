@@ -136,40 +136,44 @@ local function lockOn(mobModel)
     end)
 end
 
--- [VOO]
+-- [VOO - PATCH 16: reutiliza BodyMovers, voo suave]
+local vooBv, vooBg
 local function voarPara(destino, velocidade)
     local myChar = plr.Character
-    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
-    local hrp = myChar.HumanoidRootPart
+    if not myChar then return end
+    local hrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
     velocidade = velocidade or Config.FlySpeed
 
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    bv.Velocity = Vector3.new(0, 0, 0)
-    bv.Parent = hrp
+    if not vooBv or vooBv.Parent ~= hrp then
+        vooBv = Instance.new("BodyVelocity")
+        vooBv.Name = "__dbh_v"
+        vooBv.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+        vooBv.P = 1250
+        vooBv.Parent = hrp
+    end
+    if not vooBg or vooBg.Parent ~= hrp then
+        vooBg = Instance.new("BodyGyro")
+        vooBg.Name = "__dbh_g"
+        vooBg.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
+        vooBg.P = 3000
+        vooBg.D = 100
+        vooBg.Parent = hrp
+    end
 
-    local bg = Instance.new("BodyGyro")
-    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-    bg.P = 9e4
-    bg.CFrame = hrp.CFrame
-    bg.Parent = hrp
+    local dir = destino - hrp.Position
+    local dist = dir.Magnitude
 
-    task.spawn(function()
-        local t = 0
-        while t < 20 and Ativo and hrp.Parent do
-            local dir = destino - hrp.Position
-            if dir.Magnitude < 15 then break end
-            bv.Velocity = dir.Unit * velocidade
-            bg.CFrame = CFrame.new(hrp.Position, destino)
-            t = t + 0.1
-            task.wait(0.1)
-        end
-        bv:Destroy()
-        bg:Destroy()
-    end)
+    local spd
+    if dist > 30 then spd = velocidade
+    elseif dist > 10 then spd = velocidade * 0.5
+    else spd = velocidade * 0.2 end
+
+    vooBv.Velocity = dir.Unit * spd
+    vooBg.CFrame = CFrame.new(hrp.Position, destino)
 end
 
--- [M1 - PATCH 10: sem teleporte]
+-- [M1 - PATCH 17: não sobrescreve CFrame]
 local function atacar(alvo)
     if not SkillRemote or not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -177,11 +181,9 @@ local function atacar(alvo)
     if not hrp then return end
 
     local mhrp = alvo.HumanoidRootPart
-    hrp.CFrame = CFrame.lookAt(hrp.Position, mhrp.Position)
-
     local cframe = hrp.CFrame
     local aim = mhrp.Position
-    local camCF = workspace.CurrentCamera.CFrame
+    local camCF = CFrame.lookAt(hrp.Position, aim)
 
     safe(function()
         SkillRemote:FireServer({
@@ -337,7 +339,7 @@ local function getAlvo()
     return closest
 end
 
--- [HITBOX EXPANDIDA - PATCH 13]
+-- [HITBOX]
 local function expandirHitbox()
     if not Config.HitboxExpandida then return end
     local wm = WS:FindFirstChild("World Mobs")
@@ -362,7 +364,40 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT - PATCH 14]
+-- [AUTOCOLLECT - PATCH 18: pega automaticamente]
+local function pegarItem(item)
+    local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+    if not base then return end
+
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    -- Cola em cima do item
+    hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
+
+    -- Segura E por 0.5s
+    task.wait(0.2)
+    pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
+    task.wait(0.5)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+
+    -- Fallback: toque no centro
+    task.wait(0.2)
+    local cam = workspace.CurrentCamera
+    if cam then
+        local vp = cam.ViewportSize
+        pcall(function()
+            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0)
+        end)
+        task.wait(0.1)
+        pcall(function()
+            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0)
+        end)
+    end
+end
+
 local coletando = false
 local function tentarColetar()
     if coletando then return end
@@ -387,8 +422,10 @@ local function tentarColetar()
 
                 if podeColetar then
                     coletando = true
-                    voarPara(base.Position, Config.FlySpeed * 1.2)
-                    task.wait(1.5)
+                    voarPara(base.Position, Config.FlySpeed)
+                    task.wait(1)
+                    pegarItem(item)
+                    task.wait(0.5)
                     coletando = false
                     return
                 end
@@ -516,7 +553,6 @@ local P = {
     off         = Color3.fromRGB(45, 45, 55),
 }
 
--- [PATCH 15: home bar clicável]
 local homeBar = Instance.new("TextButton")
 homeBar.Size = UDim2.new(0, 200, 0, 30)
 homeBar.Position = UDim2.new(0.5, 0, 1, -8)
@@ -539,7 +575,6 @@ barVisual.ZIndex = 51
 barVisual.Active = false
 Instance.new("UICorner", barVisual).CornerRadius = UDim.new(1, 0)
 
--- Janela
 local janela = Instance.new("Frame")
 janela.Size = UDim2.new(0, 440, 0, 340)
 janela.Position = UDim2.new(0.5, -220, 0.5, -170)
@@ -869,7 +904,7 @@ criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     end
 end)
 
--- [ABA COLLECT - PATCH 14]
+-- [ABA COLLECT]
 local collectTab = criarAba("collect", "💎 Collect")
 criarSecao(collectTab, "Auto Coletar")
 criarToggle(collectTab, "Auto Coletar", false, function(v) Config.AutoCollect = v end)
@@ -1114,13 +1149,12 @@ btnKill.MouseButton1Click:Connect(function()
     espGui:Destroy()
 end)
 
--- [LOOP FARM PRINCIPAL - PATCH 10 + 12]
+-- [LOOP FARM - PATCH 19: zona de conforto]
 task.spawn(function()
-    while Ativo and task.wait(0.15) do
+    while Ativo and task.wait(0.08) do
         if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
             local alvo = getAlvo()
             if alvo then
-                -- Auto Lock-On
                 if Config.AutoLock and alvoTravado ~= alvo.Name then
                     lockOn(alvo)
                     alvoTravado = alvo.Name
@@ -1128,10 +1162,16 @@ task.spawn(function()
 
                 local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    local dist = (alvo.HumanoidRootPart.Position - hrp.Position).Magnitude
-                    if dist > Config.AttackRange + 3 then
-                        voarPara(alvo.HumanoidRootPart.Position, Config.FlySpeed)
+                    local mpos = alvo.HumanoidRootPart.Position
+                    local dist = (mpos - hrp.Position).Magnitude
+                    local zonaConforto = Config.AttackRange + 4
+
+                    if dist > zonaConforto then
+                        voarPara(mpos, Config.FlySpeed)
+                    elseif dist > 3 then
+                        voarPara(mpos, Config.FlySpeed * 0.3)
                     else
+                        if vooBv then vooBv.Velocity = Vector3.zero end
                         atacar(alvo)
                     end
                 end
@@ -1145,7 +1185,7 @@ task.spawn(function()
     end
 end)
 
--- [NOCLIP - PATCH 11]
+-- [NOCLIP]
 task.spawn(function()
     while Ativo do
         task.wait(0.3)
@@ -1162,7 +1202,7 @@ task.spawn(function()
     end
 end)
 
--- [HITBOX LOOP - PATCH 13]
+-- [HITBOX]
 task.spawn(function()
     while Ativo do
         task.wait(1)
@@ -1170,7 +1210,7 @@ task.spawn(function()
     end
 end)
 
--- [AUTOCOLLECT LOOP - PATCH 14]
+-- [AUTOCOLLECT]
 task.spawn(function()
     while Ativo do
         task.wait(1)
