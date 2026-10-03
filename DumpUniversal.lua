@@ -1,4 +1,4 @@
-print("[DUMPER v5] Iniciando...")
+print("[DUMPER v5.1] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -56,7 +56,9 @@ local RUIDO = {
 }
 local function ehRuido(path)
     if State.filtros.ruido then return false end
-    for i = 1, #RUIDO do if path:find(RUIDO[i]) then return true end end
+    for i = 1, #RUIDO do
+        if path:find(RUIDO[i]) then return true end
+    end
     return false
 end
 
@@ -79,10 +81,10 @@ local function classificar(path)
 end
 
 local CORES = {
-    M1="5FE8FF",SKILL="C68AFF",DROP="5FDC78",BOSS="FF5C5C",
-    SWORD_ORB="FFE45C",REBIRTH="FF9642",LOCK="8AFF8A",TOOLBAR="FF9AC6",
-    DUNGEON="00FFC6",EVENT="9A9AA0",OTHER="9A9AA0",
-    INFO="74B8FF",SUCCESS="5FDC78",WARN="FFB43C",
+    M1="5FE8FF", SKILL="C68AFF", DROP="5FDC78", BOSS="FF5C5C",
+    SWORD_ORB="FFE45C", REBIRTH="FF9642", LOCK="8AFF8A", TOOLBAR="FF9AC6",
+    DUNGEON="00FFC6", EVENT="9A9AA0", OTHER="9A9AA0",
+    INFO="74B8FF", SUCCESS="5FDC78", WARN="FFB43C",
 }
 
 -- ═══════════ SER ═══════════
@@ -91,10 +93,12 @@ local function ser(v, d)
     if d > 2 then return "..." end
     local t = typeof(v)
     if t == "Instance" then return getNome(v) end
-    if t == "Vector3" then return string.format("V3(%.0f,%.0f,%.0f)",v.X,v.Y,v.Z) end
+    if t == "Vector3" then
+        return string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z)
+    end
     if t == "CFrame" then
         local p = v.Position
-        return string.format("CF(%.0f,%.0f,%.0f)",p.X,p.Y,p.Z)
+        return string.format("CF(%.0f,%.0f,%.0f)", p.X, p.Y, p.Z)
     end
     if t == "table" then
         local p, n = {}, 0
@@ -117,18 +121,22 @@ local function addTrafego(cat, path, args)
         State.unicos[chave].ultimo = os.date("%H:%M:%S")
         return
     end
-    local entry = {cat=cat, path=path, args=args, count=1,
-        primeiro=os.date("%H:%M:%S"), ultimo=os.date("%H:%M:%S")}
+    local entry = {
+        cat = cat, path = path, args = args, count = 1,
+        primeiro = os.date("%H:%M:%S"), ultimo = os.date("%H:%M:%S"),
+    }
     State.unicos[chave] = entry
     table.insert(State.trfBuf, entry)
     print(string.format("[DUMPER/CAP] %s | %s | %s", cat, path, args))
     if #State.trfBuf > MAX_UNICOS then
         local rem = table.remove(State.trfBuf, 1)
-        for k, v in pairs(State.unicos) do if v == rem then State.unicos[k] = nil break end end
+        for k, v in pairs(State.unicos) do
+            if v == rem then State.unicos[k] = nil break end
+        end
     end
 end
 
--- ═══════════ HOOK PRINCIPAL ═══════════
+-- ═══════════ PROCESSAR CHAMADA ═══════════
 local function processarChamada(self, ...)
     local n = select("#", ...)
     local args = {...}
@@ -155,17 +163,20 @@ local function processarChamada(self, ...)
     if not aceito then return end
 
     local parts = {}
-    for i = 1, math.min(n, 6) do parts[#parts+1] = ser(args[i]) end
+    for i = 1, math.min(n, 6) do
+        parts[#parts+1] = ser(args[i])
+    end
     addTrafego(cat, path:gsub("ReplicatedStorage%.", "RS."), table.concat(parts, " | "))
 end
 
+-- ═══════════ INSTALAR HOOK ═══════════
 local function instalarHook()
     if State.hookAtivo then
         print("[DUMPER] Hook já instalado")
         return
     end
 
-    -- Tentativa 1: hookmetamethod
+    -- METODO 1: hookmetamethod
     if hookmetamethod and getnamecallmethod then
         local ok = pcall(function()
             _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
@@ -176,29 +187,76 @@ local function instalarHook()
                 return _nomecallOriginal(self, ...)
             end)
         end)
-        if ok then
+        if ok and _nomecallOriginal then
             State.hookAtivo = true
             State.hookMetodo = "hookmetamethod"
-            log("SUCCESS", "Hook __namecall INSTALADO (metodo: hookmetamethod)")
-            print("[DUMPER] ✅ Hook __namecall ativo")
+            log("SUCCESS", "✅ Hook __namecall instalado")
+            print("[DUMPER] ✅ Hook ATIVO (hookmetamethod)")
             return
         else
-            print("[DUMPER] ⚠ hookmetamethod falhou, tentando alternativas...")
+            print("[DUMPER] ⚠ hookmetamethod falhou, tentando fallback...")
         end
     end
 
-    -- Tentativa 2: hookfunction no game.Namecall? Não funciona.
-    -- Fallback: hookfunction direto nos remotes conhecidos
+    -- METODO 2: hookfunction por-remote
     if hookfunction then
-        log("WARN", "hookmetamethod indisponível — usando fallback")
-        State.hookMetodo = "fallback-parcial"
-        State.hookAtivo = true
-        return
+        print("[DUMPER] Fallback: hookfunction por-remote")
+        local hookados = 0
+
+        local function hookarRemote(rem)
+            if not rem:IsA("RemoteEvent") and not rem:IsA("RemoteFunction") then return end
+            if rem:GetAttribute("__dbh_hooked") then return end
+            rem:SetAttribute("__dbh_hooked", true)
+            hookados = hookados + 1
+
+            pcall(function()
+                local orig = rem.FireServer
+                hookfunction(orig, function(self, ...)
+                    if State.capturando then
+                        pcall(processarChamada, self, ...)
+                    end
+                    return orig(self, ...)
+                end)
+            end)
+
+            pcall(function()
+                local origInv = rem.InvokeServer
+                if origInv then
+                    hookfunction(origInv, function(self, ...)
+                        if State.capturando then
+                            pcall(processarChamada, self, ...)
+                        end
+                        return origInv(self, ...)
+                    end)
+                end
+            end)
+        end
+
+        local function varrer(inst)
+            if not inst then return end
+            for _, c in ipairs(inst:GetDescendants()) do
+                if c:IsA("RemoteEvent") or c:IsA("RemoteFunction") then
+                    pcall(hookarRemote, c)
+                end
+            end
+        end
+        pcall(varrer, RS)
+
+        if hookados > 0 then
+            State.hookAtivo = true
+            State.hookMetodo = "hookfunction-por-remote ("..hookados..")"
+            log("SUCCESS", "✅ Hook instalado em "..hookados.." remotes")
+            print("[DUMPER] ✅ Hook ATIVO via hookfunction ("..hookados.." remotes)")
+            return
+        end
     end
 
-    log("ERROR", "Sem hookmetamethod nem hookfunction — executor limitado")
+    State.hookMetodo = "FALHOU-TUDO"
+    log("ERROR", "❌ Nenhum método de hook disponível")
+    print("[DUMPER] ❌ Executor sem hookmetamethod nem hookfunction")
 end
 
+-- ═══════════ REMOVER HOOK (mantém metodo no State) ═══════════
 local function removerHook()
     if not State.hookAtivo then return end
     if _nomecallOriginal and hookmetamethod then
@@ -206,8 +264,8 @@ local function removerHook()
     end
     _nomecallOriginal = nil
     State.hookAtivo = false
-    State.hookMetodo = "nenhum"
-    log("INFO", "Hook removido")
+    -- NÃO reseta State.hookMetodo — mantém pro dump
+    log("INFO", "Hook removido (metodo foi: "..State.hookMetodo..")")
 end
 
 -- ═══════════ DIAGNÓSTICO ═══════════
@@ -218,7 +276,6 @@ local function diagnostico()
     log("INFO", "hookfunction: "..tostring(hookfunction ~= nil))
     log("INFO", "Executor: "..tostring(identifyexecutor and identifyexecutor() or "?"))
 
-    -- Conta remotes em RS.Remotes
     local rem = RS:FindFirstChild("Remotes")
     if rem then
         local n = 0
@@ -288,14 +345,16 @@ task.spawn(function()
                 end
             end
 
-            if #State.trfBuf > MAX_UNICOS * 0.8 then State.nomesCache = {} end
+            if #State.trfBuf > MAX_UNICOS * 0.8 then
+                State.nomesCache = {}
+            end
         end
     end
 end)
 
 -- ═══════════ SCAN ARQ ═══════════
 local function scanArquitetural()
-    State.arquitetural = {}  -- limpa antes
+    State.arquitetural = {}
     log("INFO", "Scan arquitetural iniciado...")
     task.spawn(function()
         local t0 = os.clock()
@@ -325,7 +384,7 @@ end
 -- ═══════════ SALVAR ═══════════
 local function salvarArquivo()
     local L = {
-        "═══ DUMP v5 — Sessão: "..State.sessao.." ═══",
+        "═══ DUMP v5.1 — Sessão: "..State.sessao.." ═══",
         "Player: "..plr.Name,
         "PlaceId: "..game.PlaceId,
         "Data: "..os.date("%Y-%m-%d %H:%M:%S"),
@@ -357,7 +416,9 @@ local function salvarArquivo()
     end
     table.insert(L, "")
     table.insert(L, "═══ ARQUITETURAL ═══")
-    for _, linha in ipairs(State.arquitetural) do table.insert(L, linha) end
+    for _, linha in ipairs(State.arquitetural) do
+        table.insert(L, linha)
+    end
 
     local conteudo = table.concat(L, "\n")
     local nome = "Dump_"..State.sessao.."_"..os.time()..".txt"
@@ -378,77 +439,105 @@ local gui = Instance.new("ScreenGui")
 gui.Name = "DumperFinal"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
-if syn and syn.protect_gui then syn.protect_gui(gui) end
+if syn and syn.protect_gui then
+    pcall(function() syn.protect_gui(gui) end)
+end
 gui.Parent = targetParent
 
 local T = {
-    bg=Color3.fromRGB(0,0,0), panel=Color3.fromRGB(10,10,12),
-    elev=Color3.fromRGB(18,18,22), border=Color3.fromRGB(30,30,36),
-    accent=Color3.fromRGB(0,255,198), text=Color3.fromRGB(230,230,235),
-    success=Color3.fromRGB(80,200,120), danger=Color3.fromRGB(220,60,60),
-    info=Color3.fromRGB(74,158,255), warn=Color3.fromRGB(255,180,60),
+    bg = Color3.fromRGB(0, 0, 0),
+    panel = Color3.fromRGB(10, 10, 12),
+    elev = Color3.fromRGB(18, 18, 22),
+    border = Color3.fromRGB(30, 30, 36),
+    accent = Color3.fromRGB(0, 255, 198),
+    text = Color3.fromRGB(230, 230, 235),
+    success = Color3.fromRGB(80, 200, 120),
+    danger = Color3.fromRGB(220, 60, 60),
+    info = Color3.fromRGB(74, 158, 255),
+    warn = Color3.fromRGB(255, 180, 60),
 }
 
-local main = Instance.new("Frame", gui)
+local main = Instance.new("Frame")
 main.Size = UDim2.new(0, 500, 0, 560)
 main.Position = UDim2.new(0, 20, 0, 60)
 main.BackgroundColor3 = T.bg
 main.BackgroundTransparency = 0.1
 main.BorderSizePixel = 0
 main.Active = true
+main.Parent = gui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
-local mstk = Instance.new("UIStroke", main) mstk.Color = T.border mstk.Thickness = 1
+local mstk = Instance.new("UIStroke", main)
+mstk.Color = T.border
+mstk.Thickness = 1
 
-local header = Instance.new("Frame", main)
+local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 40)
 header.BackgroundColor3 = T.panel
 header.BorderSizePixel = 0
+header.Parent = main
 Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
 
-local titulo = Instance.new("TextLabel", header)
+local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -100, 1, 0)
 titulo.Position = UDim2.new(0, 14, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "  🐉  DUMPER v5"
+titulo.Text = "  🐉  DUMPER v5.1"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 13
 titulo.TextXAlignment = Enum.TextXAlignment.Left
+titulo.Parent = header
 
-local btnMin = Instance.new("TextButton", header)
+local btnMin = Instance.new("TextButton")
 btnMin.Size = UDim2.new(0, 24, 0, 24)
 btnMin.Position = UDim2.new(1, -60, 0.5, -12)
 btnMin.BackgroundColor3 = T.elev
-btnMin.Text = "—" btnMin.TextColor3 = T.text
-btnMin.Font = Enum.Font.GothamBold btnMin.TextSize = 14 btnMin.BorderSizePixel = 0
+btnMin.Text = "—"
+btnMin.TextColor3 = T.text
+btnMin.Font = Enum.Font.GothamBold
+btnMin.TextSize = 14
+btnMin.BorderSizePixel = 0
+btnMin.Parent = header
 Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0, 6)
 
-local btnKill = Instance.new("TextButton", header)
+local btnKill = Instance.new("TextButton")
 btnKill.Size = UDim2.new(0, 24, 0, 24)
 btnKill.Position = UDim2.new(1, -32, 0.5, -12)
 btnKill.BackgroundColor3 = T.danger
-btnKill.Text = "×" btnKill.TextColor3 = Color3.new(1,1,1)
-btnKill.Font = Enum.Font.GothamBold btnKill.TextSize = 14 btnKill.BorderSizePixel = 0
+btnKill.Text = "×"
+btnKill.TextColor3 = Color3.new(1, 1, 1)
+btnKill.Font = Enum.Font.GothamBold
+btnKill.TextSize = 14
+btnKill.BorderSizePixel = 0
+btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 6)
 
-local input = Instance.new("TextBox", main)
+local input = Instance.new("TextBox")
 input.Size = UDim2.new(1, -24, 0, 32)
 input.Position = UDim2.new(0, 12, 0, 50)
 input.BackgroundColor3 = T.elev
 input.Text = "Sessao"
 input.PlaceholderText = "Nome da sessão..."
 input.TextColor3 = T.text
-input.Font = Enum.Font.Gotham input.TextSize = 12 input.BorderSizePixel = 0
+input.Font = Enum.Font.Gotham
+input.TextSize = 12
+input.BorderSizePixel = 0
+input.Parent = main
 Instance.new("UICorner", input).CornerRadius = UDim.new(0, 6)
-local ipad = Instance.new("UIPadding", input) ipad.PaddingLeft = UDim.new(0, 10)
+local ipad = Instance.new("UIPadding", input)
+ipad.PaddingLeft = UDim.new(0, 10)
 
 local function mkBtn(x, w, cor, txt, cb)
-    local b = Instance.new("TextButton", main)
+    local b = Instance.new("TextButton")
     b.Size = UDim2.new(0, w, 0, 34)
     b.Position = UDim2.new(0, x, 0, 90)
-    b.BackgroundColor3 = cor b.Text = txt
-    b.TextColor3 = Color3.new(1,1,1) b.Font = Enum.Font.GothamBold
-    b.TextSize = 10 b.BorderSizePixel = 0
+    b.BackgroundColor3 = cor
+    b.Text = txt
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 10
+    b.BorderSizePixel = 0
+    b.Parent = main
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
     b.MouseButton1Click:Connect(cb)
     return b
@@ -465,13 +554,16 @@ local btnCap = mkBtn(108, 96, T.success, "▶ CAPTURAR", function()
     if State.capturando then
         btnCap.BackgroundColor3 = T.danger
         btnCap.Text = "■ PARAR"
-        print("[DUMPER] 🔴 Captura INICIADA")
-        log("SUCCESS", "🔴 Captura INICIADA")
+        print("═══════════════════════════════════")
+        print("[DUMPER] 🔴 CAPTURA INICIADA")
+        print("[DUMPER] Faça ações no jogo agora")
+        print("═══════════════════════════════════")
+        log("SUCCESS", "🔴 CAPTURA INICIADA — faça ações no jogo")
         instalarHook()
     else
         btnCap.BackgroundColor3 = T.success
         btnCap.Text = "▶ CAPTURAR"
-        print("[DUMPER] ⚪ Captura PARADA")
+        print("[DUMPER] ⚪ CAPTURA PARADA (bruto="..State.contadorBruto..", único="..#State.trfBuf..")")
         log("INFO", "⚪ Captura PARADA")
         removerHook()
     end
@@ -481,12 +573,11 @@ mkBtn(210, 92, T.accent, "💾 SALVAR", function()
     salvarArquivo()
 end)
 
-mkBtn(308, 90, Color3.fromRGB(120,60,180), "🩺 DIAG", function()
+mkBtn(308, 90, Color3.fromRGB(120, 60, 180), "🩺 DIAG", function()
     diagnostico()
 end)
 
-mkBtn(404, 84, Color3.fromRGB(255,140,30), "🔬 TESTE", function()
-    -- Dispara um remote pra testar se o hook pega
+mkBtn(404, 84, Color3.fromRGB(255, 140, 30), "🔬 TESTE", function()
     local rem = RS:FindFirstChild("Remotes")
     if not rem then
         log("WARN", "RS.Remotes não achou")
@@ -496,7 +587,14 @@ mkBtn(404, 84, Color3.fromRGB(255,140,30), "🔬 TESTE", function()
     if skillRem then
         log("INFO", "Testando com SkillRemote...")
         pcall(function()
-            skillRem:FireServer({Began=false, CFrame=CFrame.new(), Aim=Vector3.new(), Camera=CFrame.new(), Type=1, SkillId="TESTE"})
+            skillRem:FireServer({
+                Began = false,
+                CFrame = CFrame.new(),
+                Aim = Vector3.new(),
+                Camera = CFrame.new(),
+                Type = 1,
+                SkillId = "TESTE",
+            })
         end)
         task.wait(0.5)
         log("INFO", "Teste enviado. Se nada apareceu acima, hook NÃO está funcionando.")
@@ -505,25 +603,31 @@ mkBtn(404, 84, Color3.fromRGB(255,140,30), "🔬 TESTE", function()
     end
 end)
 
--- Filtros
-local filtroFrame = Instance.new("Frame", main)
+local filtroFrame = Instance.new("Frame")
 filtroFrame.Size = UDim2.new(1, -24, 0, 84)
 filtroFrame.Position = UDim2.new(0, 12, 0, 132)
 filtroFrame.BackgroundColor3 = T.panel
 filtroFrame.BorderSizePixel = 0
+filtroFrame.Parent = main
 Instance.new("UICorner", filtroFrame).CornerRadius = UDim.new(0, 6)
 local fl = Instance.new("UIListLayout", filtroFrame)
 fl.FillDirection = Enum.FillDirection.Horizontal
-fl.Padding = UDim.new(0, 4) fl.Wraps = true
+fl.Padding = UDim.new(0, 4)
+fl.Wraps = true
 local fp = Instance.new("UIPadding", filtroFrame)
-fp.PaddingLeft = UDim.new(0, 6) fp.PaddingTop = UDim.new(0, 4)
+fp.PaddingLeft = UDim.new(0, 6)
+fp.PaddingTop = UDim.new(0, 4)
 
 local function mkFiltro(nome, key, cor)
-    local b = Instance.new("TextButton", filtroFrame)
+    local b = Instance.new("TextButton")
     b.Size = UDim2.new(0, 68, 0, 24)
     b.BackgroundColor3 = State.filtros[key] and (cor or T.success) or T.elev
-    b.Text = nome b.TextColor3 = Color3.new(1,1,1)
-    b.Font = Enum.Font.GothamBold b.TextSize = 9 b.BorderSizePixel = 0
+    b.Text = nome
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 9
+    b.BorderSizePixel = 0
+    b.Parent = filtroFrame
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
     b.MouseButton1Click:Connect(function()
         State.filtros[key] = not State.filtros[key]
@@ -531,22 +635,23 @@ local function mkFiltro(nome, key, cor)
     end)
 end
 
-mkFiltro("Dungeon", "dungeon", Color3.fromRGB(0,255,198))
-mkFiltro("Skills", "skills", Color3.fromRGB(120,60,180))
-mkFiltro("Drops", "drops", Color3.fromRGB(80,200,120))
-mkFiltro("Boss", "bossEvent", Color3.fromRGB(220,60,60))
-mkFiltro("Sword/Orb", "swordOrb", Color3.fromRGB(255,200,60))
-mkFiltro("Toolbar", "toolbar", Color3.fromRGB(255,150,200))
-mkFiltro("Ruído", "ruido", Color3.fromRGB(120,120,120))
+mkFiltro("Dungeon", "dungeon", Color3.fromRGB(0, 255, 198))
+mkFiltro("Skills", "skills", Color3.fromRGB(120, 60, 180))
+mkFiltro("Drops", "drops", Color3.fromRGB(80, 200, 120))
+mkFiltro("Boss", "bossEvent", Color3.fromRGB(220, 60, 60))
+mkFiltro("Sword/Orb", "swordOrb", Color3.fromRGB(255, 200, 60))
+mkFiltro("Toolbar", "toolbar", Color3.fromRGB(255, 150, 200))
+mkFiltro("Ruído", "ruido", Color3.fromRGB(120, 120, 120))
 
-local logFrame = Instance.new("Frame", main)
+local logFrame = Instance.new("Frame")
 logFrame.Size = UDim2.new(1, -24, 1, -230)
 logFrame.Position = UDim2.new(0, 12, 0, 224)
 logFrame.BackgroundColor3 = T.panel
 logFrame.BorderSizePixel = 0
+logFrame.Parent = main
 Instance.new("UICorner", logFrame).CornerRadius = UDim.new(0, 8)
 
-local logScroll = Instance.new("ScrollingFrame", logFrame)
+local logScroll = Instance.new("ScrollingFrame")
 logScroll.Size = UDim2.new(1, -8, 1, -8)
 logScroll.Position = UDim2.new(0, 4, 0, 4)
 logScroll.BackgroundTransparency = 1
@@ -554,57 +659,86 @@ logScroll.BorderSizePixel = 0
 logScroll.ScrollBarThickness = 3
 logScroll.ScrollBarImageColor3 = T.border
 logScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+logScroll.Parent = logFrame
 
-local logText = Instance.new("TextLabel", logScroll)
+local logText = Instance.new("TextLabel")
 logText.Size = UDim2.new(1, -4, 0, 0)
 logText.Position = UDim2.new(0, 2, 0, 2)
 logText.BackgroundTransparency = 1
 logText.TextColor3 = T.text
-logText.Font = Enum.Font.Code logText.TextSize = 10
+logText.Font = Enum.Font.Code
+logText.TextSize = 10
 logText.TextXAlignment = Enum.TextXAlignment.Left
 logText.TextYAlignment = Enum.TextYAlignment.Top
-logText.TextWrapped = true logText.RichText = true
+logText.TextWrapped = true
+logText.RichText = true
 logText.AutomaticSize = Enum.AutomaticSize.Y
+logText.Parent = logScroll
 
-local flut = Instance.new("TextButton", gui)
+local flut = Instance.new("TextButton")
 flut.Size = UDim2.new(0, 46, 0, 46)
 flut.Position = UDim2.new(0, 20, 0.4, 0)
 flut.BackgroundColor3 = T.bg
-flut.Text = "🐉" flut.TextColor3 = T.accent
-flut.Font = Enum.Font.GothamBold flut.TextSize = 20
-flut.BorderSizePixel = 0 flut.Visible = false
-flut.Active = true flut.Draggable = true
+flut.Text = "🐉"
+flut.TextColor3 = T.accent
+flut.Font = Enum.Font.GothamBold
+flut.TextSize = 20
+flut.BorderSizePixel = 0
+flut.Visible = false
+flut.Active = true
+flut.Draggable = true
+flut.Parent = gui
 Instance.new("UICorner", flut).CornerRadius = UDim.new(1, 0)
-local fstk = Instance.new("UIStroke", flut) fstk.Color = T.accent fstk.Thickness = 1
+local fstk = Instance.new("UIStroke", flut)
+fstk.Color = T.accent
+fstk.Thickness = 1
 
-local drag, dStart, sStart = false, nil, nil
+local drag = false
+local dStart = nil
+local sStart = nil
+
 header.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
-        drag = true dStart = i.Position sStart = main.Position
+        drag = true
+        dStart = i.Position
+        sStart = main.Position
     end
 end)
+
 UIS.InputChanged:Connect(function(i)
     if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
     or i.UserInputType == Enum.UserInputType.Touch) then
         local d = i.Position - dStart
-        main.Position = UDim2.new(sStart.X.Scale, sStart.X.Offset + d.X,
-            sStart.Y.Scale, sStart.Y.Offset + d.Y)
+        main.Position = UDim2.new(
+            sStart.X.Scale, sStart.X.Offset + d.X,
+            sStart.Y.Scale, sStart.Y.Offset + d.Y
+        )
     end
 end)
+
 UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
-    or i.UserInputType == Enum.UserInputType.Touch then drag = false end
+    or i.UserInputType == Enum.UserInputType.Touch then
+        drag = false
+    end
 end)
 
-btnMin.MouseButton1Click:Connect(function() main.Visible = false flut.Visible = true end)
-flut.MouseButton1Click:Connect(function() main.Visible = true flut.Visible = false end)
+btnMin.MouseButton1Click:Connect(function()
+    main.Visible = false
+    flut.Visible = true
+end)
+
+flut.MouseButton1Click:Connect(function()
+    main.Visible = true
+    flut.Visible = false
+end)
 
 btnKill.MouseButton1Click:Connect(function()
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v5] Encerrado")
+    print("[DUMPER v5.1] Encerrado")
 end)
 
 task.spawn(function()
@@ -628,8 +762,11 @@ task.spawn(function()
                 "<font color='#666'>[%s]</font> <font color='#%s'>[%s]</font> <font color='#CCC'>%s</font>",
                 l.hora, cor, l.cat, l.msg:sub(1, 70)))
         end
-        logText.Text = #linhas == 0 and "<font color='#666'>Aguardando...</font>"
-            or table.concat(linhas, "\n")
+        if #linhas == 0 then
+            logText.Text = "<font color='#666'>Aguardando...</font>"
+        else
+            logText.Text = table.concat(linhas, "\n")
+        end
         logScroll.CanvasSize = UDim2.new(0, 0, 0, logText.AbsoluteSize.Y + 10)
         logScroll.CanvasPosition = Vector2.new(0, math.max(0, logScroll.CanvasSize.Y.Offset))
     end
@@ -638,12 +775,13 @@ end)
 task.spawn(function()
     while gui.Parent do
         task.wait(1)
-        titulo.Text = string.format("  🐉  DUMPER v5 | %d bruto | %d único | %s",
+        titulo.Text = string.format(
+            "  🐉  DUMPER v5.1 | %d bruto | %d único | %s",
             State.contadorBruto, #State.trfBuf,
-            State.capturando and "🔴 REC" or "⚪")
+            State.capturando and "🔴 REC" or "⚪"
+        )
     end
 end)
 
-print("[DUMPER v5] ✅ Pronto")
-print("[DUMPER] Use 🩺 DIAG primeiro pra ver se o executor suporta hook")
-print("[DUMPER] Use 🔬 TESTE pra confirmar que o hook está pegando")
+print("[DUMPER v5.1] ✅ Pronto")
+print("[DUMPER] 1) DIAG  2) CAPTURAR  3) ações  4) PARAR  5) SALVAR")
