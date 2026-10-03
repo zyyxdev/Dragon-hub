@@ -1,8 +1,15 @@
 --[[
-    Advanced Mobile Remote Spy & Inspector (AMOLED Edition v2)
-    Engine: __namecall hook + Serializer + Dedup Cache
+    Advanced Mobile Remote Spy & Inspector (AMOLED Edition v2.1)
+    Engine: __namecall hook + Serializer otimizado + Dedup Cache + Render Queue
     Alvo: Delta / Mobile (Android AMOLED)
-    Autor base: (você) — Refactor: Eng. Sênior
+
+    Fixes v2.1:
+      • Serializer com limite de largura E profundidade
+      • Serialização 1x por requisição (não 2x)
+      • os.clock() em vez de tick()
+      • Fila de renderização com throttle (30fps máx, 12 cards/frame)
+      • Botão ✕ vermelho que RESTAURA o __namecall original
+      • Header reorganizada (5 botões alinhados)
 ]]
 
 -- ==========================================
@@ -10,27 +17,25 @@
 -- ==========================================
 local CoreGui          = game:GetService("CoreGui")
 local Players          = game:GetService("Players")
-local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local HttpService      = game:GetService("HttpService")
+local RunService       = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 
 if _G.AmoledSpyGui then pcall(function() _G.AmoledSpyGui:Destroy() end) end
 
--- Estado global da ferramenta
 local State = {
     Paused       = false,
-    Filter       = "All",       -- "All" | "FireServer" | "InvokeServer"
+    Filter       = "All",
     LogCount     = 0,
-    MaxLogs      = 150,         -- trava dura pra não fritar o device
-    Seen         = {},          -- [signature] = { frame, counterLabel, count, lastSeen }
-    TotalRaw     = 0,           -- requisições interceptadas cruas (todas)
-    TotalUnique  = 0,           -- únicas
-    DumpOrder    = {},          -- ordem dos únicos, pro .txt
+    MaxLogs      = 150,
+    Seen         = {},
+    TotalRaw     = 0,
+    TotalUnique  = 0,
+    DumpOrder    = {},
 }
 
--- Ruído conhecido que NUNCA deve aparecer (evita ping visual inútil)
+-- Ruído conhecido
 local NOISE_PATTERNS = {
     "ClientReplication", "RakNet", "TeleportService", "Chat%.",
     "PlayerScripts", "CoreGui",
@@ -44,54 +49,86 @@ local function isNoise(path)
 end
 
 -- ==========================================
--- 1. SERIALIZER + GERADOR DE SNIPPET
+-- 1. SERIALIZER OTIMIZADO
+--    (limite de LARGURA + PROFUNDIDADE + tamanho de string)
 -- ==========================================
+local MAX_TABLE_ENTRIES = 6
+local MAX_STRING_LEN    = 120
+local MAX_DEPTH         = 2
+local MAX_ARGS          = 8
+
 local function serializeValue(v, depth)
     depth = depth or 0
-    if depth > 3 then return "..." end
+    if depth > MAX_DEPTH then return "..." end
 
     local t = typeof(v)
+
     if t == "string" then
+        if #v > MAX_STRING_LEN then
+            return string.format("%q", v:sub(1, MAX_STRING_LEN) .. "...<trunc>")
+        end
         return string.format("%q", v)
+
     elseif t == "number" then
         return tostring(v)
-    elseif t == "boolean" or t == "nil" then
+
+    elseif t == "boolean" then
         return tostring(v)
+
     elseif t == "Instance" then
+        if depth > 0 then return "Instance" end
         local ok, name = pcall(function() return v:GetFullName() end)
         return ok and ("game." .. name) or "Instance"
+
     elseif t == "Vector3" then
-        return string.format("Vector3.new(%g, %g, %g)", v.X, v.Y, v.Z)
+        return string.format("Vector3.new(%g,%g,%g)", v.X, v.Y, v.Z)
+
     elseif t == "Vector2" then
-        return string.format("Vector2.new(%g, %g)", v.X, v.Y)
-    elseif t == "CFrame" then
-        return "CFrame.new(...)"
+        return string.format("Vector2.new(%g,%g)", v.X, v.Y)
+
     elseif t == "Color3" then
         return string.format("Color3.fromRGB(%d,%d,%d)",
             math.floor(v.R*255), math.floor(v.G*255), math.floor(v.B*255))
+
     elseif t == "EnumItem" then
         return string.format("Enum.%s.%s", tostring(v.EnumType), v.Name)
+
+    elseif t == "CFrame" then
+        return "CFrame.new(...)"
+
     elseif t == "table" then
         local parts, n = {}, 0
         for k, val in pairs(v) do
             n += 1
-            if n > 12 then parts[#parts+1] = "..." break end
-            local key = typeof(k) == "string" and k or ("["..serializeValue(k, depth+1).."]")
-            parts[#parts+1] = string.format("%s = %s", key, serializeValue(val, depth+1))
+            if n > MAX_TABLE_ENTRIES then
+                parts[#parts+1] = "...<+" .. (n - MAX_TABLE_ENTRIES) .. ">"
+                break
+            end
+            local key = typeof(k) == "string" and k
+                       or ("["..serializeValue(k, depth+1).."]")
+            parts[#parts+1] = string.format("%s=%s",
+                key, serializeValue(val, depth+1))
         end
-        return "{" .. table.concat(parts, ", ") .. "}"
+        return "{" .. table.concat(parts, ",") .. "}"
     end
-    return "nil --[[ " .. t .. " ]]"
+
+    return "nil"
 end
 
-local function serializeArgs(...)
-    local args = {...}
+-- Recebe table.pack (args já vem packed, sem unpack)
+local function serializeArgs(args)
     local out = {}
-    for i = 1, #args do out[i] = serializeValue(args[i]) end
+    local n = math.min(#args, MAX_ARGS)
+    for i = 1, n do
+        out[i] = serializeValue(args[i], 0)
+    end
+    if #args > MAX_ARGS then
+        out[#out+1] = "...<+" .. (#args - MAX_ARGS) .. ">"
+    end
     return table.concat(out, ", ")
 end
 
--- Monta `game:GetService("ReplicatedStorage").Remotes.X` a partir de GetFullName
+-- Constrói acesso `game:GetService("X").Y.Z` a partir de GetFullName
 local function buildAccessCode(fullPath)
     local service, rest = fullPath:match("^([^%.]+)%.?(.*)$")
     if not service then return fullPath end
@@ -101,15 +138,8 @@ local function buildAccessCode(fullPath)
     return string.format('game:GetService("%s").%s', service, rest)
 end
 
-local function makeSnippet(remote, method, args)
-    local path  = remote:GetFullName()
-    local code  = buildAccessCode(path)
-    local sArgs = serializeArgs(table.unpack(args))
-    return string.format("%s:%s(%s)", code, method, sArgs)
-end
-
 -- ==========================================
--- 2. INTERFACE — BOLA FLUTUANTE
+-- 2. UI — BOLA FLUTUANTE
 -- ==========================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "AmoledRemoteSpy"
@@ -133,7 +163,7 @@ local ORANGE     = Color3.fromRGB(255, 180, 0)
 
 local Ball = Instance.new("TextButton")
 Ball.Name = "FloatingBall"
-Ball.Size = UDim2.new(0, 52, 0, 52)   -- alvo de toque confortável
+Ball.Size = UDim2.new(0, 52, 0, 52)
 Ball.Position = UDim2.new(0, 24, 0, 140)
 Ball.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
 Ball.BackgroundTransparency = 0.15
@@ -152,13 +182,13 @@ BallStroke.Thickness = 1.6
 BallStroke.Transparency = 0.35
 
 -- ==========================================
--- 3. INTERFACE — JANELA PRINCIPAL
+-- 3. UI — JANELA PRINCIPAL
 -- ==========================================
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 390, 0, 300)
 MainFrame.Position = UDim2.new(0.5, -195, 0.5, -150)
-MainFrame.BackgroundColor3 = Color3.fromRGB(6, 6, 9)     -- AMOLED real
+MainFrame.BackgroundColor3 = Color3.fromRGB(6, 6, 9)
 MainFrame.BackgroundTransparency = 0.15
 MainFrame.Visible = false
 MainFrame.Active = true
@@ -169,14 +199,14 @@ local MainStroke = Instance.new("UIStroke", MainFrame)
 MainStroke.Color = Color3.fromRGB(32, 32, 42)
 MainStroke.Thickness = 1
 
--- ---- Top bar (arrastável) ----
+-- ---- Top bar ----
 local TopBar = Instance.new("Frame")
 TopBar.Size = UDim2.new(1, 0, 0, 38)
 TopBar.BackgroundTransparency = 1
 TopBar.Parent = MainFrame
 
 local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Size = UDim2.new(1, -160, 1, 0)
+TitleLabel.Size = UDim2.new(1, -190, 1, 0)
 TitleLabel.Position = UDim2.new(0, 14, 0, 0)
 TitleLabel.BackgroundTransparency = 1
 TitleLabel.Text = "SPY // DRAGON CORE"
@@ -186,26 +216,33 @@ TitleLabel.Font = Enum.Font.Code
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TopBar
 
--- Mini botões da header
-local function makeHeaderBtn(text, xOffset, color)
+-- ---- Header buttons (5 alinhados) ----
+local HeaderBtns = Instance.new("Frame")
+HeaderBtns.Size = UDim2.new(0, 170, 0, 26)
+HeaderBtns.Position = UDim2.new(1, -178, 0, 6)
+HeaderBtns.BackgroundTransparency = 1
+HeaderBtns.Parent = TopBar
+
+local function makeHeaderBtn(text, order, color)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(0, 26, 0, 26)
-    b.Position = UDim2.new(1, xOffset, 0, 6)
+    b.Position = UDim2.new(0, order * 32, 0, 0)
     b.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
     b.Text = text
     b.TextColor3 = color or Color3.fromRGB(200, 200, 210)
     b.TextSize = 14
     b.Font = Enum.Font.GothamBold
     b.AutoButtonColor = false
-    b.Parent = TopBar
+    b.Parent = HeaderBtns
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
     return b
 end
 
-local PauseBtn    = makeHeaderBtn("⏸", -98, NEON_GREEN)
-local ClearBtn    = makeHeaderBtn("🗑", -68, ORANGE)
-local SaveBtn     = makeHeaderBtn("💾", -38, CYAN)
-local MinimizeBtn = makeHeaderBtn("–",  -8, Color3.fromRGB(200, 200, 210))
+local PauseBtn    = makeHeaderBtn("⏸", 0, NEON_GREEN)
+local ClearBtn    = makeHeaderBtn("🗑", 1, ORANGE)
+local SaveBtn     = makeHeaderBtn("💾", 2, CYAN)
+local MinimizeBtn = makeHeaderBtn("–",  3, Color3.fromRGB(200, 200, 210))
+local CloseBtn    = makeHeaderBtn("✕",  4, NEON_RED)
 
 -- ---- Linha de filtros ----
 local FilterRow = Instance.new("Frame")
@@ -254,11 +291,11 @@ ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 ListLayout.Padding = UDim.new(0, 6)
 
 local ListPad = Instance.new("UIPadding", LogScroll)
-ListPad.PaddingRight = UDim.new(0, 4)
+ListPad.PaddingRight  = UDim.new(0, 4)
 ListPad.PaddingBottom = UDim.new(0, 8)
 
 -- ==========================================
--- 4. DRAG ROBUSTO (bola + janela)
+-- 4. DRAG ROBUSTO
 -- ==========================================
 local function makeDraggable(target, handle, onTap)
     local dragging, dragStart, startPos, moved = false, nil, nil, false
@@ -311,23 +348,24 @@ local function setWindowOpen(v)
 end
 
 makeDraggable(Ball, Ball, function() setWindowOpen(not windowOpen) end)
-makeDraggable(MainFrame, TopBar, nil) -- janela arrasta só pela header
+makeDraggable(MainFrame, TopBar, nil)
 
 MinimizeBtn.MouseButton1Click:Connect(function() setWindowOpen(false) end)
 
 -- ==========================================
--- 6. RENDERIZAÇÃO DE LOG (com dedup)
+-- 6. RENDER QUEUE (throttle 30fps, 12 cards/frame)
 -- ==========================================
+local RenderQueue     = {}
+local RENDER_INTERVAL = 1 / 30
+local lastRender      = 0
+local HEARTBEAT_CONN  -- guardado pro kill switch
+
 local function passesFilter(method)
     return State.Filter == "All" or State.Filter == method
 end
 
-local function updateCounterLabel(entry)
-    entry.counterLabel.Text = entry.count > 1 and ("x" .. entry.count) or ""
-end
-
 local function createLogEntry(method, path, snippet, signature)
-    -- Aplica filtro: mesmo filtrado, continua contando
+    local entry = State.Seen[signature]
     local visible = passesFilter(method)
 
     local Frame = Instance.new("Frame")
@@ -388,7 +426,6 @@ local function createLogEntry(method, path, snippet, signature)
     SnippetBox.Parent = Frame
     Instance.new("UICorner", SnippetBox).CornerRadius = UDim.new(0, 4)
 
-    -- Clicar no snippet copia (Delta tem setclipboard)
     SnippetBox.MouseButton1Click:Connect(function()
         if setclipboard then
             setclipboard(snippet)
@@ -399,55 +436,90 @@ local function createLogEntry(method, path, snippet, signature)
         end
     end)
 
-    return Frame, Counter
+    -- Preenche a entry
+    if entry then
+        entry.frame = Frame
+        entry.counterLabel = Counter
+        if entry.count > 1 then
+            Counter.Text = "x" .. entry.count
+        end
+    end
 end
 
+HEARTBEAT_CONN = RunService.Heartbeat:Connect(function()
+    if #RenderQueue == 0 then return end
+
+    local now = os.clock()
+    if now - lastRender < RENDER_INTERVAL then return end
+    lastRender = now
+
+    local budget = math.min(#RenderQueue, 12)
+    for i = 1, budget do
+        local job = table.remove(RenderQueue, 1)
+        pcall(createLogEntry, job.method, job.path, job.snippet, job.signature)
+    end
+end)
+
+-- ==========================================
+-- 7. PUSH LOG (uma serialização por req)
+-- ==========================================
 local function pushLog(remote, method, args)
     local path = remote:GetFullName()
     if isNoise(path) then return end
 
     State.TotalRaw += 1
 
-    local signature = method .. "|" .. path .. "|" .. serializeArgs(table.unpack(args))
+    -- Serializa UMA vez
+    local serialized = serializeArgs(args)
+    local signature  = method .. "|" .. path .. "|" .. serialized
 
     -- Dedup
     local cached = State.Seen[signature]
     if cached then
         cached.count += 1
-        cached.lastSeen = tick()
-        updateCounterLabel(cached)
+        cached.lastSeen = os.clock()
+        -- Se o card já existe, atualiza; se ainda está na fila, só guarda
+        if cached.counterLabel then
+            cached.counterLabel.Text = "x" .. cached.count
+        end
         return
     end
 
-    -- Trava de segurança
+    -- Trava FIFO
     if State.LogCount >= State.MaxLogs then
-        -- remove o mais antigo (FIFO)
         local oldest = LogScroll:FindFirstChildWhichIsA("Frame")
         if oldest then oldest:Destroy() end
         State.LogCount -= 1
     end
 
-    local snippet = makeSnippet(remote, method, args)
-    local frame, counter = createLogEntry(method, path, snippet, signature)
+    -- Monta snippet reaproveitando o `serialized`
+    local snippet = buildAccessCode(path) .. ":" .. method .. "(" .. serialized .. ")"
 
-    local entry = {
-        frame = frame,
-        counterLabel = counter,
-        count = 1,
-        lastSeen = tick(),
-        method = method,
-        path = path,
-        snippet = snippet,
+    -- Registra entry ANTES de renderizar (o card pode chegar depois)
+    State.Seen[signature] = {
+        frame        = nil,
+        counterLabel = nil,
+        count        = 1,
+        lastSeen     = os.clock(),
+        method       = method,
+        path         = path,
+        snippet      = snippet,
     }
-    State.Seen[signature] = entry
     table.insert(State.DumpOrder, signature)
+    State.LogCount    += 1
+    State.TotalUnique += 1
 
-    State.LogCount     += 1
-    State.TotalUnique  += 1
+    -- Enfileira render (não bloqueia namecall)
+    table.insert(RenderQueue, {
+        method    = method,
+        path      = path,
+        snippet   = snippet,
+        signature = signature,
+    })
 end
 
 -- ==========================================
--- 7. HOOK __namecall
+-- 8. HOOK __namecall
 -- ==========================================
 local originalNamecall
 originalNamecall = hookmetamethod(game, "__namecall", function(self, ...)
@@ -457,7 +529,6 @@ originalNamecall = hookmetamethod(game, "__namecall", function(self, ...)
        and (method == "FireServer" or method == "InvokeServer")
        and typeof(self) == "Instance"
        and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
-        -- Throttle: só agenda renderização, não bloqueia o namecall
         local args = table.pack(...)
         task.spawn(function()
             pcall(pushLog, self, method, args)
@@ -468,7 +539,7 @@ originalNamecall = hookmetamethod(game, "__namecall", function(self, ...)
 end)
 
 -- ==========================================
--- 8. BOTÕES: PAUSAR / LIMPAR / FILTRO
+-- 9. BOTÕES: PAUSAR / LIMPAR / FILTRO
 -- ==========================================
 PauseBtn.MouseButton1Click:Connect(function()
     State.Paused = not State.Paused
@@ -486,18 +557,17 @@ ClearBtn.MouseButton1Click:Connect(function()
     State.LogCount = 0
     State.TotalUnique = 0
     State.TotalRaw = 0
+    RenderQueue = {}
 end)
 
 local function applyFilter()
     for _, child in ipairs(LogScroll:GetChildren()) do
         if child:IsA("Frame") then
-            -- O TypeLabel do frame diz o método
             local tl = child:FindFirstChildWhichIsA("TextLabel")
             local m = tl and tl.Text:match("%[(.-)%]")
             child.Visible = (State.Filter == "All") or (m == State.Filter)
         end
     end
-    -- Reset visual dos botões de filtro
     for label, btn in pairs(filterButtons) do
         local on = (label == State.Filter)
         btn.BackgroundColor3 = on and Color3.fromRGB(28, 28, 36) or Color3.fromRGB(14, 14, 18)
@@ -514,7 +584,7 @@ end
 applyFilter()
 
 -- ==========================================
--- 9. SALVAR .TXT ESTRUTURADO
+-- 10. SALVAR .TXT ESTRUTURADO
 -- ==========================================
 SaveBtn.MouseButton1Click:Connect(function()
     if not writefile then
@@ -529,15 +599,12 @@ SaveBtn.MouseButton1Click:Connect(function()
     table.insert(lines, "==================================================")
     table.insert(lines, " DRAGON CORE // REMOTE SPY DUMP")
     table.insert(lines, " Gerado em: " .. ts)
-    table.insert(lines, string.format(" Únicos: %d | Total interceptado: %d", State.TotalUnique, State.TotalRaw))
+    table.insert(lines, string.format(" Únicos: %d | Total interceptado: %d",
+        State.TotalUnique, State.TotalRaw))
     table.insert(lines, "==================================================")
     table.insert(lines, "")
 
-    -- Agrupa por categoria
-    local categories = {
-        FireServer   = {},
-        InvokeServer = {},
-    }
+    local categories = { FireServer = {}, InvokeServer = {} }
 
     for _, sig in ipairs(State.DumpOrder) do
         local e = State.Seen[sig]
@@ -561,7 +628,7 @@ SaveBtn.MouseButton1Click:Connect(function()
         end
     end
 
-    local content = table.concat(lines, "\n")
+    local content  = table.concat(lines, "\n")
     local filename = "RemoteSpy_Dump_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
 
     local ok = pcall(function() writefile(filename, content) end)
@@ -570,6 +637,44 @@ SaveBtn.MouseButton1Click:Connect(function()
 end)
 
 -- ==========================================
--- 10. BOOT
+-- 11. KILL SWITCH (✕ VERMELHO)
+--     Restaura __namecall, mata Heartbeat, limpa tudo
 -- ==========================================
-print("[Amoled Spy v2] Hook ativo. Total cache: " .. State.MaxLogs .. " entradas.")
+local function killScript()
+    -- 1. Para de processar novos pacotes
+    State.Paused = true
+
+    -- 2. RESTAURA o __namecall original (evita jogo lento)
+    pcall(function()
+        if originalNamecall then
+            hookmetamethod(game, "__namecall", originalNamecall)
+        end
+    end)
+
+    -- 3. Desconecta Heartbeat de renderização
+    pcall(function()
+        if HEARTBEAT_CONN then HEARTBEAT_CONN:Disconnect() end
+    end)
+
+    -- 4. Limpa filas e cache
+    RenderQueue     = {}
+    State.Seen      = {}
+    State.DumpOrder = {}
+
+    -- 5. Destrói UI
+    pcall(function()
+        if ScreenGui then ScreenGui:Destroy() end
+    end)
+
+    -- 6. Libera referência global
+    _G.AmoledSpyGui = nil
+
+    print("[Amoled Spy v2.1] Kill switch acionado. Script finalizado.")
+end
+
+CloseBtn.MouseButton1Click:Connect(killScript)
+
+-- ==========================================
+-- 12. BOOT
+-- ==========================================
+print("[Amoled Spy v2.1] Hook ativo. Max cache: " .. State.MaxLogs .. " entradas.")
