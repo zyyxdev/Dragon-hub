@@ -35,8 +35,8 @@ local Ativo = true
 
 -- [CONFIG]
 local Config = {
-    AutoFarm = false,
-    AutoBoss = false,
+    FarmAtivo = false,       -- [PATCH B+C] toggle mestre
+    AlvoModo = "todos",      -- [PATCH B+C] "todos" | "mobs" | "boss" | "event"
     AutoSkills = false,
     AutoTransform = false,
     TransformMode = "SSJAngel",
@@ -98,19 +98,14 @@ local BossTimers = {
     _default = 180,
 }
 
-local BOSS_KEYWORDS = {
-    "coolest","jinbu","turles","boku","apejaw","kataba",
-    "yeti","opa","brolo","gero","nash","frieza","cell","buu","beerus",
-    "jiren","broly","zaja","boss"
-}
-
-local function isBoss(mob)
-    if not mob then return false end
-    local n = mob.Name:lower()
-    for _, kw in ipairs(BOSS_KEYWORDS) do
-        if n:find(kw) then return true end
-    end
-    return false
+-- [PATCH B+C] categoria via pasta do mob (100% confiável)
+local function getCategoria(mob)
+    if not mob or not mob.Parent then return nil end
+    local p = mob.Parent.Name
+    if p == "Mobs"       then return "mobs"  end
+    if p == "Boss Mobs"  then return "boss"  end
+    if p == "Event Mobs" then return "event" end
+    return nil
 end
 
 local emRegen = false
@@ -125,6 +120,13 @@ local function podeAgir()
     ultimaAcao = agora
     return true
 end
+
+-- [PATCH B+C] compat: tudo que lia AutoFarm/AutoBoss agora lê daqui
+local function farmLigado()
+    return Config.FarmAtivo == true
+end
+
+-- [SKILLS]
 
 -- [LOCK-ON]
 local function pararLock()
@@ -336,23 +338,24 @@ task.spawn(function()
     end
 end)
 
+-- [PATCH B+C] filtro por pasta + dropdown de alvo
 local function getAlvo()
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
     local myPos = myChar.HumanoidRootPart.Position
+    local modo = Config.AlvoModo or "todos"
     local closest, minD = nil, math.huge
+
     for _, mob in ipairs(mobs) do
         if mob and mob.Parent and mob:FindFirstChild("HumanoidRootPart") and mob.Humanoid.Health > 0 then
-            local d = (mob.HumanoidRootPart.Position - myPos).Magnitude
-            local valido = false
-            if Config.AutoFarm and not Config.AutoBoss then
-                valido = not isBoss(mob)
-            elseif Config.AutoBoss and not Config.AutoFarm then
-                valido = isBoss(mob)
-            elseif Config.AutoFarm and Config.AutoBoss then
-                valido = true
+            local cat = getCategoria(mob)
+            if cat then
+                local valido = (modo == "todos") or (modo == cat)
+                if valido then
+                    local d = (mob.HumanoidRootPart.Position - myPos).Magnitude
+                    if d < minD then minD = d; closest = mob end
+                end
             end
-            if valido and d < minD then minD = d; closest = mob end
         end
     end
     return closest
@@ -996,8 +999,16 @@ end
 -- [ABA FARM]
 local farmTab = criarAba("farm", "⚔ Farm")
 criarSecao(farmTab, "Farm")
-criarToggle(farmTab, "Auto Farm", false, function(v) Config.AutoFarm = v end)
-criarToggle(farmTab, "Auto Boss", false, function(v) Config.AutoBoss = v end)
+criarToggle(farmTab, "Farm Ativo", false, function(v) Config.FarmAtivo = v end)
+criarDropdown(farmTab, "Alvo", {"Todos", "Só Mobs", "Só Boss", "Só Event"}, function(v)
+    local map = {
+        ["Todos"]    = "todos",
+        ["Só Mobs"]  = "mobs",
+        ["Só Boss"]  = "boss",
+        ["Só Event"] = "event",
+    }
+    Config.AlvoModo = map[v] or "todos"
+end)
 criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
 criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
 
@@ -1275,7 +1286,7 @@ end)
 -- [LOOP FARM]
 task.spawn(function()
     while Ativo and task.wait(0.08) do
-        if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
+        if farmLigado() and not emRegen then
             local alvo = getAlvo()
             if alvo then
                 if Config.AutoLock and alvoTravado ~= alvo.Name then
@@ -1312,7 +1323,7 @@ end)
 task.spawn(function()
     while Ativo do
         task.wait(0.3)
-        if (Config.AutoFarm or Config.AutoBoss) and Config.Noclip then
+        if farmLigado() and Config.Noclip then
             local char = plr.Character
             if char then
                 for _, p in ipairs(char:GetDescendants()) do
@@ -1337,7 +1348,7 @@ end)
 task.spawn(function()
     while Ativo do
         task.wait(1)
-        if Config.AutoCollect and not (Config.AutoFarm or Config.AutoBoss) then
+        if Config.AutoCollect and not farmLigado() then
             tentarColetar()
         end
     end
@@ -1346,7 +1357,7 @@ end)
 -- [REGEN]
 task.spawn(function()
     while Ativo and task.wait(1) do
-        if Config.AutoRegen and (Config.AutoFarm or Config.AutoBoss) then
+        if Config.AutoRegen and farmLigado() then
             local curr, max = getKi()
             if curr and max then
                 local ratio = curr / max
