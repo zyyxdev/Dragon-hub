@@ -35,8 +35,8 @@ local Ativo = true
 
 -- [CONFIG]
 local Config = {
-    FarmAtivo = false,       -- [PATCH B+C] toggle mestre
-    AlvoModo = "todos",      -- [PATCH B+C] "todos" | "mobs" | "boss" | "event"
+    FarmAtivo = false,
+    AlvoModo = "todos",
     AutoSkills = false,
     AutoTransform = false,
     TransformMode = "SSJAngel",
@@ -98,7 +98,6 @@ local BossTimers = {
     _default = 180,
 }
 
--- [PATCH B+C] categoria via pasta do mob (100% confiável)
 local function getCategoria(mob)
     if not mob or not mob.Parent then return nil end
     local p = mob.Parent.Name
@@ -121,14 +120,10 @@ local function podeAgir()
     return true
 end
 
--- [PATCH B+C] compat: tudo que lia AutoFarm/AutoBoss agora lê daqui
 local function farmLigado()
     return Config.FarmAtivo == true
 end
 
--- [SKILLS]
-
--- [LOCK-ON]
 local function pararLock()
     if LockConexao then LockConexao:Disconnect(); LockConexao = nil end
     LockAlvo = nil
@@ -151,7 +146,6 @@ local function lockOn(mobModel)
     end)
 end
 
--- [VOO]
 local vooBv, vooBg
 local function voarPara(destino, velocidade)
     local myChar = plr.Character
@@ -188,7 +182,6 @@ local function voarPara(destino, velocidade)
     vooBg.CFrame = CFrame.new(hrp.Position, destino)
 end
 
--- [M1]
 local function atacar(alvo)
     if not SkillRemote or not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -215,7 +208,6 @@ local function atacar(alvo)
     end)
 end
 
--- [SKILL]
 local function usarSkill(skill, alvo)
     if not ExecuteSkill or not alvo or not alvo.Parent then return end
     if not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -242,7 +234,6 @@ local function usarSkill(skill, alvo)
     safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, false) end)
 end
 
--- [KI]
 local function getKi()
     local char = plr.Character
     if not char then return nil, nil end
@@ -254,7 +245,6 @@ local function getKi()
     return curr.Value, max.Value
 end
 
--- [REGEN]
 local function iniciarRegen()
     if emRegen then return end
     emRegen = true
@@ -308,7 +298,6 @@ local function pararRegen()
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
 end
 
--- [MOBS]
 local mobs = {}
 local function registrarMob(mob)
     if not mob:IsA("Model") then return end
@@ -338,7 +327,6 @@ task.spawn(function()
     end
 end)
 
--- [PATCH B+C] filtro por pasta + dropdown de alvo
 local function getAlvo()
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
@@ -361,7 +349,6 @@ local function getAlvo()
     return closest
 end
 
--- [HITBOX]
 local function expandirHitbox()
     if not Config.HitboxExpandida then return end
     local wm = WS:FindFirstChild("World Mobs")
@@ -386,9 +373,7 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT]
 local coletando = false
-
 local function tentarColetar()
     if coletando then return end
     if not Config.AutoCollect then return end
@@ -429,14 +414,6 @@ local function tentarColetar()
     if not permitido then return end
 
     coletando = true
-
-    local char = plr.Character
-    if char then
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
-        end
-    end
-
     local base = maisProximo.PrimaryPart or maisProximo:FindFirstChildWhichIsA("BasePart")
     if not base then coletando = false return end
 
@@ -449,10 +426,7 @@ local function tentarColetar()
         tentativas = tentativas + 1
     end
 
-    if not Config.AutoCollect then
-        coletando = false
-        return
-    end
+    if not Config.AutoCollect then coletando = false return end
 
     hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
     task.wait(0.3)
@@ -461,24 +435,10 @@ local function tentarColetar()
     task.wait(0.6)
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
-    task.wait(0.2)
-    local cam = workspace.CurrentCamera
-    if cam then
-        local vp = cam.ViewportSize
-        pcall(function()
-            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0)
-        end)
-        task.wait(0.1)
-        pcall(function()
-            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0)
-        end)
-    end
-
     task.wait(0.3)
     coletando = false
 end
 
--- [ESP GUI]
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
 espGui.ResetOnSpawn = false
@@ -490,12 +450,11 @@ local dropESP = {}
 local function criarESP(mob)
     local hrp = mob:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    local bb = Instance.new("BillboardGui")
+    local bb = Instance.new("BillboardGui", espGui)
     bb.Size = UDim2.new(0, 140, 0, 30)
     bb.StudsOffset = Vector3.new(0, 3, 0)
     bb.AlwaysOnTop = true
     bb.Adornee = hrp
-    bb.Parent = espGui
 
     local nome = Instance.new("TextLabel", bb)
     nome.Size = UDim2.new(1, 0, 1, 0)
@@ -551,12 +510,11 @@ local function atualizarDropESP()
                 if not dropESP[item] then
                     local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
                     if base then
-                        local bb = Instance.new("BillboardGui")
+                        local bb = Instance.new("BillboardGui", espGui)
                         bb.Size = UDim2.new(0, 160, 0, 34)
                         bb.StudsOffset = Vector3.new(0, 4, 0)
                         bb.AlwaysOnTop = true
                         bb.Adornee = base
-                        bb.Parent = espGui
 
                         local lbl = Instance.new("TextLabel", bb)
                         lbl.Size = UDim2.new(1, 0, 1, 0)
@@ -580,16 +538,14 @@ local function atualizarDropESP()
     end
 end
 
--- [UI]
 local oldGui = CoreGui:FindFirstChild("DragonBloxHub")
 if oldGui then oldGui:Destroy() end
 
-local gui = Instance.new("ScreenGui")
+local gui = Instance.new("ScreenGui", CoreGui)
 gui.Name = "DragonBloxHub"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 100
 gui.IgnoreGuiInset = true
-gui.Parent = CoreGui
 
 local P = {
     bg          = Color3.fromRGB(8, 8, 10),
@@ -605,7 +561,7 @@ local P = {
     off         = Color3.fromRGB(45, 45, 55),
 }
 
-local homeBar = Instance.new("TextButton")
+local homeBar = Instance.new("TextButton", gui)
 homeBar.Size = UDim2.new(0, 200, 0, 30)
 homeBar.Position = UDim2.new(0.5, 0, 1, -8)
 homeBar.AnchorPoint = Vector2.new(0.5, 1)
@@ -614,7 +570,6 @@ homeBar.Text = ""
 homeBar.AutoButtonColor = false
 homeBar.Active = true
 homeBar.ZIndex = 50
-homeBar.Parent = gui
 
 local barVisual = Instance.new("Frame", homeBar)
 barVisual.Size = UDim2.new(0, 140, 0, 5)
@@ -627,7 +582,7 @@ barVisual.ZIndex = 51
 barVisual.Active = false
 Instance.new("UICorner", barVisual).CornerRadius = UDim.new(1, 0)
 
-local janela = Instance.new("Frame")
+local janela = Instance.new("Frame", gui)
 janela.Size = UDim2.new(0, 440, 0, 340)
 janela.Position = UDim2.new(0.5, -220, 0.5, -170)
 janela.BackgroundColor3 = P.bg
@@ -635,23 +590,20 @@ janela.BackgroundTransparency = 0.1
 janela.BorderSizePixel = 0
 janela.Active = true
 janela.Visible = false
-janela.Parent = gui
 Instance.new("UICorner", janela).CornerRadius = UDim.new(0, 12)
-local jStroke = Instance.new("UIStroke")
+local jStroke = Instance.new("UIStroke", janela)
 jStroke.Color = P.stroke
 jStroke.Thickness = 1
 jStroke.Transparency = 0.4
-jStroke.Parent = janela
 
-local header = Instance.new("Frame")
+local header = Instance.new("Frame", janela)
 header.Size = UDim2.new(1, 0, 0, 36)
 header.BackgroundColor3 = P.panel
 header.BackgroundTransparency = 0.2
 header.BorderSizePixel = 0
-header.Parent = janela
 Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
 
-local titulo = Instance.new("TextButton")
+local titulo = Instance.new("TextButton", header)
 titulo.Size = UDim2.new(1, -60, 1, 0)
 titulo.Position = UDim2.new(0, 16, 0, 0)
 titulo.BackgroundTransparency = 1
@@ -660,9 +612,8 @@ titulo.TextColor3 = P.text
 titulo.TextSize = 13
 titulo.Font = Enum.Font.GothamBold
 titulo.TextXAlignment = Enum.TextXAlignment.Left
-titulo.Parent = header
 
-local btnMin = Instance.new("TextButton")
+local btnMin = Instance.new("TextButton", header)
 btnMin.Size = UDim2.new(0, 22, 0, 22)
 btnMin.Position = UDim2.new(1, -54, 0.5, -11)
 btnMin.BackgroundColor3 = P.elev
@@ -672,10 +623,9 @@ btnMin.TextSize = 13
 btnMin.Font = Enum.Font.GothamBold
 btnMin.BorderSizePixel = 0
 btnMin.AutoButtonColor = false
-btnMin.Parent = header
 Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0, 5)
 
-local btnKill = Instance.new("TextButton")
+local btnKill = Instance.new("TextButton", header)
 btnKill.Size = UDim2.new(0, 22, 0, 22)
 btnKill.Position = UDim2.new(1, -28, 0.5, -11)
 btnKill.BackgroundColor3 = P.danger
@@ -685,16 +635,14 @@ btnKill.TextSize = 13
 btnKill.Font = Enum.Font.GothamBold
 btnKill.BorderSizePixel = 0
 btnKill.AutoButtonColor = false
-btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 5)
 
-local tabBar = Instance.new("Frame")
+local tabBar = Instance.new("Frame", janela)
 tabBar.Size = UDim2.new(1, -20, 0, 32)
 tabBar.Position = UDim2.new(0, 10, 0, 40)
 tabBar.BackgroundColor3 = P.panel
 tabBar.BackgroundTransparency = 0.3
 tabBar.BorderSizePixel = 0
-tabBar.Parent = janela
 Instance.new("UICorner", tabBar).CornerRadius = UDim.new(0, 8)
 
 local tabLayout = Instance.new("UIListLayout", tabBar)
@@ -703,16 +651,15 @@ tabLayout.Padding = UDim.new(0, 3)
 tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 
-local contentArea = Instance.new("Frame")
+local contentArea = Instance.new("Frame", janela)
 contentArea.Size = UDim2.new(1, -20, 1, -86)
 contentArea.Position = UDim2.new(0, 10, 0, 78)
 contentArea.BackgroundTransparency = 1
-contentArea.Parent = janela
 
 local abas = {}
 
 local function criarAba(nome, display)
-    local btn = Instance.new("TextButton")
+    local btn = Instance.new("TextButton", tabBar)
     btn.Size = UDim2.new(0, 78, 0, 26)
     btn.BackgroundColor3 = P.elev
     btn.BackgroundTransparency = 1
@@ -722,10 +669,9 @@ local function criarAba(nome, display)
     btn.Font = Enum.Font.GothamBold
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
-    btn.Parent = tabBar
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
-    local scroll = Instance.new("ScrollingFrame")
+    local scroll = Instance.new("ScrollingFrame", contentArea)
     scroll.Size = UDim2.new(1, 0, 1, 0)
     scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
@@ -734,13 +680,12 @@ local function criarAba(nome, display)
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     scroll.Visible = false
-    scroll.Parent = contentArea
 
-    local layout = Instance.new("UIListLayout")
+    local layout = Instance.new("UIListLayout", scroll)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Padding = UDim.new(0, 5)
-    layout.Parent = scroll
-    Instance.new("UIPadding", scroll).PaddingBottom = UDim.new(0, 15)
+    local pad = Instance.new("UIPadding", scroll)
+    pad.PaddingBottom = UDim.new(0, 15)
 
     abas[nome] = { botao = btn, frame = scroll }
 
@@ -762,7 +707,7 @@ local function criarAba(nome, display)
 end
 
 local function criarSecao(parent, texto)
-    local lbl = Instance.new("TextLabel")
+    local lbl = Instance.new("TextLabel", parent)
     lbl.Size = UDim2.new(1, 0, 0, 20)
     lbl.BackgroundTransparency = 1
     lbl.Text = texto
@@ -770,19 +715,17 @@ local function criarSecao(parent, texto)
     lbl.TextSize = 10
     lbl.Font = Enum.Font.GothamBold
     lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = parent
 end
 
 local function criarToggle(parent, texto, default, callback)
-    local frame = Instance.new("Frame")
+    local frame = Instance.new("Frame", parent)
     frame.Size = UDim2.new(1, 0, 0, 34)
     frame.BackgroundColor3 = P.elev
     frame.BackgroundTransparency = 0.2
     frame.BorderSizePixel = 0
-    frame.Parent = parent
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
-    local label = Instance.new("TextLabel")
+    local label = Instance.new("TextLabel", frame)
     label.Size = UDim2.new(1, -70, 1, 0)
     label.Position = UDim2.new(0, 14, 0, 0)
     label.BackgroundTransparency = 1
@@ -791,30 +734,26 @@ local function criarToggle(parent, texto, default, callback)
     label.TextSize = 11
     label.Font = Enum.Font.GothamMedium
     label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = frame
 
-    local sw = Instance.new("Frame")
+    local sw = Instance.new("Frame", frame)
     sw.Size = UDim2.new(0, 36, 0, 20)
     sw.Position = UDim2.new(1, -48, 0.5, -10)
     sw.BackgroundColor3 = default and P.accent or P.off
     sw.BorderSizePixel = 0
-    sw.Parent = frame
     Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
 
-    local knob = Instance.new("Frame")
+    local knob = Instance.new("Frame", sw)
     knob.Size = UDim2.new(0, 16, 0, 16)
     knob.Position = default and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
     knob.BackgroundColor3 = Color3.new(1, 1, 1)
     knob.BorderSizePixel = 0
-    knob.Parent = sw
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local state = default
-    local btn = Instance.new("TextButton")
+    local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.new(1, 0, 1, 0)
     btn.BackgroundTransparency = 1
     btn.Text = ""
-    btn.Parent = frame
 
     btn.MouseButton1Click:Connect(function()
         state = not state
@@ -825,15 +764,14 @@ local function criarToggle(parent, texto, default, callback)
 end
 
 local function criarSlider(parent, texto, min, max, default, step, callback)
-    local frame = Instance.new("Frame")
+    local frame = Instance.new("Frame", parent)
     frame.Size = UDim2.new(1, 0, 0, 48)
     frame.BackgroundColor3 = P.elev
     frame.BackgroundTransparency = 0.2
     frame.BorderSizePixel = 0
-    frame.Parent = parent
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
-    local label = Instance.new("TextLabel")
+    local label = Instance.new("TextLabel", frame)
     label.Size = UDim2.new(1, -20, 0, 18)
     label.Position = UDim2.new(0, 14, 0, 4)
     label.BackgroundTransparency = 1
@@ -842,30 +780,26 @@ local function criarSlider(parent, texto, min, max, default, step, callback)
     label.TextSize = 11
     label.Font = Enum.Font.GothamMedium
     label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = frame
 
-    local barBg = Instance.new("Frame")
+    local barBg = Instance.new("Frame", frame)
     barBg.Size = UDim2.new(1, -28, 0, 6)
     barBg.Position = UDim2.new(0, 14, 1, -18)
     barBg.BackgroundColor3 = P.stroke
     barBg.BorderSizePixel = 0
-    barBg.Parent = frame
     Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
 
     local pct = (default - min) / (max - min)
-    local barFill = Instance.new("Frame")
+    local barFill = Instance.new("Frame", barBg)
     barFill.Size = UDim2.new(pct, 0, 1, 0)
     barFill.BackgroundColor3 = P.accent
     barFill.BorderSizePixel = 0
-    barFill.Parent = barBg
     Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
 
-    local dragBtn = Instance.new("TextButton")
+    local dragBtn = Instance.new("TextButton", barBg)
     dragBtn.Size = UDim2.new(1, 0, 3, 0)
     dragBtn.Position = UDim2.new(0, 0, -1, 0)
     dragBtn.BackgroundTransparency = 1
     dragBtn.Text = ""
-    dragBtn.Parent = barBg
 
     local dragging = false
     dragBtn.MouseButton1Down:Connect(function() dragging = true end)
@@ -893,7 +827,7 @@ local function criarSlider(parent, texto, min, max, default, step, callback)
 end
 
 local function criarBotao(parent, texto, callback)
-    local btn = Instance.new("TextButton")
+    local btn = Instance.new("TextButton", parent)
     btn.Size = UDim2.new(1, 0, 0, 32)
     btn.BackgroundColor3 = P.elev
     btn.BackgroundTransparency = 0.2
@@ -903,14 +837,13 @@ local function criarBotao(parent, texto, callback)
     btn.Font = Enum.Font.GothamMedium
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = true
-    btn.Parent = parent
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
     btn.MouseButton1Click:Connect(callback)
 end
 
 local function criarLabel(parent, texto, altura)
     altura = altura or 60
-    local lbl = Instance.new("TextLabel")
+    local lbl = Instance.new("TextLabel", parent)
     lbl.Size = UDim2.new(1, 0, 0, altura)
     lbl.BackgroundColor3 = P.elev
     lbl.BackgroundTransparency = 0.4
@@ -921,28 +854,25 @@ local function criarLabel(parent, texto, altura)
     lbl.TextWrapped = true
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Top
-    lbl.Parent = parent
     Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 8)
     local p = Instance.new("UIPadding", lbl)
     p.PaddingLeft = UDim.new(0, 12)
     p.PaddingTop = UDim.new(0, 8)
     p.PaddingRight = UDim.new(0, 12)
-    p.Parent = lbl
     return lbl
 end
 
 local function criarDropdown(parent, texto, opcoes, callback)
-    local frame = Instance.new("Frame")
+    local frame = Instance.new("Frame", parent)
     frame.Size = UDim2.new(1, 0, 0, 40)
     frame.BackgroundColor3 = P.elev
     frame.BackgroundTransparency = 0.2
     frame.BorderSizePixel = 0
     frame.ClipsDescendants = false
     frame.ZIndex = 2
-    frame.Parent = parent
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
-    local btn = Instance.new("TextButton")
+    local btn = Instance.new("TextButton", frame)
     btn.Size = UDim2.new(1, 0, 1, 0)
     btn.BackgroundTransparency = 1
     btn.Text = texto .. ": " .. (opcoes[1] or "?")
@@ -950,31 +880,30 @@ local function criarDropdown(parent, texto, opcoes, callback)
     btn.TextSize = 11
     btn.Font = Enum.Font.GothamMedium
     btn.TextXAlignment = Enum.TextXAlignment.Left
-    btn.Parent = frame
-    local bPad = Instance.new("UIPadding") bPad.PaddingLeft = UDim.new(0, 12) bPad.Parent = btn
+    local bPad = Instance.new("UIPadding", btn) bPad.PaddingLeft = UDim.new(0, 12)
 
-    local lista = Instance.new("Frame")
+    local lista = Instance.new("Frame", frame)
     lista.Size = UDim2.new(1, 0, 0, math.min(#opcoes * 26, 180))
     lista.Position = UDim2.new(0, 0, 1, 4)
     lista.BackgroundColor3 = P.panel
     lista.BorderSizePixel = 0
     lista.Visible = false
     lista.ZIndex = 50
-    lista.Parent = frame
     Instance.new("UICorner", lista).CornerRadius = UDim.new(0, 8)
-    Instance.new("UIStroke", {Color = P.stroke, Thickness = 1}, lista)
+    local stroke = Instance.new("UIStroke", lista)
+    stroke.Color = P.stroke
+    stroke.Thickness = 1
 
-    local lscroll = Instance.new("ScrollingFrame")
+    local lscroll = Instance.new("ScrollingFrame", lista)
     lscroll.Size = UDim2.new(1, 0, 1, 0)
     lscroll.BackgroundTransparency = 1
     lscroll.BorderSizePixel = 0
     lscroll.ScrollBarThickness = 3
     lscroll.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 26)
-    lscroll.Parent = lista
-    local ll = Instance.new("UIListLayout") ll.Parent = lscroll
+    local ll = Instance.new("UIListLayout", lscroll)
 
     for _, opt in ipairs(opcoes) do
-        local ob = Instance.new("TextButton")
+        local ob = Instance.new("TextButton", lscroll)
         ob.Size = UDim2.new(1, 0, 0, 26)
         ob.BackgroundTransparency = 1
         ob.Text = tostring(opt)
@@ -982,8 +911,7 @@ local function criarDropdown(parent, texto, opcoes, callback)
         ob.TextSize = 11
         ob.Font = Enum.Font.GothamMedium
         ob.TextXAlignment = Enum.TextXAlignment.Left
-        ob.Parent = lscroll
-        local opad = Instance.new("UIPadding") opad.PaddingLeft = UDim.new(0, 12) opad.Parent = ob
+        local opad = Instance.new("UIPadding", ob) opad.PaddingLeft = UDim.new(0, 12)
         ob.MouseButton1Click:Connect(function()
             btn.Text = texto .. ": " .. tostring(opt)
             lista.Visible = false
@@ -1117,7 +1045,6 @@ bossInput.ClearTextOnFocus = false
 Instance.new("UICorner", bossInput).CornerRadius = UDim.new(0, 8)
 local biPad = Instance.new("UIPadding", bossInput)
 biPad.PaddingLeft = UDim.new(0, 12)
-bossInput.Parent = trackerTab
 
 criarBotao(trackerTab, "✈️ Ir para o boss", function()
     local nome = bossInput.Text
@@ -1241,7 +1168,6 @@ end)
 
 abas.farm.ativar()
 
--- [INTERAÇÕES]
 homeBar.MouseButton1Click:Connect(function()
     janela.Visible = not janela.Visible
 end)
@@ -1461,4 +1387,4 @@ task.spawn(function()
     end
 end)
 
-print("[DBH] ✅ Carregado")
+print("[DBH] ✅ Carregado com sucesso!")
