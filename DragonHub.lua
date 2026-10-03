@@ -85,8 +85,9 @@ local BossTimers = {
     _default = 180,
 }
 
+-- [PATCH] Lista de keywords corrigida — sem "droid" e "atom"
 local BOSS_KEYWORDS = {
-    "coolest","droid","jinbu","atom","turles","boku","apejaw","kataba",
+    "coolest","jinbu","turles","boku","apejaw","kataba",
     "yeti","opa","brolo","gero","nash","frieza","cell","buu","beerus",
     "jiren","broly","zaja","boss"
 }
@@ -136,7 +137,7 @@ local function lockOn(mobModel)
     end)
 end
 
--- [VOO - versão original]
+-- [VOO]
 local vooBv, vooBg
 local function voarPara(destino, velocidade)
     local myChar = plr.Character
@@ -1246,11 +1247,11 @@ task.spawn(function()
     end
 end)
 
--- [AUTOCOLLECT]
+-- [AUTOCOLLECT — patch: só roda se farm desligado]
 task.spawn(function()
     while Ativo do
         task.wait(1)
-        if Config.AutoCollect then
+        if Config.AutoCollect and not (Config.AutoFarm or Config.AutoBoss) then
             tentarColetar()
         end
     end
