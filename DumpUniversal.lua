@@ -1,4 +1,4 @@
-print("[DUMPER v6.0] Iniciando...")
+print("[DUMPER v6.1] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -33,7 +33,6 @@ local State = {
 
 local _hookFire = nil
 local _hookInvoke = nil
-local _nomecallOriginal = nil
 local ultimoPath = {}
 local RATE_LIMIT = 0.15
 local MAX_UNICOS = 2000
@@ -195,11 +194,10 @@ local function processarChamada(self, ...)
 end
 
 -- ═══════════════════════════════════════════════
--- HOOK (método compartilhado — ÚNICO que funciona no Delta)
+-- HOOK
 -- ═══════════════════════════════════════════════
 local function instalarHook()
     if State.hookAtivo then return end
-
     if not hookfunction then
         State.hookMetodo = "SEM-HOOKFUNCTION"
         log("ERROR", "Executor sem hookfunction")
@@ -229,7 +227,7 @@ local function instalarHook()
     if okFire or okInv then
         State.hookAtivo = true
         State.hookMetodo = "hookfunction"
-        log("SUCCESS", "✅ Hook ativo (FireServer="..tostring(okFire).." InvokeServer="..tostring(okInv)..")")
+        log("SUCCESS", "✅ Hook ativo (Fire="..tostring(okFire).." Invoke="..tostring(okInv)..")")
     else
         State.hookMetodo = "FALHOU"
         log("ERROR", "❌ Hook falhou")
@@ -267,8 +265,6 @@ local function diagnostico()
             end
         end
         log("INFO", "Remotes em RS.Remotes ("..#lista.."): "..table.concat(lista, ", "))
-    else
-        log("WARN", "RS.Remotes não encontrado")
     end
 end
 
@@ -381,7 +377,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v6.0 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v6.1 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -396,7 +392,6 @@ local function salvarArquivo()
     add("└──────────────────────────────────────────────────────")
     add("")
 
-    -- Agrupa por categoria
     local porCat = {}
     for _, t in ipairs(State.trfBuf) do
         porCat[t.cat] = porCat[t.cat] or {}
@@ -526,9 +521,10 @@ local function safeUI(fn)
     end
 end
 
--- ═══════ JANELA PRINCIPAL ═══════
-local W = 540
-local H = 620
+-- [OTIMIZAÇÃO] escala responsiva mobile
+local viewport = workspace.CurrentCamera.ViewportSize
+local W = math.min(420, viewport.X * 0.92)
+local H = math.min(520, viewport.Y * 0.85)
 
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0, W, 0, H)
@@ -544,7 +540,7 @@ mStroke.Color = T.border
 mStroke.Thickness = 1
 mStroke.Transparency = 0.4
 
--- ═══════ HEADER ═══════
+-- HEADER
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 42)
 header.BackgroundTransparency = 1
@@ -606,7 +602,7 @@ btnKill.AutoButtonColor = false
 btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 6)
 
--- ═══════ SIDEBAR ═══════
+-- SIDEBAR
 local sidebar = Instance.new("Frame")
 sidebar.Size = UDim2.new(0, 118, 1, -78)
 sidebar.Position = UDim2.new(0, 12, 0, 50)
@@ -680,7 +676,7 @@ local function criarItemSidebar(id, icone, nome, subtituloFn)
     return btn
 end
 
--- ═══════ CONTEÚDO ═══════
+-- CONTEÚDO
 local content = Instance.new("Frame")
 content.Size = UDim2.new(1, -142, 1, -78)
 content.Position = UDim2.new(0, 130, 0, 50)
@@ -758,7 +754,6 @@ feedScroll.BorderSizePixel = 0
 feedScroll.ScrollBarThickness = 3
 feedScroll.ScrollBarImageColor3 = T.border
 feedScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-feedScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 feedScroll.Parent = painelCaptura
 Instance.new("UICorner", feedScroll).CornerRadius = UDim.new(0, 8)
 local fpad = Instance.new("UIPadding", feedScroll)
@@ -777,7 +772,7 @@ feedText.TextXAlignment = Enum.TextXAlignment.Left
 feedText.TextYAlignment = Enum.TextYAlignment.Top
 feedText.TextWrapped = true
 feedText.RichText = true
-feedText.AutomaticSize = Enum.AutomaticSize.Y
+feedText.Text = ""
 feedText.Parent = feedScroll
 
 -- Painel FILTROS
@@ -923,7 +918,6 @@ logsScroll.BorderSizePixel = 0
 logsScroll.ScrollBarThickness = 3
 logsScroll.ScrollBarImageColor3 = T.border
 logsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-logsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 logsScroll.Parent = painelLogs
 Instance.new("UICorner", logsScroll).CornerRadius = UDim.new(0, 8)
 local lp = Instance.new("UIPadding", logsScroll)
@@ -942,7 +936,7 @@ logsText.TextXAlignment = Enum.TextXAlignment.Left
 logsText.TextYAlignment = Enum.TextYAlignment.Top
 logsText.TextWrapped = true
 logsText.RichText = true
-logsText.AutomaticSize = Enum.AutomaticSize.Y
+logsText.Text = ""
 logsText.Parent = logsScroll
 
 -- Painel ARQUIVO
@@ -997,7 +991,7 @@ local function mkBotaoAcao(y, icone, nome, desc, cor, cb)
     b.MouseButton1Click:Connect(safeUI(cb))
 end
 
-mkBotaoAcao(12, "📁", "Scan Arquitetural", "Mapeia todos os remotes e modules do jogo", T.info, function()
+mkBotaoAcao(12, "📁", "Scan Arquitetural", "Mapeia todos os remotes e modules", T.info, function()
     scanArquitetural()
 end)
 
@@ -1006,7 +1000,7 @@ mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt com estrutura organizada", T.a
     salvarArquivo()
 end)
 
-mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego e arquitetural capturado", T.warn, function()
+mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego e arquitetural", T.warn, function()
     State.trfBuf = {}
     State.unicos = {}
     State.arquitetural = {}
@@ -1066,7 +1060,7 @@ btnTeste.AutoButtonColor = false
 btnTeste.Parent = painelDiag
 Instance.new("UICorner", btnTeste).CornerRadius = UDim.new(0, 8)
 
--- ═══════ RODAPÉ ═══════
+-- RODAPÉ
 local footer = Instance.new("Frame")
 footer.Size = UDim2.new(1, -24, 0, 26)
 footer.Position = UDim2.new(0, 12, 1, -34)
@@ -1076,14 +1070,14 @@ footer.Parent = main
 local footTxt = Instance.new("TextLabel")
 footTxt.Size = UDim2.new(1, 0, 1, 0)
 footTxt.BackgroundTransparency = 1
-footTxt.Text = "0 bruto  •  0 únicos  •  hook: —"
+footTxt.Text = "0 bruto • 0 únicos • hook: —"
 footTxt.TextColor3 = T.textMuted
 footTxt.Font = Enum.Font.GothamMedium
 footTxt.TextSize = 10
 footTxt.TextXAlignment = Enum.TextXAlignment.Left
 footTxt.Parent = footer
 
--- ═══════ CRIAR ITENS DO SIDEBAR ═══════
+-- CRIAR ITENS SIDEBAR
 criarItemSidebar("captura", "📡", "Captura", function()
     if State.capturando then return "REC • "..State.contadorBruto end
     return State.contadorBruto > 0 and (State.contadorBruto.." bruto") or "parado"
@@ -1107,8 +1101,8 @@ criarItemSidebar("diag", "🩺", "Diagnóstico", function()
     return State.hookAtivo and "hook ok" or "sem hook"
 end)
 
--- ═══════ ATUALIZAR SIDEBAR ═══════
-local function atualizarSidebar()
+-- ATUALIZAR SIDEBAR
+function atualizarSidebar()
     for id, item in pairs(sidebarItens) do
         local ativo = (State.catAtiva == id)
         item.btn.BackgroundColor3 = ativo and T.elevHover or T.elev
@@ -1119,8 +1113,8 @@ local function atualizarSidebar()
     end
 end
 
--- ═══════ ATUALIZAR CONTEÚDO ═══════
-local function atualizarConteudo()
+-- ATUALIZAR CONTEÚDO
+function atualizarConteudo()
     painelCaptura.Visible = (State.catAtiva == "captura")
     painelFiltros.Visible = (State.catAtiva == "filtros")
     painelLogs.Visible = (State.catAtiva == "logs")
@@ -1128,7 +1122,7 @@ local function atualizarConteudo()
     painelDiag.Visible = (State.catAtiva == "diag")
 end
 
--- ═══════ BTN CAPTURAR ═══════
+-- BTN CAPTURAR
 local function atualizarBtnCap()
     if State.capturando then
         btnCap.BackgroundColor3 = T.danger
@@ -1169,7 +1163,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v6.0] Encerrado")
+    print("[DUMPER v6.1] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1212,7 +1206,7 @@ btnTeste.MouseButton1Click:Connect(safeUI(function()
     print("[DUMPER] Teste enviado. Se não apareceu [CAP/M1] acima, hook falhou.")
 end))
 
--- ═══════ DRAG ═══════
+-- DRAG
 local dragging, dStart, sStart = false, nil, nil
 header.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
@@ -1239,50 +1233,64 @@ UIS.InputEnded:Connect(function(i)
     end
 end)
 
--- ═══════ LOOPS DE ATUALIZAÇÃO ═══════
+-- [OTIMIZAÇÃO] só re-renderiza quando muda algo
+local _ultimoCount = -1
+local _ultimaCat = nil
+
 task.spawn(function()
     while gui.Parent do
-        task.wait(0.5)
+        task.wait(0.7)
 
-        -- Feed
-        local linhas = {}
-        local ini = math.max(1, #State.trfBuf - 25)
-        for i = ini, #State.trfBuf do
-            local t = State.trfBuf[i]
-            local info = CAT_INFO[t.cat] or CAT_INFO.OTHER
-            local suf = t.count > 1 and (" ×"..t.count) or ""
-            table.insert(linhas, string.format(
-                "<font color='#666'>[%s]</font> <font color='#%s'>%s %s</font> <font color='#888'>%s%s</font>",
-                t.primeiro, info.cor, info.icone, t.cat, t.path:sub(-40), suf))
+        -- Pula se nada mudou
+        if #State.trfBuf == _ultimoCount and State.catAtiva == _ultimaCat then
+            continue
         end
-        feedText.Text = #linhas == 0
-            and "<font color='#666'>Aguardando captura...</font>"
-            or table.concat(linhas, "\n")
+        _ultimoCount = #State.trfBuf
+        _ultimaCat = State.catAtiva
 
-        -- Logs
-        local linhasL = {}
-        local filtro = State.filtroLogCat
-        local ini2 = math.max(1, #State.trfBuf - 200)
-        for i = ini2, #State.trfBuf do
-            local t = State.trfBuf[i]
-            if filtro == "todos" or t.cat == filtro then
+        -- Feed: só renderiza se visível
+        if painelCaptura.Visible then
+            local linhas = {}
+            local ini = math.max(1, #State.trfBuf - 12)
+            for i = ini, #State.trfBuf do
+                local t = State.trfBuf[i]
                 local info = CAT_INFO[t.cat] or CAT_INFO.OTHER
-                local suf = t.count > 1 and (" [×"..t.count.."]") or ""
-                table.insert(linhasL, string.format(
-                    "<font color='#888'>%s</font> <font color='#%s'>%s %s</font><font color='#666'>%s</font>\n  <font color='#AAA'>%s</font>\n",
-                    t.primeiro, info.cor, info.icone, t.cat, suf, t.path))
-                table.insert(linhasL, string.format("  <font color='#777'>↳ %s</font>\n", t.args))
+                local suf = t.count > 1 and (" ×"..t.count) or ""
+                table.insert(linhas, string.format(
+                    "<font color='#666'>[%s]</font> <font color='#%s'>%s %s</font> <font color='#888'>%s%s</font>",
+                    t.primeiro, info.cor, info.icone, t.cat, t.path:sub(-36), suf))
             end
+            feedText.Text = #linhas == 0
+                and "<font color='#666'>Aguardando...</font>"
+                or table.concat(linhas, "\n")
+            feedScroll.CanvasSize = UDim2.new(0, 0, 0, feedText.TextBounds.Y + 20)
         end
-        logsText.Text = #linhasL == 0
-            and "<font color='#666'>Sem entradas ainda.</font>"
-            or table.concat(linhasL, "")
 
-        -- Footer
+        -- Logs: só renderiza se visível
+        if painelLogs.Visible then
+            local linhasL = {}
+            local filtro = State.filtroLogCat
+            local ini2 = math.max(1, #State.trfBuf - 40)
+            for i = ini2, #State.trfBuf do
+                local t = State.trfBuf[i]
+                if filtro == "todos" or t.cat == filtro then
+                    local info = CAT_INFO[t.cat] or CAT_INFO.OTHER
+                    local suf = t.count > 1 and (" [×"..t.count.."]") or ""
+                    table.insert(linhasL, string.format(
+                        "<font color='#888'>%s</font> <font color='#%s'>%s %s</font><font color='#666'>%s</font>  <font color='#AAA'>%s</font>\n",
+                        t.primeiro, info.cor, info.icone, t.cat, suf, t.path))
+                end
+            end
+            logsText.Text = #linhasL == 0
+                and "<font color='#666'>Sem entradas.</font>"
+                or table.concat(linhasL, "")
+            logsScroll.CanvasSize = UDim2.new(0, 0, 0, logsText.TextBounds.Y + 20)
+        end
+
+        -- Footer + sidebar
         footTxt.Text = string.format(
-            "%d bruto  •  %d únicos  •  hook: %s",
+            "%d bruto • %d únicos • %s",
             State.contadorBruto, #State.trfBuf, State.hookMetodo)
-
         atualizarSidebar()
     end
 end)
@@ -1290,5 +1298,5 @@ end)
 atualizarSidebar()
 atualizarConteudo()
 
-print("[DUMPER v6.0] ✅ Pronto")
-print("[DUMPER] 1) Captura → INICIAR  2) ações no jogo  3) PARAR  4) Arquivo → SALVAR")
+print("[DUMPER v6.1] ✅ Pronto")
+print("[DUMPER] Captura → INICIAR | ações no jogo | PARAR | Arquivo → SALVAR")
