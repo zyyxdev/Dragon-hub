@@ -64,6 +64,7 @@ local Config = {
     SkillMode = "off",
     SkillSingle = "UniqueSets_2_1",
     SkillCombo = "dps",
+    UsarM1VIM = false,
 }
 
 local function farmLigado()
@@ -119,7 +120,7 @@ local function podeAgir()
     return true
 end
 
--- [LOCK-ON]
+-- [LOCK-ON] PATCH 1: destravar quando mob morre
 local function pararLock()
     if LockConexao then LockConexao:Disconnect(); LockConexao = nil end
     LockAlvo = nil
@@ -136,7 +137,11 @@ local function lockOn(mobModel)
         if not LockAlvo or not LockAlvo.Parent then pararLock() return end
         local mh = LockAlvo:FindFirstChild("HumanoidRootPart")
         local hum = LockAlvo:FindFirstChildOfClass("Humanoid")
-        if not mh or not hum or hum.Health <= 0 then pararLock() return end
+        if not mh or not hum or hum.Health <= 0 then
+            pararLock()
+            alvoTravado = nil
+            return
+        end
         local cam = workspace.CurrentCamera
         if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, mh.Position) end
     end)
@@ -178,26 +183,41 @@ local function voarPara(destino, velocidade)
     vooBg.CFrame = CFrame.new(hrp.Position, destino)
 end
 
--- [M1]
+-- [M1] PATCH 5: fallback VIM quando FireServer não funciona
 local function atacar(alvo)
-    if not SkillRemote or not plr.Character or not podeAgir() then return end
+    if not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
     local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    local mhrp = alvo.HumanoidRootPart
-    local cframe = hrp.CFrame
-    local aim = mhrp.Position
-    local camCF = CFrame.lookAt(hrp.Position, aim)
-    safe(function()
-        SkillRemote:FireServer({ Began = true, CFrame = cframe, Aim = aim, Camera = camCF, Type = 1, SkillId = "1" })
-    end)
-    task.wait(0.05)
-    safe(function()
-        SkillRemote:FireServer({ Began = false, CFrame = cframe, Aim = aim, Camera = camCF, Type = 1, SkillId = "1" })
-    end)
+
+    -- Se marcado pra usar VIM direto, pula FireServer
+    if not Config.UsarM1VIM and SkillRemote then
+        local mhrp = alvo.HumanoidRootPart
+        local cframe = hrp.CFrame
+        local aim = mhrp.Position
+        local camCF = CFrame.lookAt(hrp.Position, aim)
+        safe(function()
+            SkillRemote:FireServer({ Began = true, CFrame = cframe, Aim = aim, Camera = camCF, Type = 1, SkillId = "1" })
+        end)
+        task.wait(0.05)
+        safe(function()
+            SkillRemote:FireServer({ Began = false, CFrame = cframe, Aim = aim, Camera = camCF, Type = 1, SkillId = "1" })
+        end)
+        return
+    end
+
+    -- VIM: clique virtual no centro da tela
+    local cam = workspace.CurrentCamera
+    if cam then
+        local vp = cam.ViewportSize
+        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
+        task.wait(0.05)
+        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
+    end
 end
 
--- [SKILL]
+-- [SKILL] PATCH 2: Special só quando trocar de skill
+local _ultimaSkillEnviada = nil
 local function usarSkill(skill, alvo)
     if not ExecuteSkill or not alvo or not alvo.Parent then return end
     if not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -213,7 +233,12 @@ local function usarSkill(skill, alvo)
     end
 
     local tpos = alvo.HumanoidRootPart.Position
-    safe(function() ExecuteSkill_Special:FireServer(plr.Name, skill.nome) end)
+
+    if _ultimaSkillEnviada ~= skill.nome then
+        safe(function() ExecuteSkill_Special:FireServer(plr.Name, skill.nome) end)
+        _ultimaSkillEnviada = skill.nome
+        task.wait(0.15)
+    end
 
     local cfg = { targetPos = tpos, HumCFrame = hrp.CFrame, ResumeOnTimePassed = skill.pause or 0.5 }
     if skill.hold then cfg.HoldAnimation = skill.hold end
@@ -365,7 +390,7 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT] cooldown + histerese + por-item
+-- [AUTOCOLLECT] PATCH 6: filtro simplificado
 local coletando = false
 local ultimoColetado = 0
 local tentativasItem = {}
@@ -373,12 +398,9 @@ local tentativasItem = {}
 local function extrairInfo(item)
     local id = tonumber(item.Name:match("ItemDrop_(%d+)")) or 0
     local nome = item.Name
-    local rar = nil
     local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
     if sv and sv:IsA("StringValue") then nome = sv.Value end
-    local rv = item:FindFirstChild("Rarity")
-    if rv and rv:IsA("StringValue") then rar = rv.Value end
-    return id, nome, rar
+    return id, nome
 end
 
 local function tentarColetar()
@@ -410,12 +432,20 @@ local function tentarColetar()
 
     if not maisProximo then return end
 
-    local id, itemName, rar = extrairInfo(maisProximo)
+    local id, itemName = extrairInfo(maisProximo)
     local low = itemName:lower()
-    local permitido = true
-    if low:find("expmat") and not Config.ColetarComum then permitido = false end
-    if low:find("powerscroll") and not Config.ColetarEpico then permitido = false end
-    if low:find("wish") and not Config.ColetarLendario then permitido = false end
+
+    local ehEsfera = low:find("wish") or low:find("standard") or low:find("premium")
+    local ehOrb = low:find("orb")
+    local ehScroll = low:find("powerscroll")
+    local ehExp = low:find("expmat")
+
+    local permitido = false
+    if ehEsfera and (Config.ColetarLendario or Config.ColetarRaro) then permitido = true end
+    if ehOrb and Config.ColetarRaro then permitido = true end
+    if ehScroll and Config.ColetarEpico then permitido = true end
+    if ehExp and Config.ColetarComum then permitido = true end
+
     if not permitido then return end
 
     coletando = true
@@ -926,7 +956,7 @@ local function criarLabel(parent, texto, altura)
     return lbl
 end
 
--- [DROPDOWN v2] overlay fora do scroll (não corta mais)
+-- [DROPDOWN v2] overlay fora do scroll
 local function criarDropdown(parent, texto, opcoes, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 0, 40)
@@ -1024,6 +1054,7 @@ criarToggle(farmTab, "Auto Lock-On", true, function(v) Config.AutoLock = v end)
 criarToggle(farmTab, "Noclip com farm", true, function(v) Config.Noclip = v end)
 criarToggle(farmTab, "Hitbox Expandida", false, function(v) Config.HitboxExpandida = v end)
 criarSlider(farmTab, "Multiplicador Hitbox", 1, 5, 2, 1, function(v) Config.HitboxMulti = v end)
+criarToggle(farmTab, "M1 via VIM (mobile)", false, function(v) Config.UsarM1VIM = v end)
 criarSecao(farmTab, "Visual")
 criarToggle(farmTab, "ESP Mobs", false, function(v) Config.ESPMobs = v end)
 criarToggle(farmTab, "ESP Itens", false, function(v) Config.ESPItems = v end)
@@ -1036,17 +1067,16 @@ criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     end
 end)
 
--- [ABA COLLECT]
+-- [ABA COLLECT] PATCH 6: labels simplificados
 local collectTab = criarAba("collect", "💎 Collect")
 criarSecao(collectTab, "Auto Coletar")
 criarToggle(collectTab, "Auto Coletar", false, function(v) Config.AutoCollect = v end)
 criarSlider(collectTab, "Cooldown entre coletas (s)", 1, 15, 3, 1, function(v) Config.ColetaCooldown = v end)
-criarSecao(collectTab, "Filtro de Raridade")
-criarToggle(collectTab, "Comum (ExpMat)", false, function(v) Config.ColetarComum = v end)
-criarToggle(collectTab, "Incomum", true, function(v) Config.ColetarIncomum = v end)
-criarToggle(collectTab, "Raro (Orbs)", true, function(v) Config.ColetarRaro = v end)
-criarToggle(collectTab, "Épico (Scrolls)", true, function(v) Config.ColetarEpico = v end)
-criarToggle(collectTab, "Lendário (Wish)", true, function(v) Config.ColetarLendario = v end)
+criarSecao(collectTab, "O que coletar")
+criarToggle(collectTab, "Esferas (Wish)", true, function(v) Config.ColetarLendario = v end)
+criarToggle(collectTab, "Orbs", true, function(v) Config.ColetarRaro = v end)
+criarToggle(collectTab, "Scrolls", true, function(v) Config.ColetarEpico = v end)
+criarToggle(collectTab, "ExpMat", false, function(v) Config.ColetarComum = v end)
 
 -- [ABA REBIRTH]
 local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
@@ -1228,7 +1258,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.1", 80)
+criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.2", 80)
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
 
 task.spawn(function()
@@ -1285,7 +1315,7 @@ btnKill.MouseButton1Click:Connect(function()
     espGui:Destroy()
 end)
 
--- [LOOP FARM]
+-- [LOOP FARM] PATCH 4: força aproximação até boss
 task.spawn(function()
     while Ativo and task.wait(0.08) do
         if farmLigado() and not emRegen then
@@ -1300,8 +1330,18 @@ task.spawn(function()
                     local mpos = alvo.HumanoidRootPart.Position
                     local dist = (mpos - hrp.Position).Magnitude
                     local zonaConforto = Config.AttackRange + 4
-                    if dist > zonaConforto then voarPara(mpos, Config.FlySpeed)
-                    elseif dist > 3 then voarPara(mpos, Config.FlySpeed * 0.3)
+
+                    if dist > zonaConforto then
+                        voarPara(mpos, Config.FlySpeed)
+                        if getCategoria(alvo) == "boss" and dist > 100 then
+                            local hrpAtual = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                            if hrpAtual then
+                                local alvoPos = Vector3.new(mpos.X, hrpAtual.Position.Y + 20, mpos.Z)
+                                voarPara(alvoPos, Config.FlySpeed)
+                            end
+                        end
+                    elseif dist > 3 then
+                        voarPara(mpos, Config.FlySpeed * 0.3)
                     else
                         if vooBv then vooBv.Velocity = Vector3.zero end
                         atacar(alvo)
@@ -1350,7 +1390,7 @@ task.spawn(function()
     end
 end)
 
--- [REGEN] independente do farm
+-- [REGEN]
 task.spawn(function()
     while Ativo and task.wait(1) do
         if Config.AutoRegen then
@@ -1366,7 +1406,7 @@ task.spawn(function()
     end
 end)
 
--- [SKILLS LOOP] só com farm ligado
+-- [SKILLS LOOP]
 task.spawn(function()
     while Ativo and task.wait(Config.SkillDelay) do
         if farmLigado() and Config.SkillMode ~= "off" and not emRegen then
@@ -1390,11 +1430,26 @@ task.spawn(function()
     end
 end)
 
--- [TRANSFORM]
+-- [TRANSFORM] PATCH 3: usa transformação equipada
+local function getTransformEquipada()
+    local char = plr.Character
+    if not char then return nil end
+    local status = char:FindFirstChild("Status")
+    if not status then return nil end
+    for _, nome in ipairs({"CurrentMode", "FormName", "Mode", "Transform"}) do
+        local v = status:FindFirstChild(nome)
+        if v and v:IsA("StringValue") and v.Value ~= "" then
+            return v.Value
+        end
+    end
+    return nil
+end
+
 task.spawn(function()
     while Ativo and task.wait(5) do
         if Config.AutoTransform and SelectMode then
-            safe(function() SelectMode:FireServer(Config.TransformMode) end)
+            local modo = getTransformEquipada() or Config.TransformMode
+            safe(function() SelectMode:FireServer(modo) end)
         end
     end
 end)
@@ -1404,7 +1459,8 @@ task.spawn(function()
         plr.CharacterAdded:Wait()
         task.wait(3)
         if Config.AutoTransform and SelectMode then
-            safe(function() SelectMode:FireServer(Config.TransformMode) end)
+            local modo = getTransformEquipada() or Config.TransformMode
+            safe(function() SelectMode:FireServer(modo) end)
         end
     end
 end)
@@ -1449,4 +1505,4 @@ task.spawn(function()
     end
 end)
 
-print("[DBH] ✅ v5.1 Carregado")
+print("[DBH] ✅ v5.2 Carregado")
