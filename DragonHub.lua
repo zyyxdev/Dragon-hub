@@ -136,7 +136,8 @@ local function lockOn(mobModel)
     end)
 end
 
--- [VOO - reescrito sem variável global]
+-- [VOO - PATCH 16: reutiliza BodyMovers, voo suave]
+local vooBv, vooBg
 local function voarPara(destino, velocidade)
     local myChar = plr.Character
     if not myChar then return end
@@ -144,37 +145,35 @@ local function voarPara(destino, velocidade)
     if not hrp then return end
     velocidade = velocidade or Config.FlySpeed
 
-    local bv = hrp:FindFirstChild("__dbh_v")
-    if not bv then
-        bv = Instance.new("BodyVelocity")
-        bv.Name = "__dbh_v"
-        bv.MaxForce = Vector3.new(4e4, 4e4, 4e4)
-        bv.P = 1250
-        bv.Parent = hrp
+    if not vooBv or vooBv.Parent ~= hrp then
+        vooBv = Instance.new("BodyVelocity")
+        vooBv.Name = "__dbh_v"
+        vooBv.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+        vooBv.P = 1250
+        vooBv.Parent = hrp
     end
-
-    local bg = hrp:FindFirstChild("__dbh_g")
-    if not bg then
-        bg = Instance.new("BodyGyro")
-        bg.Name = "__dbh_g"
-        bg.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
-        bg.P = 3000
-        bg.D = 100
-        bg.Parent = hrp
+    if not vooBg or vooBg.Parent ~= hrp then
+        vooBg = Instance.new("BodyGyro")
+        vooBg.Name = "__dbh_g"
+        vooBg.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
+        vooBg.P = 3000
+        vooBg.D = 100
+        vooBg.Parent = hrp
     end
 
     local dir = destino - hrp.Position
     local dist = dir.Magnitude
+
     local spd
     if dist > 30 then spd = velocidade
     elseif dist > 10 then spd = velocidade * 0.5
     else spd = velocidade * 0.2 end
 
-    bv.Velocity = dir.Unit * spd
-    bg.CFrame = CFrame.new(hrp.Position, destino)
+    vooBv.Velocity = dir.Unit * spd
+    vooBg.CFrame = CFrame.new(hrp.Position, destino)
 end
 
--- [M1]
+-- [M1 - PATCH 17: não sobrescreve CFrame]
 local function atacar(alvo)
     if not SkillRemote or not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -270,21 +269,15 @@ local function iniciarRegen()
         end
         bv.Velocity = Vector3.new(0, 0, 0)
 
-        local inicio = os.clock()
         pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.C, false, game) end)
 
         while emRegen and Ativo and hrp.Parent do
             hrp.CFrame = CFrame.new(posSegura)
-            local cur, max = getKi()
-            local pct = max and max > 0 and (cur/max) or 0
-            if pct >= 0.95 then break end
-            if (os.clock() - inicio) > 8 then break end
-            task.wait(0.15)
+            task.wait(0.2)
         end
 
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
         bv:Destroy()
-        emRegen = false
     end)
 end
 
@@ -371,81 +364,26 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT]
-local coletando = false
-
-local function tentarColetar()
-    if coletando then return end
-    if not Config.AutoCollect then return end
-
-    local c = plr.Character
-    if not c then return end
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local ps = WS:FindFirstChild("PartStorage")
-    if not ps then return end
-
-    local maisProximo, menorDist = nil, math.huge
-    for _, item in ipairs(ps:GetChildren()) do
-        if item.Name:find("ItemDrop_") then
-            local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-            if base then
-                local d = (base.Position - hrp.Position).Magnitude
-                if d < menorDist then
-                    menorDist = d
-                    maisProximo = item
-                end
-            end
-        end
-    end
-
-    if not maisProximo then return end
-
-    local itemName = maisProximo.Name:lower()
-    local sv = maisProximo:FindFirstChild("ItemName") or maisProximo:FindFirstChild("Name")
-    if sv and sv:IsA("StringValue") then itemName = sv.Value:lower() end
-
-    local permitido = true
-    if itemName:find("expmat") and not Config.ColetarComum then permitido = false end
-    if itemName:find("powerscroll") and not Config.ColetarEpico then permitido = false end
-    if itemName:find("wish") and not Config.ColetarLendario then permitido = false end
-
-    if not permitido then return end
-
-    coletando = true
+-- [AUTOCOLLECT - PATCH 18: pega automaticamente]
+local function pegarItem(item)
+    local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+    if not base then return end
 
     local char = plr.Character
-    if char then
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
-        end
-    end
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-    local base = maisProximo.PrimaryPart or maisProximo:FindFirstChildWhichIsA("BasePart")
-    if not base then coletando = false return end
-
-    local tentativas = 0
-    while Config.AutoCollect and coletando and tentativas < 40 do
-        local d = (base.Position - hrp.Position).Magnitude
-        if d < 6 then break end
-        voarPara(base.Position, Config.FlySpeed)
-        task.wait(0.1)
-        tentativas = tentativas + 1
-    end
-
-    if not Config.AutoCollect then
-        coletando = false
-        return
-    end
-
+    -- Cola em cima do item
     hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
-    task.wait(0.3)
 
+    -- Segura E por 0.5s
+    task.wait(0.2)
     pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
-    task.wait(0.6)
+    task.wait(0.5)
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
+    -- Fallback: toque no centro
     task.wait(0.2)
     local cam = workspace.CurrentCamera
     if cam then
@@ -458,19 +396,42 @@ local function tentarColetar()
             VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0)
         end)
     end
+end
 
-    task.wait(0.3)
+local coletando = false
+local function tentarColetar()
+    if coletando then return end
+    local c = plr.Character
+    if not c or not c:FindFirstChild("HumanoidRootPart") then return end
 
-    local charEnd = plr.Character
-    if charEnd then
-        local hrpEnd = charEnd:FindFirstChild("HumanoidRootPart")
-        if hrpEnd then
-            local bvEnd = hrpEnd:FindFirstChild("__dbh_v")
-            if bvEnd then bvEnd.Velocity = Vector3.zero end
+    local ps = WS:FindFirstChild("PartStorage")
+    if not ps then return end
+
+    for _, item in ipairs(ps:GetChildren()) do
+        if item.Name:find("ItemDrop_") then
+            local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+            if base then
+                local nome = item.Name:lower()
+                local podeColetar = false
+
+                if nome:find("wish") then podeColetar = Config.ColetarLendario
+                elseif nome:find("powerscroll") then podeColetar = Config.ColetarEpico
+                elseif nome:find("orb") then podeColetar = Config.ColetarRaro
+                elseif nome:find("expmat") then podeColetar = Config.ColetarComum
+                else podeColetar = Config.ColetarIncomum end
+
+                if podeColetar then
+                    coletando = true
+                    voarPara(base.Position, Config.FlySpeed)
+                    task.wait(1)
+                    pegarItem(item)
+                    task.wait(0.5)
+                    coletando = false
+                    return
+                end
+            end
         end
     end
-
-    coletando = false
 end
 
 -- [ESP GUI]
@@ -511,26 +472,18 @@ local function removerESP(mob)
 end
 
 local function getItemLabel(item)
-    local nome = item.Name:lower()
     local itemName = item.Name
     local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
     if sv and sv:IsA("StringValue") then itemName = sv.Value end
-    local low = itemName:lower()
 
-    if low:find("premium") or nome:find("premium") then
-        return "💠 Premium Wish", Color3.fromRGB(200, 120, 255)
-    elseif low:find("standard") or nome:find("standard") then
-        return "💠 Standard Wish", Color3.fromRGB(255, 220, 80)
-    end
-
-    if low:find("wish") or low:find("legendary") or low:find("lendario") then
-        return "🌟 "..itemName, Color3.fromRGB(255, 100, 100)
-    elseif low:find("powerscroll") or low:find("epic") or low:find("epico") then
-        return "📜 "..itemName, Color3.fromRGB(200, 120, 255)
-    elseif low:find("orb") or low:find("rare") or low:find("raro") then
-        return "🔮 "..itemName, Color3.fromRGB(120, 200, 255)
-    elseif low:find("expmat") or low:find("common") or low:find("comum") then
+    if itemName:find("Wish") then
+        return "💠 "..itemName, Color3.fromRGB(120, 200, 255)
+    elseif itemName:find("ExpMat") then
         return "📗 "..itemName, Color3.fromRGB(120, 220, 120)
+    elseif itemName:find("PowerScroll") then
+        return "📜 "..itemName, Color3.fromRGB(255, 220, 100)
+    elseif itemName:find("Orb") then
+        return "🔮 "..itemName, Color3.fromRGB(200, 120, 255)
     else
         return "📦 "..itemName, Color3.fromRGB(220, 220, 220)
     end
@@ -1196,7 +1149,7 @@ btnKill.MouseButton1Click:Connect(function()
     espGui:Destroy()
 end)
 
--- [LOOP FARM - patch aplicado]
+-- [LOOP FARM - PATCH 19: zona de conforto]
 task.spawn(function()
     while Ativo and task.wait(0.08) do
         if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
@@ -1218,8 +1171,7 @@ task.spawn(function()
                     elseif dist > 3 then
                         voarPara(mpos, Config.FlySpeed * 0.3)
                     else
-                        local bv = hrp:FindFirstChild("__dbh_v")
-                        if bv then bv.Velocity = Vector3.zero end
+                        if vooBv then vooBv.Velocity = Vector3.zero end
                         atacar(alvo)
                     end
                 end
