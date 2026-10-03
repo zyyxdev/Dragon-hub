@@ -1,10 +1,3 @@
--- ════════════════════════════════════════════════════════════════
---           DRAGON BLOX — DUMPER FINAL v3 (UNIFICADO)
--- ════════════════════════════════════════════════════════════════
--- Captura arquitetural + tráfego + workspace em 1 script.
--- v3: dedup por hash, scan 1s, filtro Toolbar, scan global.
--- ════════════════════════════════════════════════════════════════
-
 print("[DUMPER v3] Iniciando...")
 
 local Players = game:GetService("Players")
@@ -24,9 +17,7 @@ else
     targetParent = ok and CoreGui or plr:WaitForChild("PlayerGui")
 end
 
--- ═══════════════════════════════════════════════
 -- ESTADO
--- ═══════════════════════════════════════════════
 local State = {
     sessao = "Sessao",
     capturando = false,
@@ -53,9 +44,7 @@ local ultimoPath = {}
 local RATE_LIMIT = 0.1
 local MAX_UNICOS = 3000
 
--- ═══════════════════════════════════════════════
--- FILTRO DE RUÍDO
--- ═══════════════════════════════════════════════
+--FILTRO DE RUÍDO
 local RUIDO_KEYWORDS = {
     "Ping", "DataChanged", "PlayAnimation", "PlayEffect",
     "DamageLabel", "DamageNotifier", "Knockback", "RagdollData",
