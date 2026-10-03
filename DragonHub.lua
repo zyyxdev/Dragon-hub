@@ -37,7 +37,6 @@ local Ativo = true
 local Config = {
     FarmAtivo = false,
     AlvoModo = "todos",
-    AutoSkills = false,
     AutoTransform = false,
     TransformMode = "SSJAngel",
     AutoRebirth = false,
@@ -54,6 +53,7 @@ local Config = {
     ColetarRaro = true,
     ColetarEpico = true,
     ColetarLendario = true,
+    ColetaCooldown = 3,
     KiMin = 0.3,
     SafeHeight = 100,
     WalkSpeed = 16,
@@ -66,7 +66,6 @@ local Config = {
     SkillCombo = "dps",
 }
 
--- [PATCH B+C] compat: tudo que lia AutoFarm/AutoBoss agora lê daqui
 local function farmLigado()
     return Config.FarmAtivo == true
 end
@@ -93,17 +92,11 @@ local comboIdx = 1
 local slotAtual = 1
 
 local BossTimers = {
-    Karrot = 299,
-    Zero = 59,
-    ["Brawly X01"] = 300,
-    Zaja = 600,
-    Destroyer = 600,
-    Puriza = 420,
-    ["Puriza Minion"] = 60,
-    _default = 180,
+    Karrot = 299, Zero = 59, ["Brawly X01"] = 300,
+    Zaja = 600, Destroyer = 600, Puriza = 420,
+    ["Puriza Minion"] = 60, _default = 180,
 }
 
--- [PATCH B+C] categoria via pasta do mob (100% confiável)
 local function getCategoria(mob)
     if not mob or not mob.Parent then return nil end
     local p = mob.Parent.Name
@@ -176,7 +169,6 @@ local function voarPara(destino, velocidade)
 
     local dir = destino - hrp.Position
     local dist = dir.Magnitude
-
     local spd
     if dist > 30 then spd = velocidade
     elseif dist > 10 then spd = velocidade * 0.5
@@ -192,24 +184,16 @@ local function atacar(alvo)
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
     local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-
     local mhrp = alvo.HumanoidRootPart
     local cframe = hrp.CFrame
     local aim = mhrp.Position
     local camCF = CFrame.lookAt(hrp.Position, aim)
-
     safe(function()
-        SkillRemote:FireServer({
-            Began = true, CFrame = cframe, Aim = aim,
-            Camera = camCF, Type = 1, SkillId = "1"
-        })
+        SkillRemote:FireServer({ Began = true, CFrame = cframe, Aim = aim, Camera = camCF, Type = 1, SkillId = "1" })
     end)
     task.wait(0.05)
     safe(function()
-        SkillRemote:FireServer({
-            Began = false, CFrame = cframe, Aim = aim,
-            Camera = camCF, Type = 1, SkillId = "1"
-        })
+        SkillRemote:FireServer({ Began = false, CFrame = cframe, Aim = aim, Camera = camCF, Type = 1, SkillId = "1" })
     end)
 end
 
@@ -259,8 +243,7 @@ local function iniciarRegen()
 
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
-        emRegen = false
-        return
+        emRegen = false; return
     end
     local hrp = myChar.HumanoidRootPart
     local posOrig = hrp.Position
@@ -336,14 +319,12 @@ task.spawn(function()
     end
 end)
 
--- [PATCH B+C] filtro por pasta + dropdown de alvo
 local function getAlvo()
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
     local myPos = myChar.HumanoidRootPart.Position
     local modo = Config.AlvoModo or "todos"
     local closest, minD = nil, math.huge
-
     for _, mob in ipairs(mobs) do
         if mob and mob.Parent and mob:FindFirstChild("HumanoidRootPart") and mob.Humanoid.Health > 0 then
             local cat = getCategoria(mob)
@@ -384,12 +365,26 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT]
+-- [AUTOCOLLECT] cooldown + histerese + por-item
 local coletando = false
+local ultimoColetado = 0
+local tentativasItem = {}
+
+local function extrairInfo(item)
+    local id = tonumber(item.Name:match("ItemDrop_(%d+)")) or 0
+    local nome = item.Name
+    local rar = nil
+    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
+    if sv and sv:IsA("StringValue") then nome = sv.Value end
+    local rv = item:FindFirstChild("Rarity")
+    if rv and rv:IsA("StringValue") then rar = rv.Value end
+    return id, nome, rar
+end
 
 local function tentarColetar()
     if coletando then return end
     if not Config.AutoCollect then return end
+    if os.clock() - ultimoColetado < (Config.ColetaCooldown or 3) then return end
 
     local c = plr.Character
     if not c then return end
@@ -402,12 +397,12 @@ local function tentarColetar()
     local maisProximo, menorDist = nil, math.huge
     for _, item in ipairs(ps:GetChildren()) do
         if item.Name:find("ItemDrop_") then
-            local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-            if base then
-                local d = (base.Position - hrp.Position).Magnitude
-                if d < menorDist then
-                    menorDist = d
-                    maisProximo = item
+            local jaTentei = tentativasItem[item]
+            if not (jaTentei and os.clock() - jaTentei < 5) then
+                local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+                if base then
+                    local d = (base.Position - hrp.Position).Magnitude
+                    if d < menorDist then menorDist = d; maisProximo = item end
                 end
             end
         end
@@ -415,18 +410,16 @@ local function tentarColetar()
 
     if not maisProximo then return end
 
-    local itemName = maisProximo.Name:lower()
-    local sv = maisProximo:FindFirstChild("ItemName") or maisProximo:FindFirstChild("Name")
-    if sv and sv:IsA("StringValue") then itemName = sv.Value:lower() end
-
+    local id, itemName, rar = extrairInfo(maisProximo)
+    local low = itemName:lower()
     local permitido = true
-    if itemName:find("expmat") and not Config.ColetarComum then permitido = false end
-    if itemName:find("powerscroll") and not Config.ColetarEpico then permitido = false end
-    if itemName:find("wish") and not Config.ColetarLendario then permitido = false end
-
+    if low:find("expmat") and not Config.ColetarComum then permitido = false end
+    if low:find("powerscroll") and not Config.ColetarEpico then permitido = false end
+    if low:find("wish") and not Config.ColetarLendario then permitido = false end
     if not permitido then return end
 
     coletando = true
+    tentativasItem[maisProximo] = os.clock()
 
     local char = plr.Character
     if char then
@@ -436,42 +429,37 @@ local function tentarColetar()
     end
 
     local base = maisProximo.PrimaryPart or maisProximo:FindFirstChildWhichIsA("BasePart")
-    if not base then coletando = false return end
+    if not base then coletando = false; return end
 
     local tentativas = 0
     while Config.AutoCollect and coletando and tentativas < 40 do
         local d = (base.Position - hrp.Position).Magnitude
-        if d < 6 then break end
-        voarPara(base.Position, Config.FlySpeed)
-        task.wait(0.1)
+        if d < 5 then break end
+        if d > 10 then voarPara(base.Position, Config.FlySpeed)
+        elseif d > 5 then voarPara(base.Position, Config.FlySpeed * 0.3) end
+        task.wait(0.12)
         tentativas = tentativas + 1
     end
 
-    if not Config.AutoCollect then
-        coletando = false
-        return
-    end
+    if not Config.AutoCollect then coletando = false; return end
 
     hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
     task.wait(0.3)
 
     pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
-    task.wait(0.6)
+    task.wait(0.5)
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
     task.wait(0.2)
     local cam = workspace.CurrentCamera
     if cam then
         local vp = cam.ViewportSize
-        pcall(function()
-            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0)
-        end)
+        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
         task.wait(0.1)
-        pcall(function()
-            VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0)
-        end)
+        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
     end
 
+    ultimoColetado = os.clock()
     task.wait(0.3)
     coletando = false
 end
@@ -505,7 +493,6 @@ local function criarESP(mob)
     nome.TextColor3 = (mob.Parent and mob.Parent.Name == "Boss Mobs") and Color3.fromRGB(255, 100, 100)
         or (mob.Parent and mob.Parent.Name == "Event Mobs") and Color3.fromRGB(180, 130, 255)
         or Color3.fromRGB(255, 210, 130)
-
     espCache[mob] = bb
 end
 
@@ -514,29 +501,38 @@ local function removerESP(mob)
 end
 
 local function getItemLabel(item)
-    local nome = item.Name:lower()
-    local itemName = item.Name
+    local id = item.Name:match("ItemDrop_(%d+)") or "?"
+    local itemName = nil
+    local cor = Color3.fromRGB(220, 220, 220)
+
     local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
     if sv and sv:IsA("StringValue") then itemName = sv.Value end
+
+    if not itemName then
+        for _, c in ipairs(item:GetDescendants()) do
+            if c:IsA("StringValue") and c.Value ~= "" and not c.Name:match("^%d+$") then
+                itemName = c.Value; break
+            end
+        end
+    end
+
+    if not itemName then return "🆔 "..id.." (desconhecido)", cor end
+
     local low = itemName:lower()
-
-    if low:find("premium") or nome:find("premium") then
-        return "💠 Premium Wish", Color3.fromRGB(200, 120, 255)
-    elseif low:find("standard") or nome:find("standard") then
-        return "💠 Standard Wish", Color3.fromRGB(255, 220, 80)
+    if low:find("premium") then
+        return "💠 Premium Wish (ID "..id..")", Color3.fromRGB(200, 120, 255)
+    elseif low:find("standard") then
+        return "💠 Standard Wish (ID "..id..")", Color3.fromRGB(255, 220, 80)
+    elseif low:find("wish") or low:find("legendary") then
+        return "🌟 "..itemName.." (ID "..id..")", Color3.fromRGB(255, 100, 100)
+    elseif low:find("powerscroll") or low:find("epic") then
+        return "📜 "..itemName.." (ID "..id..")", Color3.fromRGB(200, 120, 255)
+    elseif low:find("orb") or low:find("rare") then
+        return "🔮 "..itemName.." (ID "..id..")", Color3.fromRGB(120, 200, 255)
+    elseif low:find("expmat") or low:find("common") then
+        return "📗 "..itemName.." (ID "..id..")", Color3.fromRGB(120, 220, 120)
     end
-
-    if low:find("wish") or low:find("legendary") or low:find("lendario") then
-        return "🌟 "..itemName, Color3.fromRGB(255, 100, 100)
-    elseif low:find("powerscroll") or low:find("epic") or low:find("epico") then
-        return "📜 "..itemName, Color3.fromRGB(200, 120, 255)
-    elseif low:find("orb") or low:find("rare") or low:find("raro") then
-        return "🔮 "..itemName, Color3.fromRGB(120, 200, 255)
-    elseif low:find("expmat") or low:find("common") or low:find("comum") then
-        return "📗 "..itemName, Color3.fromRGB(120, 220, 120)
-    else
-        return "📦 "..itemName, Color3.fromRGB(220, 220, 220)
-    end
+    return "📦 "..itemName.." (ID "..id..")", cor
 end
 
 local function atualizarDropESP()
@@ -550,23 +546,20 @@ local function atualizarDropESP()
                     local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
                     if base then
                         local bb = Instance.new("BillboardGui")
-                        bb.Size = UDim2.new(0, 160, 0, 34)
+                        bb.Size = UDim2.new(0, 180, 0, 34)
                         bb.StudsOffset = Vector3.new(0, 4, 0)
                         bb.AlwaysOnTop = true
                         bb.Adornee = base
                         bb.Parent = espGui
-
                         local lbl = Instance.new("TextLabel", bb)
                         lbl.Size = UDim2.new(1, 0, 1, 0)
                         lbl.BackgroundTransparency = 1
                         lbl.TextStrokeTransparency = 0.5
                         lbl.Font = Enum.Font.GothamBold
                         lbl.TextSize = 12
-
                         local txt, cor = getItemLabel(item)
                         lbl.Text = txt
                         lbl.TextColor3 = cor
-
                         dropESP[item] = bb
                     end
                 end
@@ -590,17 +583,17 @@ gui.IgnoreGuiInset = true
 gui.Parent = CoreGui
 
 local P = {
-    bg          = Color3.fromRGB(8, 8, 10),
-    panel       = Color3.fromRGB(14, 14, 18),
-    elev        = Color3.fromRGB(22, 22, 28),
-    stroke      = Color3.fromRGB(40, 40, 48),
-    accent      = Color3.fromRGB(0, 200, 255),
-    accent2     = Color3.fromRGB(120, 220, 255),
-    text        = Color3.fromRGB(230, 235, 240),
-    textDim     = Color3.fromRGB(130, 135, 145),
-    success     = Color3.fromRGB(80, 220, 140),
-    danger      = Color3.fromRGB(255, 90, 90),
-    off         = Color3.fromRGB(45, 45, 55),
+    bg = Color3.fromRGB(8, 8, 10),
+    panel = Color3.fromRGB(14, 14, 18),
+    elev = Color3.fromRGB(22, 22, 28),
+    stroke = Color3.fromRGB(40, 40, 48),
+    accent = Color3.fromRGB(0, 200, 255),
+    accent2 = Color3.fromRGB(120, 220, 255),
+    text = Color3.fromRGB(230, 235, 240),
+    textDim = Color3.fromRGB(130, 135, 145),
+    success = Color3.fromRGB(80, 220, 140),
+    danger = Color3.fromRGB(255, 90, 90),
+    off = Color3.fromRGB(45, 45, 55),
 }
 
 local homeBar = Instance.new("TextButton")
@@ -635,11 +628,10 @@ janela.Active = true
 janela.Visible = false
 janela.Parent = gui
 Instance.new("UICorner", janela).CornerRadius = UDim.new(0, 12)
-local jStroke = Instance.new("UIStroke")
+local jStroke = Instance.new("UIStroke", janela)
 jStroke.Color = P.stroke
 jStroke.Thickness = 1
 jStroke.Transparency = 0.4
-jStroke.Parent = janela
 
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 36)
@@ -708,6 +700,11 @@ contentArea.BackgroundTransparency = 1
 contentArea.Parent = janela
 
 local abas = {}
+local overlayAberto = nil
+
+local function fecharOverlay()
+    if overlayAberto then overlayAberto:Destroy(); overlayAberto = nil end
+end
 
 local function criarAba(nome, display)
     local btn = Instance.new("TextButton")
@@ -743,6 +740,7 @@ local function criarAba(nome, display)
     abas[nome] = { botao = btn, frame = scroll }
 
     local function ativar()
+        fecharOverlay()
         for _, a in pairs(abas) do
             a.frame.Visible = false
             a.botao.BackgroundTransparency = 1
@@ -925,72 +923,79 @@ local function criarLabel(parent, texto, altura)
     p.PaddingLeft = UDim.new(0, 12)
     p.PaddingTop = UDim.new(0, 8)
     p.PaddingRight = UDim.new(0, 12)
-    p.Parent = lbl
     return lbl
 end
 
+-- [DROPDOWN v2] overlay fora do scroll (não corta mais)
 local function criarDropdown(parent, texto, opcoes, callback)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 0, 40)
     frame.BackgroundColor3 = P.elev
     frame.BackgroundTransparency = 0.2
     frame.BorderSizePixel = 0
-    frame.ClipsDescendants = false
-    frame.ZIndex = 2
     frame.Parent = parent
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 1, 0)
     btn.BackgroundTransparency = 1
-    btn.Text = texto .. ": " .. (opcoes[1] or "?")
+    btn.Text = texto .. ": " .. tostring(opcoes[1] or "?")
     btn.TextColor3 = P.text
     btn.TextSize = 11
     btn.Font = Enum.Font.GothamMedium
     btn.TextXAlignment = Enum.TextXAlignment.Left
     btn.Parent = frame
-    local bPad = Instance.new("UIPadding") bPad.PaddingLeft = UDim.new(0, 12) bPad.Parent = btn
-
-    local lista = Instance.new("Frame")
-    lista.Size = UDim2.new(1, 0, 0, math.min(#opcoes * 26, 180))
-    lista.Position = UDim2.new(0, 0, 1, 4)
-    lista.BackgroundColor3 = P.panel
-    lista.BorderSizePixel = 0
-    lista.Visible = false
-    lista.ZIndex = 50
-    lista.Parent = frame
-    Instance.new("UICorner", lista).CornerRadius = UDim.new(0, 8)
-    Instance.new("UIStroke", {Color = P.stroke, Thickness = 1}, lista)
-
-    local lscroll = Instance.new("ScrollingFrame")
-    lscroll.Size = UDim2.new(1, 0, 1, 0)
-    lscroll.BackgroundTransparency = 1
-    lscroll.BorderSizePixel = 0
-    lscroll.ScrollBarThickness = 3
-    lscroll.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 26)
-    lscroll.Parent = lista
-    local ll = Instance.new("UIListLayout") ll.Parent = lscroll
-
-    for _, opt in ipairs(opcoes) do
-        local ob = Instance.new("TextButton")
-        ob.Size = UDim2.new(1, 0, 0, 26)
-        ob.BackgroundTransparency = 1
-        ob.Text = tostring(opt)
-        ob.TextColor3 = P.text
-        ob.TextSize = 11
-        ob.Font = Enum.Font.GothamMedium
-        ob.TextXAlignment = Enum.TextXAlignment.Left
-        ob.Parent = lscroll
-        local opad = Instance.new("UIPadding") opad.PaddingLeft = UDim.new(0, 12) opad.Parent = ob
-        ob.MouseButton1Click:Connect(function()
-            btn.Text = texto .. ": " .. tostring(opt)
-            lista.Visible = false
-            if callback then callback(opt) end
-        end)
-    end
+    local bPad = Instance.new("UIPadding", btn)
+    bPad.PaddingLeft = UDim.new(0, 12)
 
     btn.MouseButton1Click:Connect(function()
-        lista.Visible = not lista.Visible
+        if overlayAberto then fecharOverlay(); return end
+
+        local ov = Instance.new("Frame")
+        ov.Name = "__dbhDropOverlay"
+        ov.BackgroundColor3 = P.panel
+        ov.BorderSizePixel = 0
+        ov.ZIndex = 500
+        ov.Parent = janela
+
+        local absBtn = btn.AbsolutePosition
+        local absJan = janela.AbsolutePosition
+        local tamBtn = btn.AbsoluteSize
+        local alt = math.min(#opcoes * 28, 200)
+
+        ov.Position = UDim2.new(0, absBtn.X - absJan.X, 0, absBtn.Y - absJan.Y + tamBtn.Y + 2)
+        ov.Size = UDim2.new(0, tamBtn.X, 0, alt)
+        Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 8)
+        local stk = Instance.new("UIStroke", ov)
+        stk.Color = P.accent; stk.Thickness = 1
+
+        local ls = Instance.new("ScrollingFrame", ov)
+        ls.Size = UDim2.new(1, 0, 1, 0)
+        ls.BackgroundTransparency = 1
+        ls.BorderSizePixel = 0
+        ls.ScrollBarThickness = 3
+        ls.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 28)
+        Instance.new("UIListLayout", ls)
+
+        for _, opt in ipairs(opcoes) do
+            local ob = Instance.new("TextButton", ls)
+            ob.Size = UDim2.new(1, 0, 0, 28)
+            ob.BackgroundTransparency = 1
+            ob.Text = tostring(opt)
+            ob.TextColor3 = P.text
+            ob.TextSize = 11
+            ob.Font = Enum.Font.GothamMedium
+            ob.TextXAlignment = Enum.TextXAlignment.Left
+            ob.ZIndex = 501
+            local op = Instance.new("UIPadding", ob)
+            op.PaddingLeft = UDim.new(0, 12)
+            ob.MouseButton1Click:Connect(function()
+                btn.Text = texto .. ": " .. tostring(opt)
+                fecharOverlay()
+                if callback then callback(opt) end
+            end)
+        end
+        overlayAberto = ov
     end)
 end
 
@@ -999,18 +1004,13 @@ local farmTab = criarAba("farm", "⚔ Farm")
 criarSecao(farmTab, "Farm")
 criarToggle(farmTab, "Farm Ativo", false, function(v) Config.FarmAtivo = v end)
 criarDropdown(farmTab, "Alvo", {"Todos", "Só Mobs", "Só Boss", "Só Event"}, function(v)
-    local map = {
-        ["Todos"]    = "todos",
-        ["Só Mobs"]  = "mobs",
-        ["Só Boss"]  = "boss",
-        ["Só Event"] = "event",
-    }
+    local map = { ["Todos"] = "todos", ["Só Mobs"] = "mobs", ["Só Boss"] = "boss", ["Só Event"] = "event" }
     Config.AlvoModo = map[v] or "todos"
 end)
 criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
 criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
 
-criarSecao(farmTab, "Auto Skills")
+criarSecao(farmTab, "Auto Skills (só com Farm Ativo)")
 criarDropdown(farmTab, "Modo", {"off", "single", "combo"}, function(v) Config.SkillMode = v end)
 criarDropdown(farmTab, "Skill Única", {
     "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3"
@@ -1040,6 +1040,7 @@ end)
 local collectTab = criarAba("collect", "💎 Collect")
 criarSecao(collectTab, "Auto Coletar")
 criarToggle(collectTab, "Auto Coletar", false, function(v) Config.AutoCollect = v end)
+criarSlider(collectTab, "Cooldown entre coletas (s)", 1, 15, 3, 1, function(v) Config.ColetaCooldown = v end)
 criarSecao(collectTab, "Filtro de Raridade")
 criarToggle(collectTab, "Comum (ExpMat)", false, function(v) Config.ColetarComum = v end)
 criarToggle(collectTab, "Incomum", true, function(v) Config.ColetarIncomum = v end)
@@ -1052,10 +1053,23 @@ local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
 criarSecao(rebirthTab, "Auto Rebirth")
 criarToggle(rebirthTab, "Auto Rebirth", false, function(v) Config.AutoRebirth = v end)
 criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
-    if RequestRebirth then
-        safe(function() RequestRebirth:InvokeServer(true) end)
-        print("[DBH] Rebirth forçado")
+    if not PromptRemote or not RequestRebirth then
+        warn("[DBH] Rebirth remotes não encontrados"); return
     end
+    safe(function()
+        PromptRemote:FireServer({
+            UniqueTag = "HudRebirth",
+            Title = "Rebirth",
+            LeftButton = "Details",
+            MiddleButton = "Confirm",
+            Prompt = "HudRebirth",
+            RightButton = "Cancel",
+            Description = "Confirm Rebirth?",
+        }, "Confirm")
+    end)
+    task.wait(0.5)
+    safe(function() RequestRebirth:InvokeServer(true) end)
+    print("[DBH] Rebirth forçado")
 end)
 local infoRebirth = criarLabel(rebirthTab, "Aguardando...", 60)
 
@@ -1082,12 +1096,14 @@ task.spawn(function()
                         end
                     end)
                     task.wait(0.5)
-                    safe(function()
-                        if RequestRebirth then RequestRebirth:InvokeServer(true) end
-                    end)
+                    safe(function() if RequestRebirth then RequestRebirth:InvokeServer(true) end end)
                     task.wait(2)
                 end
+            else
+                infoRebirth.Text = "Stats.Rebirth não encontrado"
             end
+        else
+            infoRebirth.Text = "Player.Stats não encontrado"
         end
     end
 end)
@@ -1115,31 +1131,31 @@ bossInput.ClearTextOnFocus = false
 Instance.new("UICorner", bossInput).CornerRadius = UDim.new(0, 8)
 local biPad = Instance.new("UIPadding", bossInput)
 biPad.PaddingLeft = UDim.new(0, 12)
-bossInput.Parent = trackerTab
 
 criarBotao(trackerTab, "✈️ Ir para o boss", function()
-    local nome = bossInput.Text
+    local nome = bossInput.Text:lower():gsub("%s+", "")
     if nome == "" then return end
     local wm = WS:FindFirstChild("World Mobs")
     if not wm then return end
+    local achou = false
     for _, pasta in ipairs(wm:GetChildren()) do
         for _, mob in ipairs(pasta:GetChildren()) do
-            if mob:IsA("Model") and mob.Name:gsub("%-?%d+$", "") == nome then
-                local hrp = mob:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    voarPara(hrp.Position)
-                    return
+            if mob:IsA("Model") then
+                local mobNome = mob.Name:gsub("%-?%d+$", ""):lower():gsub("%s+", "")
+                if mobNome == nome then
+                    local hrp = mob:FindFirstChild("HumanoidRootPart")
+                    if hrp then voarPara(hrp.Position); achou = true; return end
                 end
             end
         end
     end
-    print("[DBH] Boss "..nome.." não encontrado")
+    if not achou then warn("[DBH] Boss '"..nome.."' não encontrado") end
 end)
 
 task.spawn(function()
     while Ativo do
         task.wait(1)
-        if Config.TrackerAuto ~= false then
+        if Config.TrackerAuto then
             local wm = WS:FindFirstChild("World Mobs")
             if wm then
                 local vivos = {}
@@ -1179,20 +1195,14 @@ task.spawn(function()
             local passado = agora - info.morreuEm
             local restante = info.respawnEm - passado
             if restante > 0 then
-                local min = math.floor(restante / 60)
-                local seg = math.floor(restante % 60)
-                linhas[#linhas+1] = string.format("%-15s %d:%02d", nome, min, seg)
+                linhas[#linhas+1] = string.format("%-15s %d:%02d", nome, math.floor(restante/60), math.floor(restante%60))
                 total = total + 1
             else
                 _G.bossEstado[nome] = nil
             end
         end
-        if total == 0 then
-            timerLabel.Text = "Nenhum boss em respawn."
-        else
-            table.sort(linhas)
-            timerLabel.Text = table.concat(linhas, "\n")
-        end
+        if total == 0 then timerLabel.Text = "Nenhum boss em respawn."
+        else table.sort(linhas); timerLabel.Text = table.concat(linhas, "\n") end
     end
 end)
 
@@ -1210,9 +1220,7 @@ criarSlider(configTab, "Altura Segura", 40, 300, 100, 10, function(v) Config.Saf
 criarSecao(configTab, "Sistema")
 criarBotao(configTab, "🔴 MATAR SCRIPT", function()
     Ativo = false
-    for k, v in pairs(Config) do
-        if type(v) == "boolean" then Config[k] = false end
-    end
+    for k, v in pairs(Config) do if type(v) == "boolean" then Config[k] = false end end
     gui:Destroy()
     espGui:Destroy()
 end)
@@ -1220,7 +1228,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.0", 80)
+criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.1", 80)
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
 
 task.spawn(function()
@@ -1241,12 +1249,12 @@ abas.farm.ativar()
 
 -- [INTERAÇÕES]
 homeBar.MouseButton1Click:Connect(function()
+    fecharOverlay()
     janela.Visible = not janela.Visible
 end)
 
 local dragging = false
-local dragStart = nil
-local startPos = nil
+local dragStart, startPos
 titulo.MouseButton1Down:Connect(function()
     dragging = true
     dragStart = UserInputService:GetMouseLocation()
@@ -1258,25 +1266,21 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 UserInputService.InputChanged:Connect(function(i)
-    if dragging then
-        if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
-            local cur = UserInputService:GetMouseLocation()
-            local delta = cur - dragStart
-            janela.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
-                                        startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        local cur = UserInputService:GetMouseLocation()
+        local delta = cur - dragStart
+        janela.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
     end
 end)
 
 btnMin.MouseButton1Click:Connect(function()
+    fecharOverlay()
     janela.Visible = false
 end)
 
 btnKill.MouseButton1Click:Connect(function()
     Ativo = false
-    for k, v in pairs(Config) do
-        if type(v) == "boolean" then Config[k] = false end
-    end
+    for k, v in pairs(Config) do if type(v) == "boolean" then Config[k] = false end end
     gui:Destroy()
     espGui:Destroy()
 end)
@@ -1291,17 +1295,13 @@ task.spawn(function()
                     lockOn(alvo)
                     alvoTravado = alvo.Name
                 end
-
                 local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     local mpos = alvo.HumanoidRootPart.Position
                     local dist = (mpos - hrp.Position).Magnitude
                     local zonaConforto = Config.AttackRange + 4
-
-                    if dist > zonaConforto then
-                        voarPara(mpos, Config.FlySpeed)
-                    elseif dist > 3 then
-                        voarPara(mpos, Config.FlySpeed * 0.3)
+                    if dist > zonaConforto then voarPara(mpos, Config.FlySpeed)
+                    elseif dist > 3 then voarPara(mpos, Config.FlySpeed * 0.3)
                     else
                         if vooBv then vooBv.Velocity = Vector3.zero end
                         atacar(alvo)
@@ -1325,9 +1325,7 @@ task.spawn(function()
             local char = plr.Character
             if char then
                 for _, p in ipairs(char:GetDescendants()) do
-                    if p:IsA("BasePart") and p.CanCollide then
-                        p.CanCollide = false
-                    end
+                    if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
                 end
             end
         end
@@ -1352,18 +1350,15 @@ task.spawn(function()
     end
 end)
 
--- [REGEN]
+-- [REGEN] independente do farm
 task.spawn(function()
     while Ativo and task.wait(1) do
-        if Config.AutoRegen and farmLigado() then
+        if Config.AutoRegen then
             local curr, max = getKi()
             if curr and max then
                 local ratio = curr / max
-                if ratio < Config.KiMin and not emRegen then
-                    iniciarRegen()
-                elseif ratio > 0.9 and emRegen then
-                    pararRegen()
-                end
+                if ratio < Config.KiMin and not emRegen then iniciarRegen()
+                elseif ratio > 0.9 and emRegen then pararRegen() end
             end
         elseif emRegen then
             pararRegen()
@@ -1371,10 +1366,10 @@ task.spawn(function()
     end
 end)
 
--- [SKILLS LOOP]
+-- [SKILLS LOOP] só com farm ligado
 task.spawn(function()
     while Ativo and task.wait(Config.SkillDelay) do
-        if Config.SkillMode ~= "off" and not emRegen then
+        if farmLigado() and Config.SkillMode ~= "off" and not emRegen then
             local alvo = getAlvo()
             if alvo and alvo.Parent then
                 if Config.SkillMode == "single" then
@@ -1439,9 +1434,7 @@ task.spawn(function()
                     end
                 end
             end
-            for m in pairs(espCache) do
-                if not vivos[m] then removerESP(m) end
-            end
+            for m in pairs(espCache) do if not vivos[m] then removerESP(m) end end
         else
             for m in pairs(espCache) do removerESP(m) end
         end
@@ -1451,12 +1444,9 @@ end)
 -- [ESP ITENS]
 task.spawn(function()
     while Ativo and task.wait(0.5) do
-        if Config.ESPItems then
-            atualizarDropESP()
-        else
-            for i, bb in pairs(dropESP) do bb:Destroy(); dropESP[i] = nil end
-        end
+        if Config.ESPItems then atualizarDropESP()
+        else for i, bb in pairs(dropESP) do bb:Destroy(); dropESP[i] = nil end end
     end
 end)
 
-print("[DBH] ✅ Carregado")
+print("[DBH] ✅ v5.1 Carregado")
