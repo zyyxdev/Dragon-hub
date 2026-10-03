@@ -1,4 +1,4 @@
--- [CORE]
+-- [SERVIÇOS]
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -40,7 +40,6 @@ local Config = {
     AutoTransform = false,
     TransformMode = "SSJAngel",
     AutoRebirth = false,
-    RebirthMultiplier = 3,
     ESPMobs = false,
     ESPItems = false,
     AutoRegen = false,
@@ -51,19 +50,19 @@ local Config = {
     AttackRange = 8,
     SkillDelay = 1.5,
     TrackerAuto = true,
-    BossSelecionado = nil,
 }
 
--- [SKILLS - PATCH 03]
+-- [SKILLS - PATCH 07]
 local SKILLS = {
-    { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3, trocarSlot = 1 },
-    { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1, trocarSlot = 1 },
-    { nome = "UniqueSets_2_2", pause = 1, trocarSlot = 1 },
-    { nome = "Weapons_3_2", pause = 0.7, trocarSlot = 2 },
-    { nome = "Weapons_3_3", pause = 0.5, trocarSlot = 2 },
+    { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3, slot = 1, trocaSlot = true },
+    { nome = "UniqueSets_2_2", pause = 1, slot = 1, trocaSlot = true },
+    { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1, slot = 1, trocaSlot = true },
+    { nome = "Weapons_3_2", pause = 0.7, slot = 2, trocaSlot = true },
+    { nome = "Weapons_3_3", pause = 0.5, slot = 2, trocaSlot = true },
 }
 
--- [BOSS TIMERS - PATCH 06]
+local slotAtual = 1
+
 local BossTimers = {
     Karrot = 299,
     Zero = 59,
@@ -100,6 +99,7 @@ local function podeAgir()
     return true
 end
 
+-- [VOO]
 local function voarPara(destino, velocidade)
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
@@ -132,7 +132,7 @@ local function voarPara(destino, velocidade)
     end)
 end
 
--- [ATACAR - preservado]
+-- [M1]
 local function atacar(alvo)
     if not SkillRemote or not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -161,16 +161,19 @@ local function atacar(alvo)
     end)
 end
 
--- [USAR SKILL - PATCH 03]
+-- [SKILL - PATCH 07]
 local function usarSkill(skill, alvo)
     if not ExecuteSkill or not alvo or not alvo.Parent then return end
     if not alvo:FindFirstChild("HumanoidRootPart") then return end
     local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    if skill.trocarSlot and ToolbarRemote then
-        safe(function() ToolbarRemote:FireServer(skill.trocarSlot) end)
-        task.wait(0.15)
+    if skill.trocaSlot and skill.slot and skill.slot ~= slotAtual then
+        if ToolbarRemote then
+            safe(function() ToolbarRemote:FireServer(skill.slot) end)
+            slotAtual = skill.slot
+            task.wait(0.2)
+        end
     end
 
     local tpos = alvo.HumanoidRootPart.Position
@@ -197,7 +200,7 @@ local function getKi()
     return curr.Value, max.Value
 end
 
--- [REGEN - PATCH 02]
+-- [REGEN]
 local function iniciarRegen()
     if emRegen then return end
     emRegen = true
@@ -245,7 +248,7 @@ local function pararRegen()
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
 end
 
--- [MOBS TRACKING]
+-- [MOBS]
 local mobs = {}
 local function registrarMob(mob)
     if not mob:IsA("Model") then return end
@@ -323,9 +326,9 @@ local function criarESP(mob)
     nome.TextStrokeTransparency = 0.5
     nome.TextSize = 12
     nome.Font = Enum.Font.GothamBold
-    nome.TextColor3 = (mob.Parent and mob.Parent.Name == "Boss Mobs") and Color3.fromRGB(255, 80, 80)
-        or (mob.Parent and mob.Parent.Name == "Event Mobs") and Color3.fromRGB(200, 80, 255)
-        or Color3.fromRGB(255, 200, 80)
+    nome.TextColor3 = (mob.Parent and mob.Parent.Name == "Boss Mobs") and Color3.fromRGB(255, 100, 100)
+        or (mob.Parent and mob.Parent.Name == "Event Mobs") and Color3.fromRGB(180, 130, 255)
+        or Color3.fromRGB(255, 210, 130)
 
     espCache[mob] = bb
 end
@@ -334,24 +337,12 @@ local function removerESP(mob)
     if espCache[mob] then espCache[mob]:Destroy(); espCache[mob] = nil end
 end
 
--- [ITEM LABEL - PATCH 01]
 local function getItemLabel(item)
-    local itemName = ""
-    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name") or item:FindFirstChild("ItemType")
-    if sv and sv:IsA("StringValue") then
-        itemName = sv.Value
-    end
+    local itemName = item.Name
+    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
+    if sv and sv:IsA("StringValue") then itemName = sv.Value end
 
-    if itemName == "" then
-        local sphere = item:FindFirstChild("Sphere.003") or item:FindFirstChildWhichIsA("MeshPart")
-        if sphere then itemName = sphere.Name end
-    end
-
-    if itemName == "" or itemName:find("ItemDrop_") then
-        itemName = item.Name
-    end
-
-    if itemName:find("Wish") or itemName:find("wish") then
+    if itemName:find("Wish") then
         return "💠 "..itemName, Color3.fromRGB(120, 200, 255)
     elseif itemName:find("ExpMat") then
         return "📗 "..itemName, Color3.fromRGB(120, 220, 120)
@@ -403,7 +394,9 @@ local function atualizarDropESP()
     end
 end
 
--- [UI]
+-- ═══════════════════════════════════════════════════════════════
+-- [UI NOVA - AMOLED CIANO + TABS NO TOPO]
+-- ═══════════════════════════════════════════════════════════════
 local oldGui = CoreGui:FindFirstChild("DragonBloxHub")
 if oldGui then oldGui:Destroy() end
 
@@ -414,122 +407,143 @@ gui.DisplayOrder = 100
 gui.IgnoreGuiInset = true
 gui.Parent = CoreGui
 
-local COR = {
-    Fundo = Color3.fromRGB(15, 12, 25),
-    Painel = Color3.fromRGB(30, 22, 45),
-    AbaAtiva = Color3.fromRGB(255, 140, 30),
-    AbaInativa = Color3.fromRGB(45, 35, 65),
-    Texto = Color3.fromRGB(255, 240, 220),
-    TextoSub = Color3.fromRGB(170, 170, 190),
-    Botao = Color3.fromRGB(55, 40, 80),
-    BotaoLigado = Color3.fromRGB(255, 180, 40),
+-- Paleta AMOLED
+local P = {
+    bg          = Color3.fromRGB(8, 8, 10),
+    panel       = Color3.fromRGB(14, 14, 18),
+    elev        = Color3.fromRGB(22, 22, 28),
+    stroke      = Color3.fromRGB(40, 40, 48),
+    accent      = Color3.fromRGB(0, 200, 255),        -- ciano
+    accent2     = Color3.fromRGB(120, 220, 255),      -- ciano claro
+    text        = Color3.fromRGB(230, 235, 240),
+    textDim     = Color3.fromRGB(130, 135, 145),
+    success     = Color3.fromRGB(80, 220, 140),
+    danger      = Color3.fromRGB(255, 90, 90),
+    off         = Color3.fromRGB(45, 45, 55),
 }
 
+-- Home bar (iPhone-style, fina)
 local homeBar = Instance.new("TextButton")
-homeBar.Size = UDim2.new(0, 200, 0, 24)
-homeBar.Position = UDim2.new(0.5, 0, 1, -30)
+homeBar.Size = UDim2.new(0, 140, 0, 5)
+homeBar.Position = UDim2.new(0.5, 0, 1, -12)
 homeBar.AnchorPoint = Vector2.new(0.5, 1)
 homeBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-homeBar.BackgroundTransparency = 0.7
+homeBar.BackgroundTransparency = 0.35
 homeBar.Text = ""
 homeBar.AutoButtonColor = false
 homeBar.Active = true
 homeBar.ZIndex = 50
 homeBar.Parent = gui
 Instance.new("UICorner", homeBar).CornerRadius = UDim.new(1, 0)
-local hbInner = Instance.new("Frame")
-hbInner.Size = UDim2.new(0.7, 0, 0, 6)
-hbInner.Position = UDim2.new(0.5, 0, 0.5, 0)
-hbInner.AnchorPoint = Vector2.new(0.5, 0.5)
-hbInner.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-hbInner.BackgroundTransparency = 0.2
-hbInner.BorderSizePixel = 0
-hbInner.ZIndex = 51
-hbInner.Parent = homeBar
-Instance.new("UICorner", hbInner).CornerRadius = UDim.new(1, 0)
 
+-- Janela principal
 local janela = Instance.new("Frame")
-janela.Size = UDim2.new(0, 540, 0, 420)
-janela.Position = UDim2.new(0.5, -270, 0.5, -210)
-janela.BackgroundColor3 = COR.Fundo
-janela.BackgroundTransparency = 0.15
+janela.Size = UDim2.new(0, 440, 0, 340)
+janela.Position = UDim2.new(0.5, -220, 0.5, -170)
+janela.BackgroundColor3 = P.bg
+janela.BackgroundTransparency = 0.1
 janela.BorderSizePixel = 0
 janela.Active = true
 janela.Visible = false
 janela.Parent = gui
-Instance.new("UICorner", janela).CornerRadius = UDim.new(0, 14)
-local jStroke = Instance.new("UIStroke") jStroke.Color = COR.AbaAtiva jStroke.Thickness = 1.5 jStroke.Transparency = 0.3 jStroke.Parent = janela
+Instance.new("UICorner", janela).CornerRadius = UDim.new(0, 12)
+local jStroke = Instance.new("UIStroke")
+jStroke.Color = P.stroke
+jStroke.Thickness = 1
+jStroke.Transparency = 0.4
+jStroke.Parent = janela
+
+-- Header
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, 36)
+header.BackgroundColor3 = P.panel
+header.BackgroundTransparency = 0.2
+header.BorderSizePixel = 0
+header.Parent = janela
+Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
 
 local titulo = Instance.new("TextButton")
-titulo.Size = UDim2.new(1, 0, 0, 42)
-titulo.BackgroundColor3 = COR.Painel
-titulo.BackgroundTransparency = 0.2
-titulo.TextColor3 = COR.Texto
-titulo.Text = "🐉  DRAGON BLOX HUB"
-titulo.TextSize = 16
+titulo.Size = UDim2.new(1, -60, 1, 0)
+titulo.Position = UDim2.new(0, 16, 0, 0)
+titulo.BackgroundTransparency = 1
+titulo.Text = "🐉 Dragon Blox"
+titulo.TextColor3 = P.text
+titulo.TextSize = 13
 titulo.Font = Enum.Font.GothamBold
 titulo.TextXAlignment = Enum.TextXAlignment.Left
-titulo.BorderSizePixel = 0
-titulo.AutoButtonColor = false
-titulo.Parent = janela
-Instance.new("UICorner", titulo).CornerRadius = UDim.new(0, 14)
-local tPad = Instance.new("UIPadding") tPad.PaddingLeft = UDim.new(0, 18) tPad.Parent = titulo
+titulo.Parent = header
 
-local sidebar = Instance.new("Frame")
-sidebar.Size = UDim2.new(0, 110, 1, -42)
-sidebar.Position = UDim2.new(0, 0, 0, 42)
-sidebar.BackgroundColor3 = COR.Painel
-sidebar.BackgroundTransparency = 0.3
-sidebar.BorderSizePixel = 0
-sidebar.Parent = janela
-local sbLayout = Instance.new("UIListLayout") sbLayout.SortOrder = Enum.SortOrder.LayoutOrder sbLayout.Padding = UDim.new(0, 5) sbLayout.Parent = sidebar
-local sbPad = Instance.new("UIPadding") sbPad.PaddingTop = UDim.new(0, 10) sbPad.PaddingLeft = UDim.new(0, 7) sbPad.PaddingRight = UDim.new(0, 7) sbPad.Parent = sidebar
+local btnMin = Instance.new("TextButton")
+btnMin.Size = UDim2.new(0, 22, 0, 22)
+btnMin.Position = UDim2.new(1, -54, 0.5, -11)
+btnMin.BackgroundColor3 = P.elev
+btnMin.Text = "—"
+btnMin.TextColor3 = P.text
+btnMin.TextSize = 13
+btnMin.Font = Enum.Font.GothamBold
+btnMin.BorderSizePixel = 0
+btnMin.AutoButtonColor = false
+btnMin.Parent = header
+Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0, 5)
 
+local btnKill = Instance.new("TextButton")
+btnKill.Size = UDim2.new(0, 22, 0, 22)
+btnKill.Position = UDim2.new(1, -28, 0.5, -11)
+btnKill.BackgroundColor3 = P.danger
+btnKill.Text = "×"
+btnKill.TextColor3 = Color3.new(1, 1, 1)
+btnKill.TextSize = 13
+btnKill.Font = Enum.Font.GothamBold
+btnKill.BorderSizePixel = 0
+btnKill.AutoButtonColor = false
+btnKill.Parent = header
+Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 5)
+
+-- Tab bar (topo, horizontal)
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -20, 0, 32)
+tabBar.Position = UDim2.new(0, 10, 0, 40)
+tabBar.BackgroundColor3 = P.panel
+tabBar.BackgroundTransparency = 0.3
+tabBar.BorderSizePixel = 0
+tabBar.Parent = janela
+Instance.new("UICorner", tabBar).CornerRadius = UDim.new(0, 8)
+
+local tabLayout = Instance.new("UIListLayout", tabBar)
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 3)
+tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+-- Content
 local contentArea = Instance.new("Frame")
-contentArea.Size = UDim2.new(1, -110, 1, -42)
-contentArea.Position = UDim2.new(0, 110, 0, 42)
-contentArea.BackgroundColor3 = COR.Fundo
-contentArea.BackgroundTransparency = 0.3
-contentArea.BorderSizePixel = 0
+contentArea.Size = UDim2.new(1, -20, 1, -86)
+contentArea.Position = UDim2.new(0, 10, 0, 78)
+contentArea.BackgroundTransparency = 1
 contentArea.Parent = janela
-
-local resizeHandle = Instance.new("TextButton")
-resizeHandle.Size = UDim2.new(0, 24, 0, 24)
-resizeHandle.Position = UDim2.new(1, -24, 1, -24)
-resizeHandle.BackgroundColor3 = COR.AbaAtiva
-resizeHandle.BackgroundTransparency = 0.5
-resizeHandle.Text = "◢"
-resizeHandle.TextColor3 = Color3.fromRGB(255, 255, 255)
-resizeHandle.TextSize = 14
-resizeHandle.Font = Enum.Font.GothamBold
-resizeHandle.BorderSizePixel = 0
-resizeHandle.ZIndex = 5
-resizeHandle.Parent = janela
-Instance.new("UICorner", resizeHandle).CornerRadius = UDim.new(0, 4)
 
 local abas = {}
 
 local function criarAba(nome, display)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 34)
-    btn.BackgroundColor3 = COR.AbaInativa
-    btn.BackgroundTransparency = 0.3
+    btn.Size = UDim2.new(0, 80, 0, 26)
+    btn.BackgroundColor3 = P.elev
+    btn.BackgroundTransparency = 1
     btn.Text = display
-    btn.TextColor3 = COR.TextoSub
-    btn.TextSize = 12
+    btn.TextColor3 = P.textDim
+    btn.TextSize = 11
     btn.Font = Enum.Font.GothamBold
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
-    btn.Parent = sidebar
+    btn.Parent = tabBar
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
     local scroll = Instance.new("ScrollingFrame")
-    scroll.Size = UDim2.new(1, -20, 1, -20)
-    scroll.Position = UDim2.new(0, 10, 0, 10)
+    scroll.Size = UDim2.new(1, 0, 1, 0)
     scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
-    scroll.ScrollBarThickness = 4
-    scroll.ScrollBarImageColor3 = COR.AbaAtiva
+    scroll.ScrollBarThickness = 3
+    scroll.ScrollBarImageColor3 = P.stroke
     scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     scroll.Visible = false
@@ -537,21 +551,22 @@ local function criarAba(nome, display)
 
     local layout = Instance.new("UIListLayout")
     layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 6)
+    layout.Padding = UDim.new(0, 5)
     layout.Parent = scroll
-    local pad = Instance.new("UIPadding") pad.PaddingBottom = UDim.new(0, 20) pad.Parent = scroll
+    Instance.new("UIPadding", scroll).PaddingBottom = UDim.new(0, 15)
 
     abas[nome] = { botao = btn, frame = scroll }
 
     local function ativar()
         for _, a in pairs(abas) do
             a.frame.Visible = false
-            a.botao.BackgroundColor3 = COR.AbaInativa
-            a.botao.TextColor3 = COR.TextoSub
+            a.botao.BackgroundTransparency = 1
+            a.botao.TextColor3 = P.textDim
         end
         scroll.Visible = true
-        btn.BackgroundColor3 = COR.AbaAtiva
-        btn.TextColor3 = Color3.fromRGB(20, 15, 30)
+        btn.BackgroundTransparency = 0
+        btn.BackgroundColor3 = P.elev
+        btn.TextColor3 = P.accent
     end
 
     btn.MouseButton1Click:Connect(ativar)
@@ -559,97 +574,102 @@ local function criarAba(nome, display)
     return scroll
 end
 
+local function criarSecao(parent, texto)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 0, 20)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = texto
+    lbl.TextColor3 = P.accent2
+    lbl.TextSize = 10
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = parent
+end
+
 local function criarToggle(parent, texto, default, callback)
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, -8, 0, 38)
-    frame.BackgroundColor3 = COR.Botao
-    frame.BackgroundTransparency = 0.35
+    frame.Size = UDim2.new(1, 0, 0, 34)
+    frame.BackgroundColor3 = P.elev
+    frame.BackgroundTransparency = 0.2
     frame.BorderSizePixel = 0
     frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -80, 1, 0)
-    label.Position = UDim2.new(0, 12, 0, 0)
+    label.Size = UDim2.new(1, -70, 1, 0)
+    label.Position = UDim2.new(0, 14, 0, 0)
     label.BackgroundTransparency = 1
     label.Text = texto
-    label.TextColor3 = COR.Texto
-    label.TextSize = 12
-    label.Font = Enum.Font.Gotham
+    label.TextColor3 = P.text
+    label.TextSize = 11
+    label.Font = Enum.Font.GothamMedium
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 58, 0, 26)
-    btn.Position = UDim2.new(1, -66, 0.5, -13)
-    btn.BackgroundColor3 = default and COR.BotaoLigado or Color3.fromRGB(70, 70, 90)
-    btn.Text = default and "ON" or "OFF"
-    btn.TextColor3 = default and Color3.fromRGB(20, 15, 30) or COR.Texto
-    btn.TextSize = 11
-    btn.Font = Enum.Font.GothamBold
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = false
-    btn.Parent = frame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 13)
+    -- Switch iOS-like
+    local sw = Instance.new("Frame")
+    sw.Size = UDim2.new(0, 36, 0, 20)
+    sw.Position = UDim2.new(1, -48, 0.5, -10)
+    sw.BackgroundColor3 = default and P.accent or P.off
+    sw.BorderSizePixel = 0
+    sw.Parent = frame
+    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+
+    local knob = Instance.new("Frame")
+    knob.Size = UDim2.new(0, 16, 0, 16)
+    knob.Position = default and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+    knob.BackgroundColor3 = Color3.new(1, 1, 1)
+    knob.BorderSizePixel = 0
+    knob.Parent = sw
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
     local state = default
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.Parent = frame
+
     btn.MouseButton1Click:Connect(function()
         state = not state
-        btn.BackgroundColor3 = state and COR.BotaoLigado or Color3.fromRGB(70, 70, 90)
-        btn.Text = state and "ON" or "OFF"
-        btn.TextColor3 = state and Color3.fromRGB(20, 15, 30) or COR.Texto
+        sw.BackgroundColor3 = state and P.accent or P.off
+        knob.Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
         if callback then callback(state) end
     end)
 end
 
-local function criarBotao(parent, texto, callback)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, -8, 0, 38)
-    btn.BackgroundColor3 = COR.Botao
-    btn.BackgroundTransparency = 0.25
-    btn.Text = texto
-    btn.TextColor3 = COR.Texto
-    btn.TextSize = 12
-    btn.Font = Enum.Font.Gotham
-    btn.BorderSizePixel = 0
-    btn.AutoButtonColor = true
-    btn.Parent = parent
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
-    btn.MouseButton1Click:Connect(callback)
-end
-
 local function criarSlider(parent, texto, min, max, default, step, callback)
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, -8, 0, 56)
-    frame.BackgroundColor3 = COR.Botao
-    frame.BackgroundTransparency = 0.35
+    frame.Size = UDim2.new(1, 0, 0, 48)
+    frame.BackgroundColor3 = P.elev
+    frame.BackgroundTransparency = 0.2
     frame.BorderSizePixel = 0
     frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -20, 0, 20)
-    label.Position = UDim2.new(0, 12, 0, 6)
+    label.Size = UDim2.new(1, -20, 0, 18)
+    label.Position = UDim2.new(0, 14, 0, 4)
     label.BackgroundTransparency = 1
     label.Text = texto .. ": " .. default
-    label.TextColor3 = COR.Texto
-    label.TextSize = 12
-    label.Font = Enum.Font.Gotham
+    label.TextColor3 = P.text
+    label.TextSize = 11
+    label.Font = Enum.Font.GothamMedium
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
     local barBg = Instance.new("Frame")
-    barBg.Size = UDim2.new(1, -24, 0, 14)
-    barBg.Position = UDim2.new(0, 12, 1, -22)
-    barBg.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+    barBg.Size = UDim2.new(1, -28, 0, 6)
+    barBg.Position = UDim2.new(0, 14, 1, -18)
+    barBg.BackgroundColor3 = P.stroke
     barBg.BorderSizePixel = 0
     barBg.Parent = frame
     Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
 
-    local barFill = Instance.new("Frame")
     local pct = (default - min) / (max - min)
+    local barFill = Instance.new("Frame")
     barFill.Size = UDim2.new(pct, 0, 1, 0)
-    barFill.BackgroundColor3 = COR.AbaAtiva
+    barFill.BackgroundColor3 = P.accent
     barFill.BorderSizePixel = 0
     barFill.Parent = barBg
     Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
@@ -665,16 +685,15 @@ local function criarSlider(parent, texto, min, max, default, step, callback)
     dragBtn.MouseButton1Down:Connect(function() dragging = true end)
     dragBtn.MouseButton1Up:Connect(function() dragging = false end)
     dragBtn.MouseLeave:Connect(function() dragging = false end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
             dragging = false
         end
     end)
-
-    UserInputService.InputChanged:Connect(function(input)
+    UserInputService.InputChanged:Connect(function(i)
         if not dragging then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            local pos = input.Position
+        if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+            local pos = i.Position
             local abs = barBg.AbsolutePosition
             local size = barBg.AbsoluteSize
             local rel = math.clamp((pos.X - abs.X) / size.X, 0, 1)
@@ -687,117 +706,60 @@ local function criarSlider(parent, texto, min, max, default, step, callback)
     end)
 end
 
-local function criarSecao(parent, texto)
-    local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -8, 0, 28)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = "▸ " .. texto
-    lbl.TextColor3 = COR.AbaAtiva
-    lbl.TextSize = 12
-    lbl.Font = Enum.Font.GothamBold
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.Parent = parent
+local function criarBotao(parent, texto, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = P.elev
+    btn.BackgroundTransparency = 0.2
+    btn.Text = texto
+    btn.TextColor3 = P.text
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamMedium
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = true
+    btn.Parent = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    btn.MouseButton1Click:Connect(callback)
 end
 
 local function criarLabel(parent, texto, altura)
-    altura = altura or 80
+    altura = altura or 60
     local lbl = Instance.new("TextLabel")
-    lbl.Size = UDim2.new(1, -8, 0, altura)
-    lbl.BackgroundColor3 = COR.Botao
-    lbl.BackgroundTransparency = 0.5
+    lbl.Size = UDim2.new(1, 0, 0, altura)
+    lbl.BackgroundColor3 = P.elev
+    lbl.BackgroundTransparency = 0.4
     lbl.Text = texto
-    lbl.TextColor3 = COR.Texto
-    lbl.TextSize = 11
+    lbl.TextColor3 = P.text
+    lbl.TextSize = 10
     lbl.Font = Enum.Font.Code
     lbl.TextWrapped = true
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Top
     lbl.Parent = parent
-    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 6)
-    local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0, 10) p.PaddingTop = UDim.new(0, 8) p.PaddingRight = UDim.new(0, 10) p.Parent = lbl
+    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 8)
+    local p = Instance.new("UIPadding", lbl)
+    p.PaddingLeft = UDim.new(0, 12)
+    p.PaddingTop = UDim.new(0, 8)
+    p.PaddingRight = UDim.new(0, 12)
+    p.Parent = lbl
     return lbl
 end
 
-local function criarDropdown(parent, texto, opcoes, callback)
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, -8, 0, 40)
-    frame.BackgroundColor3 = COR.Botao
-    frame.BackgroundTransparency = 0.35
-    frame.BorderSizePixel = 0
-    frame.ClipsDescendants = false
-    frame.ZIndex = 2
-    frame.Parent = parent
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+-- ═══════════════════════════════════════════════════════════════
+-- [ABAS]
+-- ═══════════════════════════════════════════════════════════════
 
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 1, 0)
-    btn.BackgroundTransparency = 1
-    btn.Text = texto .. ": " .. (opcoes[1] or "?")
-    btn.TextColor3 = COR.Texto
-    btn.TextSize = 12
-    btn.Font = Enum.Font.Gotham
-    btn.TextXAlignment = Enum.TextXAlignment.Left
-    btn.Parent = frame
-    local bPad = Instance.new("UIPadding") bPad.PaddingLeft = UDim.new(0, 12) bPad.Parent = btn
-
-    local lista = Instance.new("Frame")
-    lista.Size = UDim2.new(1, 0, 0, math.min(#opcoes * 28, 200))
-    lista.Position = UDim2.new(0, 0, 1, 4)
-    lista.BackgroundColor3 = COR.Painel
-    lista.BorderSizePixel = 0
-    lista.Visible = false
-    lista.ZIndex = 50
-    lista.Parent = frame
-    Instance.new("UICorner", lista).CornerRadius = UDim.new(0, 6)
-
-    local lscroll = Instance.new("ScrollingFrame")
-    lscroll.Size = UDim2.new(1, 0, 1, 0)
-    lscroll.BackgroundTransparency = 1
-    lscroll.BorderSizePixel = 0
-    lscroll.ScrollBarThickness = 3
-    lscroll.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 28)
-    lscroll.Parent = lista
-    local ll = Instance.new("UIListLayout") ll.Parent = lscroll
-
-    for _, opt in ipairs(opcoes) do
-        local ob = Instance.new("TextButton")
-        ob.Size = UDim2.new(1, 0, 0, 28)
-        ob.BackgroundTransparency = 1
-        ob.Text = tostring(opt)
-        ob.TextColor3 = COR.Texto
-        ob.TextSize = 12
-        ob.Font = Enum.Font.Gotham
-        ob.TextXAlignment = Enum.TextXAlignment.Left
-        ob.Parent = lscroll
-        local opad = Instance.new("UIPadding") opad.PaddingLeft = UDim.new(0, 12) opad.Parent = ob
-        ob.MouseButton1Click:Connect(function()
-            btn.Text = texto .. ": " .. tostring(opt)
-            lista.Visible = false
-            if callback then callback(opt) end
-        end)
-    end
-
-    btn.MouseButton1Click:Connect(function()
-        lista.Visible = not lista.Visible
-    end)
-
-    return btn
-end
-
--- [ABA FARM]
-local farmTab = criarAba("farm", "⚔️ Farm")
-
+-- FARM
+local farmTab = criarAba("farm", "⚔ Farm")
 criarSecao(farmTab, "Farm")
-criarToggle(farmTab, "Auto Farm (Mobs)", false, function(v) Config.AutoFarm = v end)
+criarToggle(farmTab, "Auto Farm", false, function(v) Config.AutoFarm = v end)
 criarToggle(farmTab, "Auto Boss", false, function(v) Config.AutoBoss = v end)
 criarToggle(farmTab, "Auto Skills", false, function(v) Config.AutoSkills = v end)
 criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
 criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
-
 criarSecao(farmTab, "Visual")
 criarToggle(farmTab, "ESP Mobs", false, function(v) Config.ESPMobs = v end)
 criarToggle(farmTab, "ESP Itens", false, function(v) Config.ESPItems = v end)
-
 criarSecao(farmTab, "Movimento")
 criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     if SuperFlight then
@@ -807,46 +769,27 @@ criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     end
 end)
 
--- [ABA REBIRTH - PATCH 04]
+-- REBIRTH - PATCH 08
 local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
-
 criarSecao(rebirthTab, "Auto Rebirth")
-criarToggle(rebirthTab, "Ativar", false, function(v) Config.AutoRebirth = v end)
-criarSlider(rebirthTab, "Acumular (x requisito)", 1, 10, 3, 1, function(v) Config.RebirthMultiplier = v end)
-criarBotao(rebirthTab, "🔄 Forçar Rebirth", function()
-    if RequestRebirth then safe(function() RequestRebirth:InvokeServer(true) end) end
+criarToggle(rebirthTab, "Auto Rebirth", false, function(v) Config.AutoRebirth = v end)
+criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
+    if RequestRebirth then
+        safe(function() RequestRebirth:InvokeServer(true) end)
+        print("[DBH] Rebirth forçado")
+    end
 end)
-
-local infoRebirth = criarLabel(rebirthTab, "Aguardando...", 80)
+local infoRebirth = criarLabel(rebirthTab, "Aguardando...", 60)
 
 task.spawn(function()
     while Ativo do
-        task.wait(5)
+        task.wait(2)
         local stats = plr:FindFirstChild("Stats")
         if stats then
             local reb = stats:FindFirstChild("Rebirth")
-            local str = stats:FindFirstChild("Strength")
-            local ki = stats:FindFirstChild("Ki")
-            local endur = stats:FindFirstChild("Endurance")
-            local agi = stats:FindFirstChild("Agility")
-
-            if reb and str and ki then
-                local total = str.Value + ki.Value
-                    + (endur and endur.Value or 0)
-                    + (agi and agi.Value or 0)
-                local minimo = (reb.Value * 3000000) + 2000000
-                local alvo = minimo * Config.RebirthMultiplier
-
-                infoRebirth.Text = string.format(
-                    "Rebirth: %d\nTotal: %s\nAlvo: %s\n%s",
-                    reb.Value,
-                    tostring(math.floor(total)),
-                    tostring(math.floor(alvo)),
-                    total >= alvo and "✅ Pronto!" or "⏳ Acumulando..."
-                )
-
-                if Config.AutoRebirth and total >= alvo then
-                    print("[DBH] 🎯 Auto Rebirth! Total=" .. math.floor(total))
+            if reb then
+                infoRebirth.Text = "Rebirth atual: " .. reb.Value
+                if Config.AutoRebirth then
                     safe(function()
                         if PromptRemote then
                             PromptRemote:FireServer({
@@ -864,39 +807,46 @@ task.spawn(function()
                     safe(function()
                         if RequestRebirth then RequestRebirth:InvokeServer(true) end
                     end)
-                    task.wait(15)
+                    task.wait(2)
                 end
             end
         end
     end
 end)
 
--- [ABA TRACKER - PATCH 06]
+-- TRACKER - PATCH 09
 local trackerTab = criarAba("tracker", "⏱ Tracker")
-
-local bossEstado = {}
-local bossVistos = {}
-
-criarSecao(trackerTab, "🎯 Detecção")
+criarSecao(trackerTab, "Detecção")
 criarToggle(trackerTab, "Auto-detectar bosses", true, function(v) Config.TrackerAuto = v end)
 
-criarSecao(trackerTab, "⏱ Timers Ativos")
-local timerLabel = criarLabel(trackerTab, "Nenhum boss em respawn.", 120)
+criarSecao(trackerTab, "Timers Ativos")
+local timerLabel = criarLabel(trackerTab, "Nenhum boss em respawn.", 100)
 
-criarSecao(trackerTab, "✈ Voar até Boss")
-criarDropdown(trackerTab, "Boss", {
-    "(nenhum)", "Karrot", "Zero", "Brawly X01", "Zaja", "Destroyer", "Puriza", "Puriza Minion"
-}, function(opt)
-    Config.BossSelecionado = (opt == "(nenhum)") and nil or opt
-end)
+criarSecao(trackerTab, "Voar até Boss")
+local bossInput = Instance.new("TextBox", trackerTab)
+bossInput.Size = UDim2.new(1, 0, 0, 32)
+bossInput.BackgroundColor3 = P.elev
+bossInput.BackgroundTransparency = 0.2
+bossInput.BorderSizePixel = 0
+bossInput.Text = ""
+bossInput.PlaceholderText = "Nome do boss..."
+bossInput.TextColor3 = P.text
+bossInput.Font = Enum.Font.GothamMedium
+bossInput.TextSize = 11
+bossInput.ClearTextOnFocus = false
+Instance.new("UICorner", bossInput).CornerRadius = UDim.new(0, 8)
+local biPad = Instance.new("UIPadding", bossInput)
+biPad.PaddingLeft = UDim.new(0, 12)
+bossInput.Parent = trackerTab
 
-criarBotao(trackerTab, "✈️ Ir para o boss selecionado", function()
-    if not Config.BossSelecionado then return end
+criarBotao(trackerTab, "✈️ Ir para o boss", function()
+    local nome = bossInput.Text
+    if nome == "" then return end
     local wm = WS:FindFirstChild("World Mobs")
     if not wm then return end
     for _, pasta in ipairs(wm:GetChildren()) do
         for _, mob in ipairs(pasta:GetChildren()) do
-            if mob:IsA("Model") and mob.Name:gsub("%-?%d+$", "") == Config.BossSelecionado then
+            if mob:IsA("Model") and mob.Name:gsub("%-?%d+$", "") == nome then
                 local hrp = mob:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     voarPara(hrp.Position)
@@ -905,7 +855,7 @@ criarBotao(trackerTab, "✈️ Ir para o boss selecionado", function()
             end
         end
     end
-    print("[DBH] Boss "..Config.BossSelecionado.." não encontrado")
+    print("[DBH] Boss "..nome.." não encontrado")
 end)
 
 task.spawn(function()
@@ -921,16 +871,18 @@ task.spawn(function()
                             if mob:IsA("Model") then
                                 local base = mob.Name:gsub("%-?%d+$", "")
                                 vivos[base] = true
-                                bossVistos[base] = true
+                                _G.bossVistos = _G.bossVistos or {}
+                                _G.bossVistos[base] = true
                             end
                         end
                     end
                 end
-                for nome in pairs(bossVistos) do
-                    if not vivos[nome] and not bossEstado[nome] then
+                _G.bossEstado = _G.bossEstado or {}
+                for nome in pairs(_G.bossVistos or {}) do
+                    if not vivos[nome] and not _G.bossEstado[nome] then
                         local tempo = BossTimers[nome] or BossTimers._default
-                        bossEstado[nome] = {morreuEm = os.clock(), respawnEm = tempo}
-                        bossVistos[nome] = nil
+                        _G.bossEstado[nome] = {morreuEm = os.clock(), respawnEm = tempo}
+                        _G.bossVistos[nome] = nil
                     end
                 end
             end
@@ -944,7 +896,8 @@ task.spawn(function()
         local agora = os.clock()
         local linhas = {}
         local total = 0
-        for nome, info in pairs(bossEstado) do
+        _G.bossEstado = _G.bossEstado or {}
+        for nome, info in pairs(_G.bossEstado) do
             local passado = agora - info.morreuEm
             local restante = info.respawnEm - passado
             if restante > 0 then
@@ -953,7 +906,7 @@ task.spawn(function()
                 linhas[#linhas+1] = string.format("%-15s %d:%02d", nome, min, seg)
                 total = total + 1
             else
-                bossEstado[nome] = nil
+                _G.bossEstado[nome] = nil
             end
         end
         if total == 0 then
@@ -965,21 +918,17 @@ task.spawn(function()
     end
 end)
 
--- [ABA CONFIG]
-local configTab = criarAba("config", "⚙️ Config")
-
+-- CONFIG
+local configTab = criarAba("config", "⚙ Config")
 criarSecao(configTab, "Movimento")
 criarSlider(configTab, "WalkSpeed", 16, 200, 16, 1, function(v) Config.WalkSpeed = v end)
 criarSlider(configTab, "FlySpeed", 50, 500, 250, 10, function(v) Config.FlySpeed = v end)
 criarSlider(configTab, "Attack Range", 5, 20, 8, 1, function(v) Config.AttackRange = v end)
-
 criarSecao(configTab, "Combate")
-criarSlider(configTab, "Skill Delay x0.1s", 5, 50, 15, 5, function(v) Config.SkillDelay = v * 0.1 end)
-
+criarSlider(configTab, "Skill Delay (x0.1s)", 5, 50, 15, 5, function(v) Config.SkillDelay = v * 0.1 end)
 criarSecao(configTab, "Sobrevivência")
 criarSlider(configTab, "Ki pra Regen (%)", 10, 50, 30, 5, function(v) Config.KiMin = v / 100 end)
-criarSlider(configTab, "Altura Segura (studs)", 40, 300, 100, 10, function(v) Config.SafeHeight = v end)
-
+criarSlider(configTab, "Altura Segura", 40, 300, 100, 10, function(v) Config.SafeHeight = v end)
 criarSecao(configTab, "Sistema")
 criarBotao(configTab, "🔴 MATAR SCRIPT", function()
     Ativo = false
@@ -990,14 +939,11 @@ criarBotao(configTab, "🔴 MATAR SCRIPT", function()
     espGui:Destroy()
 end)
 
--- [ABA SOBRE]
-local sobreTab = criarAba("sobre", "ℹ️ Sobre")
-
-criarSecao(sobreTab, "Criadores")
-criarLabel(sobreTab, "🐉 DRAGON BLOX HUB\n\nzyyx & elliot\n\nv5.0 - 2026", 100)
-
-criarSecao(sobreTab, "Servidor")
-local infoServidor = criarLabel(sobreTab, "Carregando...", 120)
+-- SOBRE
+local sobreTab = criarAba("sobre", "ℹ Sobre")
+criarSecao(sobreTab, "Info")
+criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.0", 80)
+local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
 
 task.spawn(function()
     while Ativo and gui.Parent do
@@ -1008,13 +954,16 @@ task.spawn(function()
             "\nData: " .. os.date("%d/%m/%Y") ..
             "\nServidor: " .. jobId ..
             "\nJogadores: " .. #Players:GetPlayers() ..
-            "\nPing: " .. ping .. " ms" ..
-            "\nFPS: " .. math.floor(workspace:GetRealPhysicsFPS())
+            "\nPing: " .. ping .. " ms"
         task.wait(2)
     end
 end)
 
 abas.farm.ativar()
+
+-- ═══════════════════════════════════════════════════════════════
+-- [INTERAÇÕES]
+-- ═══════════════════════════════════════════════════════════════
 
 homeBar.MouseButton1Click:Connect(function()
     janela.Visible = not janela.Visible
@@ -1023,54 +972,44 @@ end)
 local dragging = false
 local dragStart = nil
 local startPos = nil
-
 titulo.MouseButton1Down:Connect(function()
     dragging = true
     dragStart = UserInputService:GetMouseLocation()
     startPos = janela.Position
 end)
-
-UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
-        resizing = false
     end
 end)
-
-UserInputService.InputChanged:Connect(function(input)
+UserInputService.InputChanged:Connect(function(i)
     if dragging then
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            local current = UserInputService:GetMouseLocation()
-            local delta = current - dragStart
+        if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+            local cur = UserInputService:GetMouseLocation()
+            local delta = cur - dragStart
             janela.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
                                         startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
     end
 end)
 
-local resizing = false
-local resizeStartPos = nil
-local sizeStart = nil
-
-resizeHandle.MouseButton1Down:Connect(function()
-    resizing = true
-    resizeStartPos = UserInputService:GetMouseLocation()
-    sizeStart = janela.AbsoluteSize
+btnMin.MouseButton1Click:Connect(function()
+    janela.Visible = false
 end)
 
-UserInputService.InputChanged:Connect(function(input)
-    if resizing then
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            local current = UserInputService:GetMouseLocation()
-            local delta = current - resizeStartPos
-            local newX = math.clamp(sizeStart.X + delta.X, 400, 900)
-            local newY = math.clamp(sizeStart.Y + delta.Y, 300, 700)
-            janela.Size = UDim2.new(0, newX, 0, newY)
-        end
+btnKill.MouseButton1Click:Connect(function()
+    Ativo = false
+    for k, v in pairs(Config) do
+        if type(v) == "boolean" then Config[k] = false end
     end
+    gui:Destroy()
+    espGui:Destroy()
 end)
 
+-- ═══════════════════════════════════════════════════════════════
 -- [LOOPS]
+-- ═══════════════════════════════════════════════════════════════
+
 task.spawn(function()
     while Ativo and task.wait(0.3) do
         if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
@@ -1122,16 +1061,13 @@ task.spawn(function()
     end
 end)
 
--- [AUTO TRANSFORM AO NASCER - PATCH 05]
 task.spawn(function()
     while Ativo do
         plr.CharacterAdded:Wait()
         task.wait(3)
         if Config.AutoTransform and SelectMode then
             safe(function() SelectMode:FireServer(Config.TransformMode) end)
-            print("[DBH] 🔄 Transform aplicada pós-spawn")
         end
-        task.wait(2)
     end
 end)
 
