@@ -1,391 +1,324 @@
--- [CORE]
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
 local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
-local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
-local UIS = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local VIM = game:GetService("VirtualInputManager")
 local plr = Players.LocalPlayer
+
+local function safe(fn)
+    local ok, err = pcall(fn)
+    if not ok then warn("[DBH] " .. tostring(err)) end
+    return ok
+end
+
+local KnitSVC
+safe(function()
+    local Knit = RS.Packages._Index["sleitnick_knit@1.4.7"].knit
+    KnitSVC = Knit.Services
+end)
+
+local ExecuteSkill         = KnitSVC and KnitSVC.SkillManagerV2 and KnitSVC.SkillManagerV2.RE.ExecuteSkill
+local ExecuteSkill_Special = KnitSVC and KnitSVC.SkillManagerV2 and KnitSVC.SkillManagerV2.RE.ExecuteSkill_Special
+local RequestRebirth       = KnitSVC and KnitSVC.PlayerLevelService and KnitSVC.PlayerLevelService.RF.RequestRebirth
+local PromptRemote         = KnitSVC and KnitSVC.PromptService and KnitSVC.PromptService.RE.Prompt
+local SuperFlight          = KnitSVC and KnitSVC.FlightService and KnitSVC.FlightService.RE.SuperFlight
+local SelectMode           = KnitSVC and KnitSVC.ModeTransformService and KnitSVC.ModeTransformService.RE.SelectMode
+local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
+
 local Ativo = true
 
--- [REMOTES]
-local function getKnit()
-    local p = RS:FindFirstChild("Packages")
-    if not p then return nil end
-    local idx = p:FindFirstChild("_Index")
-    if not idx then return nil end
-    local cands = {}
-    for _, f in ipairs(idx:GetChildren()) do
-        if f.Name:find("sleitnick_knit") then table.insert(cands, f) end
-    end
-    table.sort(cands, function(a, b) return a.Name > b.Name end)
-    for _, f in ipairs(cands) do
-        local k = f:FindFirstChild("knit")
-        if k then
-            local s = k:FindFirstChild("Services")
-            if s then return s end
-        end
-    end
-    return nil
-end
-
-local function getR(svc, name, isRF)
-    local s = getKnit() if not s then return nil end
-    local S = s:FindFirstChild(svc) if not S then return nil end
-    local sub = S:FindFirstChild(isRF and "RF" or "RE") if not sub then return nil end
-    return sub:FindFirstChild(name)
-end
-
-local RE_ExecuteSkill        = getR("SkillManagerV2", "ExecuteSkill", false)
-local RE_ExecuteSkillSpecial = getR("SkillManagerV2", "ExecuteSkill_Special", false)
-local RE_LockedOn            = getR("SkillManager", "LockedOnChanged", false)
-local RE_Prompt              = getR("PromptService", "Prompt", false)
-local RF_Rebirth             = getR("PlayerLevelService", "RequestRebirth", true)
-local RE_SuperFlight         = getR("FlightService", "SuperFlight", false)
-local SkillRemote            = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
-
--- [CONFIG]
 local Config = {
     AutoFarm = false,
-    AutoM1 = true,
     AutoBoss = false,
-    AutoSkill = false,
-    AutoLock = true,
-    ESPMobs = false,
-    ESPDrops = true,
-    AutoCollect = false,
+    AutoSkills = false,
+    AutoTransform = false,
+    TransformMode = "SSJAngel",
     AutoRebirth = false,
-    RebirthMult = 3,
-    Noclip = false,
-    FlySpeed = 120,
+    RebirthMultiplier = 3,
+    ESPMobs = false,
+    ESPItems = false,
+    AutoCollect = false,
+    AutoRegen = false,
+    KiMin = 0.3,
+    SafeHeight = 100,
     WalkSpeed = 16,
-    OverrideSpeed = false,
-    M1_Range = 12,
-    M1_Delay = 0.35,
-    Skill_Delay = 1.5,
-    MobAlvo = nil,
+    FlySpeed = 250,
+    AttackRange = 8,
+    SkillDelay = 1.5,
 }
 
-local KiCfg = { Limite = 0.30, Alvo = 0.95, TempoMax = 5, Recarregando = false }
+local SKILLS = {
+    { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3 },
+    { nome = "UniqueSets_2_3", hold = "Hold_SpiritBomb", release = "Release_SpiritBomb", pause = 0.1 },
+    { nome = "UniqueSets_2_2", pause = 1 },
+}
 
--- [HELPERS]
-local function getChar()
-    local c = plr.Character
-    if not c then return nil end
-    local h = c:FindFirstChild("HumanoidRootPart")
-    return c, h, c:FindFirstChildOfClass("Humanoid")
-end
+local BOSS_KEYWORDS = {
+    "coolest","droid","jinbu","atom","turles","boku","apejaw","kataba",
+    "yeti","opa","brolo","gero","nash","frieza","cell","buu","beerus",
+    "jiren","broly","zaja","boss"
+}
 
-local function listarMobs()
-    local seen = {}
-    local wm = WS:FindFirstChild("World Mobs")
-    if not wm then return {"(todos)"} end
-    for _, p in ipairs(wm:GetChildren()) do
-        if p:IsA("Folder") or p:IsA("Model") then
-            for _, m in ipairs(p:GetChildren()) do
-                if m:IsA("Model") and m:FindFirstChild("Humanoid") then
-                    local b = m.Name:gsub("%-?%d+$", "")
-                    seen[b] = true
-                end
-            end
-        end
+local function isBoss(mob)
+    if not mob then return false end
+    local n = mob.Name:lower()
+    for _, kw in ipairs(BOSS_KEYWORDS) do
+        if n:find(kw) then return true end
     end
-    local lista = {"(todos)"}
-    for k in pairs(seen) do table.insert(lista, k) end
-    table.sort(lista, function(a, b)
-        if a == "(todos)" then return true end
-        if b == "(todos)" then return false end
-        return a < b
-    end)
-    return lista
+    return false
 end
 
-local function getMob()
-    local _, hrp = getChar()
-    if not hrp then return nil end
-    local myPos = hrp.Position
-    local melhor, minD = nil, math.huge
+local emRegen = false
+local ultimaAcao = 0
 
-    local function checar(pasta, isBoss)
-        if not pasta then return end
-        for _, mob in ipairs(pasta:GetChildren()) do
-            if mob:IsA("Model") and mob:FindFirstChild("HumanoidRootPart") then
-                local hum = mob:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    local base = mob.Name:gsub("%-?%d+$", "")
-                    local valido = false
-                    if Config.AutoFarm and not isBoss then valido = true end
-                    if Config.AutoBoss and isBoss then valido = true end
-                    if Config.AutoFarm and Config.AutoBoss then valido = true end
-                    if valido and Config.MobAlvo and base ~= Config.MobAlvo then valido = false end
-                    if valido then
-                        local d = (mob.HumanoidRootPart.Position - myPos).Magnitude
-                        if d < minD then
-                            minD = d
-                            melhor = {
-                                model = mob,
-                                baseName = base,
-                                pos = mob.HumanoidRootPart.Position,
-                                dist = d,
-                                isBoss = isBoss,
-                            }
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    local wm = WS:FindFirstChild("World Mobs")
-    if wm then
-        checar(wm:FindFirstChild("Mobs"), false)
-        checar(wm:FindFirstChild("Boss Mobs"), true)
-        checar(wm:FindFirstChild("Event Mobs"), true)
-    end
-    return melhor
+local function podeAgir()
+    local agora = tick()
+    if agora - ultimaAcao < 0.05 then return false end
+    ultimaAcao = agora
+    return true
 end
 
--- [MOVIMENTO]
-local function pararVoo()
-    local _, hrp = getChar()
-    if not hrp then return end
-    local bv = hrp:FindFirstChild("__bv")
-    local bg = hrp:FindFirstChild("__bg")
-    if bv then bv:Destroy() end
-    if bg then bg:Destroy() end
-end
+local function voarPara(destino, velocidade)
+    local myChar = plr.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return end
+    local hrp = myChar.HumanoidRootPart
+    velocidade = velocidade or Config.FlySpeed
 
-local function voarPara(pos, speed)
-    local _, hrp = getChar()
-    if not hrp then return end
-    speed = speed or Config.FlySpeed
-
-    local bv = hrp:FindFirstChild("__bv") or Instance.new("BodyVelocity")
-    bv.Name = "__bv"
-    bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bv.Velocity = Vector3.new(0, 0, 0)
     bv.Parent = hrp
 
-    local bg = hrp:FindFirstChild("__bg") or Instance.new("BodyGyro")
-    bg.Name = "__bg"
-    bg.MaxTorque = Vector3.new(1e5, 1e5, 1e5)
-    bg.P = 10000
+    local bg = Instance.new("BodyGyro")
+    bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    bg.P = 9e4
+    bg.CFrame = hrp.CFrame
     bg.Parent = hrp
 
-    local dir = pos - hrp.Position
-    if dir.Magnitude > 5 then
-        local spd = math.min(speed, dir.Magnitude * 3)
-        bv.Velocity = dir.Unit * spd
-        bg.CFrame = CFrame.new(hrp.Position, pos)
-    else
-        bv.Velocity = Vector3.zero
-    end
-end
-
--- [LOCK]
-local lockConexao, lockAlvo
-local function pararLock()
-    if lockConexao then lockConexao:Disconnect(); lockConexao = nil end
-    lockAlvo = nil
-end
-
-local function lockOn(mobModel)
-    if RE_LockedOn then pcall(function() RE_LockedOn:FireServer(mobModel) end) end
-    pararLock()
-    if not mobModel or not mobModel:FindFirstChild("HumanoidRootPart") then return end
-    lockAlvo = mobModel
-    lockConexao = RunService.RenderStepped:Connect(function()
-        if not lockAlvo or not lockAlvo.Parent then pararLock() return end
-        local mh = lockAlvo:FindFirstChild("HumanoidRootPart")
-        local hum = lockAlvo:FindFirstChildOfClass("Humanoid")
-        if not mh or not hum or hum.Health <= 0 then pararLock() return end
-        local cam = workspace.CurrentCamera
-        if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, mh.Position) end
+    task.spawn(function()
+        local t = 0
+        while t < 20 and Ativo and hrp.Parent do
+            local dir = destino - hrp.Position
+            if dir.Magnitude < 15 then break end
+            bv.Velocity = dir.Unit * velocidade
+            bg.CFrame = CFrame.new(hrp.Position, destino)
+            t = t + 0.1
+            task.wait(0.1)
+        end
+        bv:Destroy()
+        bg:Destroy()
     end)
 end
 
--- [M1 — SkillId="1"]
-local function m1(alvo)
-    if not SkillRemote then return end
-    local _, hrp = getChar()
+local function atacar(alvo)
+    if not SkillRemote or not plr.Character or not podeAgir() then return end
+    if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
+    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-    local cam = workspace.CurrentCamera
-    local aim = alvo and alvo.pos or (hrp.Position + hrp.CFrame.LookVector * 10)
-    local camCF = cam and cam.CFrame or hrp.CFrame
 
-    pcall(function()
+    local mhrp = alvo.HumanoidRootPart
+    hrp.CFrame = mhrp.CFrame * CFrame.new(0, 0, Config.AttackRange)
+
+    local cframe = hrp.CFrame
+    local aim = mhrp.Position
+    local camCF = workspace.CurrentCamera.CFrame
+
+    safe(function()
         SkillRemote:FireServer({
-            Began = true, CFrame = hrp.CFrame, Aim = aim,
-            Camera = camCF, Type = 1, SkillId = "1",
+            Began = true, CFrame = cframe, Aim = aim,
+            Camera = camCF, Type = 1, SkillId = "1"
         })
     end)
     task.wait(0.05)
-    pcall(function()
+    safe(function()
         SkillRemote:FireServer({
-            Began = false, CFrame = hrp.CFrame, Aim = aim,
-            Camera = camCF, Type = 1, SkillId = "1",
+            Began = false, CFrame = cframe, Aim = aim,
+            Camera = camCF, Type = 1, SkillId = "1"
         })
     end)
 end
 
--- [SKILL]
-local SkillList = {"UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3"}
-local skillIdx = 0
-local ultimaSpecial = nil
+local function usarSkill(skill, alvo)
+    if not ExecuteSkill or not alvo or not alvo.Parent then return end
+    if not alvo:FindFirstChild("HumanoidRootPart") then return end
+    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-local function proximaSkill()
-    skillIdx = skillIdx + 1
-    if skillIdx > #SkillList then skillIdx = 1 end
-    return SkillList[skillIdx]
+    local tpos = alvo.HumanoidRootPart.Position
+    safe(function() ExecuteSkill_Special:FireServer(plr.Name, skill.nome) end)
+
+    local cfg = { targetPos = tpos, HumCFrame = hrp.CFrame, ResumeOnTimePassed = skill.pause or 0.5 }
+    if skill.hold then cfg.HoldAnimation = skill.hold end
+    if skill.release then cfg.ReleaseAnimation = skill.release end
+
+    safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, true) end)
+    task.wait(skill.pause or 0.5)
+    safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, false) end)
 end
 
-local function usarSkill(skillId, alvo)
-    local c, hrp = getChar()
-    if not c or not hrp or not RE_ExecuteSkill then return end
-
-    if skillId ~= ultimaSpecial and RE_ExecuteSkillSpecial then
-        pcall(function() RE_ExecuteSkillSpecial:FireServer(c, skillId) end)
-        ultimaSpecial = skillId
-        task.wait(0.08)
-    end
-
-    local params = {}
-    if skillId:find("UniqueSets") then
-        local ok, f = pcall(function()
-            return RS.Assets.SkillsV2.UniqueSets["Seijin Instinct"].Animations
-        end)
-        if ok and f then
-            local anim = skillId:find("_2_1") and "Kamehameha"
-                or skillId:find("_2_3") and "SpiritBomb" or nil
-            if anim then
-                params = {
-                    HoldAnimation = f:FindFirstChild("Hold_" .. anim),
-                    ReleaseAnimation = f:FindFirstChild("Release_" .. anim),
-                    HumCFrame = hrp.CFrame,
-                    ResumeOnTimePassed = (anim == "Kamehameha") and 3 or 0.1,
-                    targetPos = alvo and alvo.pos or (hrp.Position + hrp.CFrame.LookVector * 10),
-                }
-            else
-                params = { HumCFrame = hrp.CFrame, Target = alvo and alvo.model or nil }
-            end
-        end
-    elseif skillId == "Weapons_3_2" then
-        params = {
-            targetPos = alvo and alvo.pos or (hrp.Position + hrp.CFrame.LookVector * 10),
-            PauseTimeFrame = 0.616, animationSpeed = 1,
-            ResumeOnTimePassed = 0.633, HumCFrame = hrp.CFrame,
-        }
-    elseif skillId == "Weapons_3_3" then
-        params = { CFrame = hrp.CFrame }
-    end
-
-    pcall(function() RE_ExecuteSkill:FireServer(skillId, params, 1, true) end)
-    task.wait(0.3)
-    pcall(function() RE_ExecuteSkill:FireServer(skillId, params, 1, false) end)
-end
-
--- [KI]
 local function getKi()
-    local c = plr.Character
-    if not c then return 0, 0 end
-    local st = c:FindFirstChild("Status")
-    if not st then return 0, 0 end
-    local cur = st:FindFirstChild("CurrentEnergy")
-    local max = st:FindFirstChild("MaxEnergy")
-    if not cur or not max then return 0, 0 end
-    return cur.Value, max.Value
+    local char = plr.Character
+    if not char then return nil, nil end
+    local status = char:FindFirstChild("Status")
+    if not status then return nil, nil end
+    local curr = status:FindFirstChild("CurrentEnergy")
+    local max = status:FindFirstChild("MaxEnergy")
+    if not curr or not max then return nil, nil end
+    return curr.Value, max.Value
 end
 
-local function recarregarKi()
-    if KiCfg.Recarregando then return end
-    KiCfg.Recarregando = true
-    local c, hrp = getChar()
-    if not c or not hrp then KiCfg.Recarregando = false return end
+local function iniciarRegen()
+    if emRegen then return end
+    emRegen = true
 
-    local mob = getMob()
-    if mob and mob.dist < 40 then
-        voarPara(hrp.Position + (hrp.Position - mob.pos).Unit * 40, 100)
-        task.wait(0.5)
+    local myChar = plr.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then
+        emRegen = false
+        return
     end
+    local hrp = myChar.HumanoidRootPart
+    local posOrig = hrp.Position
+    local posSegura = Vector3.new(posOrig.X, posOrig.Y + Config.SafeHeight, posOrig.Z)
 
-    local inicio = os.clock()
-    VIM:SendKeyEvent(true, Enum.KeyCode.C, false, game)
-    while KiCfg.Recarregando and Ativo do
-        local cur, max = getKi()
-        local pct = max > 0 and (cur / max) or 0
-        if pct >= KiCfg.Alvo then break end
-        if (os.clock() - inicio) >= KiCfg.TempoMax then break end
-        task.wait(0.15)
-    end
-    VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game)
-    KiCfg.Recarregando = false
-    task.wait(0.3)
+    local bv = Instance.new("BodyVelocity")
+    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bv.Velocity = Vector3.new(0, 0, 0)
+    bv.Parent = hrp
+
+    task.spawn(function()
+        local t = 0
+        while t < 5 and emRegen and Ativo and hrp.Parent do
+            local dir = posSegura - hrp.Position
+            if dir.Magnitude < 10 then break end
+            bv.Velocity = dir.Unit * 200
+            t = t + 0.1
+            task.wait(0.1)
+        end
+        bv.Velocity = Vector3.new(0, 0, 0)
+        while emRegen and Ativo and hrp.Parent do
+            hrp.CFrame = CFrame.new(posSegura)
+            task.wait(0.2)
+        end
+        bv:Destroy()
+    end)
 end
 
--- [REBIRTH]
-local function fazerRebirth()
-    if RE_Prompt then
-        pcall(function()
-            RE_Prompt:FireServer({
-                UniqueTag = "HudRebirth", Title = "Rebirth",
-                LeftButton = "Details", MiddleButton = "Confirm",
-                Prompt = "HudRebirth", RightButton = "Cancel",
-                Description = "Confirm Rebirth?",
-            }, "Confirm")
-        end)
-    end
-    task.wait(0.4)
-    if RF_Rebirth then
-        pcall(function() RF_Rebirth:InvokeServer(true) end)
-    end
+local function pararRegen()
+    if not emRegen then return end
+    emRegen = false
 end
 
-local function checarRebirth()
-    local st = plr:FindFirstChild("Stats")
-    if not st then return false, nil end
-    local reb = st:FindFirstChild("Rebirth")
-    local str = st:FindFirstChild("Strength")
-    local ki = st:FindFirstChild("Ki")
-    if not reb or not str or not ki then return false, nil end
-    local total = str.Value + ki.Value
-    local minimo = (reb.Value * 3000000) + 2000000
-    local alvo = minimo * Config.RebirthMult
-    return total >= alvo, { reb = reb.Value, total = total, alvo = alvo }
+local mobs = {}
+local function registrarMob(mob)
+    if not mob:IsA("Model") then return end
+    if not mob:FindFirstChild("Humanoid") then return end
+    if not mob:FindFirstChild("HumanoidRootPart") then return end
+    if table.find(mobs, mob) then return end
+    table.insert(mobs, mob)
 end
 
--- [AUTOCOLLECT]
-local coletando = false
-
-local function tentarColetar()
-    if coletando then return end
-    local c, hrp = getChar()
-    if not c or not hrp then return end
-    local ps = WS:FindFirstChild("PartStorage")
-    if not ps then return end
-
-    for _, item in ipairs(ps:GetChildren()) do
-        if item.Name:find("ItemDrop_") then
-            local drop = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-            if drop then
-                coletando = true
-                voarPara(drop.Position, 200)
-                task.wait(1)
-                c.HumanoidRootPart.CFrame = CFrame.new(drop.Position)
-                task.wait(0.5)
-                coletando = false
-                return
+task.spawn(function()
+    while Ativo do
+        local worldMobs = workspace:FindFirstChild("World Mobs")
+        if worldMobs then
+            for _, child in pairs(worldMobs:GetDescendants()) do
+                if child:IsA("Model") and child:FindFirstChild("Humanoid") and child:FindFirstChild("HumanoidRootPart") then
+                    registrarMob(child)
+                end
             end
         end
+        for i = #mobs, 1, -1 do
+            local m = mobs[i]
+            if not m or not m.Parent or not m:FindFirstChild("Humanoid") or m.Humanoid.Health <= 0 then
+                table.remove(mobs, i)
+            end
+        end
+        task.wait(1.5)
     end
+end)
+
+local function getAlvo()
+    local myChar = plr.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+    local myPos = myChar.HumanoidRootPart.Position
+    local closest, minD = nil, math.huge
+    for _, mob in ipairs(mobs) do
+        if mob and mob.Parent and mob:FindFirstChild("HumanoidRootPart") and mob.Humanoid.Health > 0 then
+            local d = (mob.HumanoidRootPart.Position - myPos).Magnitude
+            local valido = false
+            if Config.AutoFarm and not Config.AutoBoss then
+                valido = not isBoss(mob)
+            elseif Config.AutoBoss and not Config.AutoFarm then
+                valido = isBoss(mob)
+            elseif Config.AutoFarm and Config.AutoBoss then
+                valido = true
+            end
+            if valido and d < minD then minD = d; closest = mob end
+        end
+    end
+    return closest
 end
 
--- [ESP]
+local function calcularRequisito(reb) return (reb * 3000000) + 2000000 end
+local function checarRebirth()
+    local stats = plr:FindFirstChild("Stats")
+    if not stats then return false, nil end
+    local reb = stats:FindFirstChild("Rebirth")
+    local str = stats:FindFirstChild("Strength")
+    local ki = stats:FindFirstChild("Ki")
+    if not reb or not str or not ki then return false, nil end
+    local r = reb.Value
+    local total = str.Value + ki.Value
+    local minimo = calcularRequisito(r)
+    local alvo = minimo * Config.RebirthMultiplier
+    return total >= alvo, { rebirth = r, total = total, minimo = minimo, alvo = alvo }
+end
+
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
 espGui.ResetOnSpawn = false
 espGui.Parent = CoreGui
 
+local espCache = {}
 local dropESP = {}
+
+local function criarESP(mob)
+    local hrp = mob:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(0, 140, 0, 30)
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    bb.AlwaysOnTop = true
+    bb.Adornee = hrp
+    bb.Parent = espGui
+
+    local nome = Instance.new("TextLabel", bb)
+    nome.Size = UDim2.new(1, 0, 1, 0)
+    nome.BackgroundTransparency = 1
+    nome.Text = mob.Name
+    nome.TextStrokeTransparency = 0.5
+    nome.TextSize = 12
+    nome.Font = Enum.Font.GothamBold
+    nome.TextColor3 = (mob.Parent and mob.Parent.Name == "Boss Mobs") and Color3.fromRGB(255, 80, 80)
+        or (mob.Parent and mob.Parent.Name == "Event Mobs") and Color3.fromRGB(200, 80, 255)
+        or Color3.fromRGB(255, 200, 80)
+
+    espCache[mob] = bb
+end
+
+local function removerESP(mob)
+    if espCache[mob] then espCache[mob]:Destroy(); espCache[mob] = nil end
+end
+
+local function getItemLabel(itemName)
+    if itemName:find("Wish") then return "💠 "..itemName, Color3.fromRGB(120, 200, 255)
+    elseif itemName:find("ExpMat") then return "📗 "..itemName, Color3.fromRGB(120, 220, 120)
+    elseif itemName:find("PowerScroll") then return "📜 "..itemName, Color3.fromRGB(255, 220, 100)
+    elseif itemName:find("Orb") then return "🔮 "..itemName, Color3.fromRGB(200, 120, 255)
+    else return "📦 "..itemName, Color3.fromRGB(220, 220, 220) end
+end
+
 local function atualizarDropESP()
     local ps = WS:FindFirstChild("PartStorage")
     local vistos = {}
@@ -397,19 +330,24 @@ local function atualizarDropESP()
                     local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
                     if base then
                         local bb = Instance.new("BillboardGui")
-                        bb.Size = UDim2.new(0, 140, 0, 30)
+                        bb.Size = UDim2.new(0, 160, 0, 34)
                         bb.StudsOffset = Vector3.new(0, 4, 0)
                         bb.AlwaysOnTop = true
                         bb.Adornee = base
                         bb.Parent = espGui
-                        local l = Instance.new("TextLabel", bb)
-                        l.Size = UDim2.new(1, 0, 1, 0)
-                        l.BackgroundTransparency = 1
-                        l.Text = "💎 " .. item.Name
-                        l.TextColor3 = Color3.fromRGB(255, 200, 60)
-                        l.TextStrokeTransparency = 0.5
-                        l.Font = Enum.Font.GothamBold
-                        l.TextSize = 12
+
+                        local lbl = Instance.new("TextLabel", bb)
+                        lbl.Size = UDim2.new(1, 0, 1, 0)
+                        lbl.BackgroundTransparency = 1
+                        lbl.TextStrokeTransparency = 0.5
+                        lbl.Font = Enum.Font.GothamBold
+                        lbl.TextSize = 12
+
+                        local tipoItem = item:FindFirstChild("ItemName") and item.ItemName.Value or item.Name
+                        local txt, cor = getItemLabel(tipoItem)
+                        lbl.Text = txt
+                        lbl.TextColor3 = cor
+
                         dropESP[item] = bb
                     end
                 end
@@ -421,704 +359,584 @@ local function atualizarDropESP()
     end
 end
 
-local espCache = {}
-local function criarESP(mob)
-    local hrp = mob:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local bb = Instance.new("BillboardGui")
-    bb.Size = UDim2.new(0, 140, 0, 30)
-    bb.StudsOffset = Vector3.new(0, 3, 0)
-    bb.AlwaysOnTop = true
-    bb.Adornee = hrp
-    bb.Parent = espGui
-    local n = Instance.new("TextLabel", bb)
-    n.Size = UDim2.new(1, 0, 1, 0)
-    n.BackgroundTransparency = 1
-    n.TextColor3 = (mob.Parent and mob.Parent.Name == "Boss Mobs") and Color3.fromRGB(255, 80, 80)
-        or (mob.Parent and mob.Parent.Name == "Event Mobs") and Color3.fromRGB(200, 80, 255)
-        or Color3.fromRGB(255, 200, 80)
-    n.TextStrokeTransparency = 0.5
-    n.TextSize = 12
-    n.Font = Enum.Font.GothamBold
-    n.Text = mob.Name
-    espCache[mob] = bb
-end
+local oldGui = CoreGui:FindFirstChild("DragonBloxHub")
+if oldGui then oldGui:Destroy() end
 
-local function removerESP(mob)
-    if espCache[mob] then espCache[mob]:Destroy(); espCache[mob] = nil end
-end
+local gui = Instance.new("ScreenGui")
+gui.Name = "DragonBloxHub"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 100
+gui.IgnoreGuiInset = true
+gui.Parent = CoreGui
 
--- [UI]
-local UI = {}
-local T = {
-    bg = Color3.fromRGB(0, 0, 0),
-    panel = Color3.fromRGB(10, 10, 12),
-    elev = Color3.fromRGB(18, 18, 22),
-    border = Color3.fromRGB(30, 30, 36),
-    accent = Color3.fromRGB(255, 140, 30),
-    text = Color3.fromRGB(230, 230, 235),
-    dim = Color3.fromRGB(140, 140, 150),
-    success = Color3.fromRGB(80, 200, 120),
-    danger = Color3.fromRGB(220, 60, 60),
-    off = Color3.fromRGB(45, 45, 55),
+local COR = {
+    Fundo = Color3.fromRGB(15, 12, 25),
+    Painel = Color3.fromRGB(30, 22, 45),
+    AbaAtiva = Color3.fromRGB(255, 140, 30),
+    AbaInativa = Color3.fromRGB(45, 35, 65),
+    Texto = Color3.fromRGB(255, 240, 220),
+    TextoSub = Color3.fromRGB(170, 170, 190),
+    Botao = Color3.fromRGB(55, 40, 80),
+    BotaoLigado = Color3.fromRGB(255, 180, 40),
 }
 
-local function I(class, props, parent)
-    local o = Instance.new(class)
-    for k, v in pairs(props or {}) do o[k] = v end
-    if parent then o.Parent = parent end
-    return o
-end
-local function corner(o, r)
-    return I("UICorner", { CornerRadius = r or UDim.new(0, 7) }, o)
-end
+local homeBar = Instance.new("TextButton")
+homeBar.Size = UDim2.new(0, 200, 0, 24)
+homeBar.Position = UDim2.new(0.5, 0, 1, -30)
+homeBar.AnchorPoint = Vector2.new(0.5, 1)
+homeBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+homeBar.BackgroundTransparency = 0.7
+homeBar.Text = ""
+homeBar.AutoButtonColor = false
+homeBar.Active = true
+homeBar.ZIndex = 50
+homeBar.Parent = gui
+Instance.new("UICorner", homeBar).CornerRadius = UDim.new(1, 0)
+local hbInner = Instance.new("Frame")
+hbInner.Size = UDim2.new(0.7, 0, 0, 6)
+hbInner.Position = UDim2.new(0.5, 0, 0.5, 0)
+hbInner.AnchorPoint = Vector2.new(0.5, 0.5)
+hbInner.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+hbInner.BackgroundTransparency = 0.2
+hbInner.BorderSizePixel = 0
+hbInner.ZIndex = 51
+hbInner.Parent = homeBar
+Instance.new("UICorner", hbInner).CornerRadius = UDim.new(1, 0)
 
-local gui, mainFrame, floatBtn
-function UI.newWindow()
-    gui = I("ScreenGui", { Name = "DragonBloxHub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, CoreGui)
-    local m = I("Frame", {
-        Size = UDim2.new(0, 400, 0, 320),
-        Position = UDim2.new(0.5, -200, 0.5, -160),
-        BackgroundColor3 = T.bg,
-        BackgroundTransparency = 0.15,
-        BorderSizePixel = 0,
-        Active = true,
-    }, gui)
-    corner(m, UDim.new(0, 10))
-    I("UIStroke", { Color = T.border, Thickness = 1 }, m)
+local janela = Instance.new("Frame")
+janela.Size = UDim2.new(0, 540, 0, 420)
+janela.Position = UDim2.new(0.5, -270, 0.5, -210)
+janela.BackgroundColor3 = COR.Fundo
+janela.BackgroundTransparency = 0.15
+janela.BorderSizePixel = 0
+janela.Active = true
+janela.Visible = false
+janela.Parent = gui
+Instance.new("UICorner", janela).CornerRadius = UDim.new(0, 14)
+local jStroke = Instance.new("UIStroke") jStroke.Color = COR.AbaAtiva jStroke.Thickness = 1.5 jStroke.Transparency = 0.3 jStroke.Parent = janela
 
-    local header = I("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = T.panel, BorderSizePixel = 0 }, m)
-    corner(header, UDim.new(0, 10))
-    I("TextLabel", {
-        Size = UDim2.new(1, -70, 1, 0),
-        Position = UDim2.new(0, 12, 0, 0),
-        BackgroundTransparency = 1,
-        Text = "🐉 Dragon Blox",
-        TextColor3 = T.accent,
-        Font = Enum.Font.GothamBold,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, header)
+local titulo = Instance.new("TextButton")
+titulo.Size = UDim2.new(1, 0, 0, 42)
+titulo.BackgroundColor3 = COR.Painel
+titulo.BackgroundTransparency = 0.2
+titulo.TextColor3 = COR.Texto
+titulo.Text = "🐉  DRAGON BLOX HUB"
+titulo.TextSize = 16
+titulo.Font = Enum.Font.GothamBold
+titulo.TextXAlignment = Enum.TextXAlignment.Left
+titulo.BorderSizePixel = 0
+titulo.AutoButtonColor = false
+titulo.Parent = janela
+Instance.new("UICorner", titulo).CornerRadius = UDim.new(0, 14)
+local tPad = Instance.new("UIPadding") tPad.PaddingLeft = UDim.new(0, 18) tPad.Parent = titulo
 
-    local btnMin = I("TextButton", {
-        Size = UDim2.new(0, 20, 0, 20),
-        Position = UDim2.new(1, -48, 0.5, -10),
-        BackgroundColor3 = T.elev,
-        Text = "—",
-        TextColor3 = T.text,
-        Font = Enum.Font.GothamBold,
-        TextSize = 12,
-        AutoButtonColor = false,
-        BorderSizePixel = 0,
-    }, header)
-    corner(btnMin, UDim.new(0, 5))
+local sidebar = Instance.new("Frame")
+sidebar.Size = UDim2.new(0, 110, 1, -42)
+sidebar.Position = UDim2.new(0, 0, 0, 42)
+sidebar.BackgroundColor3 = COR.Painel
+sidebar.BackgroundTransparency = 0.3
+sidebar.BorderSizePixel = 0
+sidebar.Parent = janela
+local sbLayout = Instance.new("UIListLayout") sbLayout.SortOrder = Enum.SortOrder.LayoutOrder sbLayout.Padding = UDim.new(0, 5) sbLayout.Parent = sidebar
+local sbPad = Instance.new("UIPadding") sbPad.PaddingTop = UDim.new(0, 10) sbPad.PaddingLeft = UDim.new(0, 7) sbPad.PaddingRight = UDim.new(0, 7) sbPad.Parent = sidebar
 
-    local btnKill = I("TextButton", {
-        Size = UDim2.new(0, 20, 0, 20),
-        Position = UDim2.new(1, -24, 0.5, -10),
-        BackgroundColor3 = T.danger,
-        Text = "×",
-        TextColor3 = Color3.new(1, 1, 1),
-        Font = Enum.Font.GothamBold,
-        TextSize = 12,
-        AutoButtonColor = false,
-        BorderSizePixel = 0,
-    }, header)
-    corner(btnKill, UDim.new(0, 5))
+local contentArea = Instance.new("Frame")
+contentArea.Size = UDim2.new(1, -110, 1, -42)
+contentArea.Position = UDim2.new(0, 110, 0, 42)
+contentArea.BackgroundColor3 = COR.Fundo
+contentArea.BackgroundTransparency = 0.3
+contentArea.BorderSizePixel = 0
+contentArea.Parent = janela
 
-    local side = I("Frame", { Size = UDim2.new(0, 100, 1, -30), Position = UDim2.new(0, 0, 0, 30), BackgroundColor3 = T.panel, BorderSizePixel = 0 }, m)
-    I("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, side)
-    I("UIPadding", { PaddingTop = UDim.new(0, 6), PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }, side)
+local resizeHandle = Instance.new("TextButton")
+resizeHandle.Size = UDim2.new(0, 24, 0, 24)
+resizeHandle.Position = UDim2.new(1, -24, 1, -24)
+resizeHandle.BackgroundColor3 = COR.AbaAtiva
+resizeHandle.BackgroundTransparency = 0.5
+resizeHandle.Text = "◢"
+resizeHandle.TextColor3 = Color3.fromRGB(255, 255, 255)
+resizeHandle.TextSize = 14
+resizeHandle.Font = Enum.Font.GothamBold
+resizeHandle.BorderSizePixel = 0
+resizeHandle.ZIndex = 5
+resizeHandle.Parent = janela
+Instance.new("UICorner", resizeHandle).CornerRadius = UDim.new(0, 4)
 
-    local content = I("Frame", { Size = UDim2.new(1, -100, 1, -30), Position = UDim2.new(0, 100, 0, 30), BackgroundColor3 = T.bg, BorderSizePixel = 0 }, m)
+local abas = {}
 
-    local drag, ds, ss = false, nil, nil
-    header.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            drag = true; ds = i.Position; ss = m.Position
+local function criarAba(nome, display)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 34)
+    btn.BackgroundColor3 = COR.AbaInativa
+    btn.BackgroundTransparency = 0.3
+    btn.Text = display
+    btn.TextColor3 = COR.TextoSub
+    btn.TextSize = 12
+    btn.Font = Enum.Font.GothamBold
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = sidebar
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -20, 1, -20)
+    scroll.Position = UDim2.new(0, 10, 0, 10)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = COR.AbaAtiva
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Visible = false
+    scroll.Parent = contentArea
+
+    local layout = Instance.new("UIListLayout")
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 6)
+    layout.Parent = scroll
+    local pad = Instance.new("UIPadding") pad.PaddingBottom = UDim.new(0, 20) pad.Parent = scroll
+
+    abas[nome] = { botao = btn, frame = scroll }
+
+    local function ativar()
+        for _, a in pairs(abas) do
+            a.frame.Visible = false
+            a.botao.BackgroundColor3 = COR.AbaInativa
+            a.botao.TextColor3 = COR.TextoSub
         end
-    end)
-    UIS.InputChanged:Connect(function(i)
-        if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - ds
-            m.Position = UDim2.new(ss.X.Scale, ss.X.Offset + d.X, ss.Y.Scale, ss.Y.Offset + d.Y)
-        end
-    end)
-    UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = false end
-    end)
-
-    floatBtn = I("TextButton", {
-        Size = UDim2.new(0, 46, 0, 46),
-        Position = UDim2.new(0, 20, 0.4, 0),
-        BackgroundColor3 = T.bg,
-        Text = "🐉",
-        TextColor3 = T.accent,
-        Font = Enum.Font.GothamBold,
-        TextSize = 20,
-        AutoButtonColor = false,
-        Visible = false,
-        Active = true,
-        Draggable = true,
-        BorderSizePixel = 0,
-    }, gui)
-    corner(floatBtn, UDim.new(1, 0))
-    I("UIStroke", { Color = T.accent, Thickness = 1 }, floatBtn)
-
-    btnMin.MouseButton1Click:Connect(function() m.Visible = false; floatBtn.Visible = true end)
-    floatBtn.MouseButton1Click:Connect(function() m.Visible = true; floatBtn.Visible = false end)
-    btnKill.MouseButton1Click:Connect(function()
-        Ativo = false
-        if gui then gui:Destroy() end
-        if espGui then espGui:Destroy() end
-    end)
-
-    return { frame = m, sidebar = side, content = content, tabs = {} }
-end
-
-function UI.newTab(win, icon, name)
-    local b = I("TextButton", {
-        Size = UDim2.new(1, 0, 0, 26),
-        BackgroundColor3 = T.panel,
-        TextColor3 = T.dim,
-        Font = Enum.Font.Gotham,
-        TextSize = 10,
-        Text = " " .. icon .. "  " .. name,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        BorderSizePixel = 0,
-        AutoButtonColor = false,
-    }, win.sidebar)
-    corner(b, UDim.new(0, 6))
-
-    local f = I("ScrollingFrame", {
-        Size = UDim2.new(1, -12, 1, -12),
-        Position = UDim2.new(0, 6, 0, 6),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 3,
-        ScrollBarImageColor3 = T.border,
-        CanvasSize = UDim2.new(0, 0, 0, 0),
-        Visible = false,
-    }, win.content)
-    local l = I("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, f)
-    I("UIPadding", { PaddingBottom = UDim.new(0, 12), PaddingLeft = UDim.new(0, 2), PaddingRight = UDim.new(0, 2) }, f)
-    l:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        f.CanvasSize = UDim2.new(0, 0, 0, l.AbsoluteContentSize.Y + 18)
-    end)
-
-    b.MouseButton1Click:Connect(function()
-        for _, t in pairs(win.tabs) do
-            t.btn.BackgroundColor3 = T.panel
-            t.btn.TextColor3 = T.dim
-            t.frame.Visible = false
-        end
-        b.BackgroundColor3 = T.elev
-        b.TextColor3 = T.accent
-        f.Visible = true
-    end)
-
-    local tab = { btn = b, frame = f }
-    win.tabs[name] = tab
-    return tab
-end
-
-function UI.section(tab, txt)
-    return I("TextLabel", {
-        Size = UDim2.new(1, 0, 0, 18),
-        BackgroundTransparency = 1,
-        Text = txt,
-        TextColor3 = T.accent,
-        Font = Enum.Font.GothamBold,
-        TextSize = 10,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, tab.frame)
-end
-
-function UI.toggle(tab, opts)
-    local st = opts.default or false
-    local f = I("TextButton", {
-        Size = UDim2.new(1, 0, 0, 30),
-        BackgroundColor3 = T.elev,
-        BorderSizePixel = 0,
-        Text = "",
-        AutoButtonColor = false,
-    }, tab.frame)
-    corner(f, UDim.new(0, 7))
-    I("TextLabel", {
-        Size = UDim2.new(1, -60, 1, 0),
-        Position = UDim2.new(0, 10, 0, 0),
-        BackgroundTransparency = 1,
-        Text = opts.name,
-        TextColor3 = T.text,
-        Font = Enum.Font.Gotham,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, f)
-    local sw = I("Frame", {
-        Size = UDim2.new(0, 36, 0, 20),
-        Position = UDim2.new(1, -46, 0.5, -10),
-        BackgroundColor3 = st and T.success or T.off,
-        BorderSizePixel = 0,
-    }, f)
-    corner(sw, UDim.new(1, 0))
-    local kn = I("Frame", {
-        Size = UDim2.new(0, 16, 0, 16),
-        Position = st and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8),
-        BackgroundColor3 = Color3.new(1, 1, 1),
-        BorderSizePixel = 0,
-    }, sw)
-    corner(kn, UDim.new(1, 0))
-    local function set(v)
-        st = v
-        sw.BackgroundColor3 = v and T.success or T.off
-        kn.Position = v and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+        scroll.Visible = true
+        btn.BackgroundColor3 = COR.AbaAtiva
+        btn.TextColor3 = Color3.fromRGB(20, 15, 30)
     end
-    f.MouseButton1Click:Connect(function()
-        set(not st)
-        if opts.callback then opts.callback(st) end
-    end)
-    return { set = set }
+
+    btn.MouseButton1Click:Connect(ativar)
+    abas[nome].ativar = ativar
+    return scroll
 end
 
-function UI.slider(tab, opts)
-    local min, max = opts.min or 0, opts.max or 100
-    local val = opts.default or min
-    local suf = opts.suffix or ""
+local function criarToggle(parent, texto, default, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -8, 0, 38)
+    frame.BackgroundColor3 = COR.Botao
+    frame.BackgroundTransparency = 0.35
+    frame.BorderSizePixel = 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
 
-    local f = I("Frame", {
-        Size = UDim2.new(1, 0, 0, 44),
-        BackgroundColor3 = T.elev,
-        BorderSizePixel = 0,
-    }, tab.frame)
-    corner(f, UDim.new(0, 7))
-    I("TextLabel", {
-        Size = UDim2.new(1, -80, 0, 20),
-        Position = UDim2.new(0, 10, 0, 4),
-        BackgroundTransparency = 1,
-        Text = opts.name,
-        TextColor3 = T.text,
-        Font = Enum.Font.Gotham,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left,
-    }, f)
-    local vl = I("TextLabel", {
-        Size = UDim2.new(0, 70, 0, 20),
-        Position = UDim2.new(1, -80, 0, 4),
-        BackgroundTransparency = 1,
-        Text = tostring(val) .. suf,
-        TextColor3 = T.accent,
-        Font = Enum.Font.GothamBold,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Right,
-    }, f)
-    local tr = I("Frame", {
-        Size = UDim2.new(1, -20, 0, 5),
-        Position = UDim2.new(0, 10, 0, 30),
-        BackgroundColor3 = T.border,
-        BorderSizePixel = 0,
-    }, f)
-    corner(tr, UDim.new(1, 0))
-    local fi = I("Frame", {
-        Size = UDim2.new((val - min) / (max - min), 0, 1, 0),
-        BackgroundColor3 = T.accent,
-        BorderSizePixel = 0,
-    }, tr)
-    corner(fi, UDim.new(1, 0))
-    local drag = false
-    local function upd(x)
-        local rel = math.clamp((x - tr.AbsolutePosition.X) / tr.AbsoluteSize.X, 0, 1)
-        local v = math.floor(min + (max - min) * rel + 0.5)
-        fi.Size = UDim2.new(rel, 0, 1, 0)
-        vl.Text = tostring(v) .. suf
-        val = v
-        if opts.callback then opts.callback(v) end
-    end
-    tr.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            drag = true; upd(i.Position.X)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -80, 1, 0)
+    label.Position = UDim2.new(0, 12, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = texto
+    label.TextColor3 = COR.Texto
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 58, 0, 26)
+    btn.Position = UDim2.new(1, -66, 0.5, -13)
+    btn.BackgroundColor3 = default and COR.BotaoLigado or Color3.fromRGB(70, 70, 90)
+    btn.Text = default and "ON" or "OFF"
+    btn.TextColor3 = default and Color3.fromRGB(20, 15, 30) or COR.Texto
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamBold
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = false
+    btn.Parent = frame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 13)
+
+    local state = default
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        btn.BackgroundColor3 = state and COR.BotaoLigado or Color3.fromRGB(70, 70, 90)
+        btn.Text = state and "ON" or "OFF"
+        btn.TextColor3 = state and Color3.fromRGB(20, 15, 30) or COR.Texto
+        if callback then callback(state) end
+    end)
+end
+
+local function criarBotao(parent, texto, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -8, 0, 38)
+    btn.BackgroundColor3 = COR.Botao
+    btn.BackgroundTransparency = 0.25
+    btn.Text = texto
+    btn.TextColor3 = COR.Texto
+    btn.TextSize = 12
+    btn.Font = Enum.Font.Gotham
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = true
+    btn.Parent = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    btn.MouseButton1Click:Connect(callback)
+end
+
+local function criarSlider(parent, texto, min, max, default, step, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -8, 0, 56)
+    frame.BackgroundColor3 = COR.Botao
+    frame.BackgroundTransparency = 0.35
+    frame.BorderSizePixel = 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -20, 0, 20)
+    label.Position = UDim2.new(0, 12, 0, 6)
+    label.BackgroundTransparency = 1
+    label.Text = texto .. ": " .. default
+    label.TextColor3 = COR.Texto
+    label.TextSize = 12
+    label.Font = Enum.Font.Gotham
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+
+    local barBg = Instance.new("Frame")
+    barBg.Size = UDim2.new(1, -24, 0, 14)
+    barBg.Position = UDim2.new(0, 12, 1, -22)
+    barBg.BackgroundColor3 = Color3.fromRGB(40, 40, 55)
+    barBg.BorderSizePixel = 0
+    barBg.Parent = frame
+    Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+
+    local barFill = Instance.new("Frame")
+    local pct = (default - min) / (max - min)
+    barFill.Size = UDim2.new(pct, 0, 1, 0)
+    barFill.BackgroundColor3 = COR.AbaAtiva
+    barFill.BorderSizePixel = 0
+    barFill.Parent = barBg
+    Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
+
+    local dragBtn = Instance.new("TextButton")
+    dragBtn.Size = UDim2.new(1, 0, 3, 0)
+    dragBtn.Position = UDim2.new(0, 0, -1, 0)
+    dragBtn.BackgroundTransparency = 1
+    dragBtn.Text = ""
+    dragBtn.Parent = barBg
+
+    local dragging = false
+    dragBtn.MouseButton1Down:Connect(function() dragging = true end)
+    dragBtn.MouseButton1Up:Connect(function() dragging = false end)
+    dragBtn.MouseLeave:Connect(function() dragging = false end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
         end
     end)
-    UIS.InputChanged:Connect(function(i)
-        if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            upd(i.Position.X)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local pos = input.Position
+            local abs = barBg.AbsolutePosition
+            local size = barBg.AbsoluteSize
+            local rel = math.clamp((pos.X - abs.X) / size.X, 0, 1)
+            local valor = min + (max - min) * rel
+            valor = math.floor(valor / step + 0.5) * step
+            barFill.Size = UDim2.new(rel, 0, 1, 0)
+            label.Text = texto .. ": " .. valor
+            if callback then callback(valor) end
         end
     end)
-    UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            drag = false
-        end
-    end)
 end
 
-function UI.button(tab, opts)
-    local b = I("TextButton", {
-        Size = UDim2.new(1, 0, 0, 26),
-        BackgroundColor3 = T.elev,
-        Text = opts.name,
-        TextColor3 = T.text,
-        Font = Enum.Font.Gotham,
-        TextSize = 11,
-        BorderSizePixel = 0,
-        AutoButtonColor = true,
-    }, tab.frame)
-    corner(b, UDim.new(0, 7))
-    b.MouseButton1Click:Connect(function()
-        if opts.callback then opts.callback() end
-    end)
+local function criarSecao(parent, texto)
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -8, 0, 28)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = "▸ " .. texto
+    lbl.TextColor3 = COR.AbaAtiva
+    lbl.TextSize = 12
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = parent
 end
 
-function UI.label(tab, opts)
-    local l = I("TextLabel", {
-        Size = UDim2.new(1, 0, 0, opts.height or 50),
-        BackgroundColor3 = T.elev,
-        TextColor3 = T.text,
-        Font = Enum.Font.Code,
-        TextSize = 10,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top,
-        TextWrapped = true,
-        Text = opts.text or "",
-    }, tab.frame)
-    corner(l, UDim.new(0, 7))
-    I("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingTop = UDim.new(0, 6), PaddingRight = UDim.new(0, 8), PaddingBottom = UDim.new(0, 6) }, l)
-    return l
+local function criarLabel(parent, texto, altura)
+    altura = altura or 80
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -8, 0, altura)
+    lbl.BackgroundColor3 = COR.Botao
+    lbl.BackgroundTransparency = 0.5
+    lbl.Text = texto
+    lbl.TextColor3 = COR.Texto
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.Code
+    lbl.TextWrapped = true
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Top
+    lbl.Parent = parent
+    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 6)
+    local p = Instance.new("UIPadding") p.PaddingLeft = UDim.new(0, 10) p.PaddingTop = UDim.new(0, 8) p.PaddingRight = UDim.new(0, 10) p.Parent = lbl
+    return lbl
 end
 
-function UI.dropdown(tab, opts)
-    local cur = opts.default or "(todos)"
-    local b = I("TextButton", {
-        Size = UDim2.new(1, 0, 0, 30),
-        BackgroundColor3 = T.elev,
-        Text = "  " .. opts.name .. ": " .. cur,
-        TextColor3 = T.text,
-        Font = Enum.Font.Gotham,
-        TextSize = 11,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        BorderSizePixel = 0,
-        AutoButtonColor = false,
-    }, tab.frame)
-    corner(b, UDim.new(0, 7))
-    local function upd() b.Text = "  " .. opts.name .. ": " .. cur end
-    b.MouseButton1Click:Connect(function()
-        local pop = I("Frame", {
-            Size = UDim2.new(0, 220, 0, 260),
-            Position = UDim2.new(0.5, -110, 0.5, -130),
-            BackgroundColor3 = T.panel,
-            BorderSizePixel = 0,
-            ZIndex = 100,
-            Active = true,
-        }, gui)
-        corner(pop, UDim.new(0, 10))
-        I("UIStroke", { Color = T.accent, Thickness = 1 }, pop)
-        I("TextLabel", {
-            Size = UDim2.new(1, 0, 0, 24),
-            BackgroundTransparency = 1,
-            Text = opts.name,
-            TextColor3 = T.accent,
-            Font = Enum.Font.GothamBold,
-            TextSize = 12,
-        }, pop)
-        local sc = I("ScrollingFrame", {
-            Size = UDim2.new(1, -14, 1, -44),
-            Position = UDim2.new(0, 7, 0, 26),
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            ScrollBarThickness = 3,
-            ScrollBarImageColor3 = T.border,
-            CanvasSize = UDim2.new(0, 0, 0, 0),
-        }, pop)
-        local ll = I("UIListLayout", { Padding = UDim.new(0, 3) }, sc)
-        local lista = opts.options
-        if type(lista) == "function" then lista = lista() end
-        for _, opt in ipairs(lista) do
-            local ob = I("TextButton", {
-                Size = UDim2.new(1, 0, 0, 28),
-                BackgroundColor3 = T.elev,
-                Text = tostring(opt),
-                TextColor3 = T.text,
-                Font = Enum.Font.Gotham,
-                TextSize = 11,
-                BorderSizePixel = 0,
-                AutoButtonColor = true,
-            }, sc)
-            corner(ob, UDim.new(0, 6))
-            ob.MouseButton1Click:Connect(function()
-                cur = opt
-                upd()
-                pop:Destroy()
-                if opts.callback then opts.callback(opt) end
-            end)
-        end
-        sc.CanvasSize = UDim2.new(0, 0, 0, ll.AbsoluteContentSize.Y + 10)
-        local bx = I("TextButton", {
-            Size = UDim2.new(0, 36, 0, 20),
-            Position = UDim2.new(1, -42, 0, 3),
-            BackgroundColor3 = T.danger,
-            Text = "×",
-            TextColor3 = Color3.new(1, 1, 1),
-            Font = Enum.Font.GothamBold,
-            TextSize = 12,
-            BorderSizePixel = 0,
-        }, pop)
-        corner(bx, UDim.new(0, 5))
-        bx.MouseButton1Click:Connect(function() pop:Destroy() end)
-    end)
-    return { set = function(v) cur = v; upd() end }
-end
+local farmTab = criarAba("farm", "⚔️ Farm")
 
--- [BUILD UI]
-local win = UI.newWindow()
-mainFrame = win.frame
+criarSecao(farmTab, "Farm")
+criarToggle(farmTab, "Auto Farm (Mobs)", false, function(v) Config.AutoFarm = v end)
+criarToggle(farmTab, "Auto Boss", false, function(v) Config.AutoBoss = v end)
+criarToggle(farmTab, "Auto Skills", false, function(v) Config.AutoSkills = v end)
+criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
+criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
 
-local farmTab = UI.newTab(win, "⚔", "Farm")
-local collectTab = UI.newTab(win, "💎", "Collect")
-local rebirthTab = UI.newTab(win, "🔄", "Rebirth")
-local configTab = UI.newTab(win, "⚙", "Config")
-local sobreTab = UI.newTab(win, "ℹ", "Sobre")
+criarSecao(farmTab, "Visual")
+criarToggle(farmTab, "ESP Mobs", false, function(v) Config.ESPMobs = v end)
+criarToggle(farmTab, "ESP Itens (drops)", false, function(v) Config.ESPItems = v end)
 
-farmTab.btn.BackgroundColor3 = T.elev
-farmTab.btn.TextColor3 = T.accent
-farmTab.frame.Visible = true
-
--- FARM
-UI.section(farmTab, "⚔ COMBATE")
-UI.toggle(farmTab, { name = "Auto Farm", default = false, callback = function(v) Config.AutoFarm = v end })
-UI.toggle(farmTab, { name = "Auto M1", default = true, callback = function(v) Config.AutoM1 = v end })
-UI.toggle(farmTab, { name = "Auto Boss", default = false, callback = function(v) Config.AutoBoss = v end })
-UI.toggle(farmTab, { name = "Auto Skill", default = false, callback = function(v) Config.AutoSkill = v end })
-UI.toggle(farmTab, { name = "Auto Lock-On", default = true, callback = function(v) Config.AutoLock = v end })
-UI.toggle(farmTab, { name = "ESP Mobs", default = false, callback = function(v) Config.ESPMobs = v end })
-
-UI.section(farmTab, "🎯 MOB ALVO")
-UI.dropdown(farmTab, {
-    name = "Filtrar",
-    options = function() return listarMobs() end,
-    default = "(todos)",
-    callback = function(o) Config.MobAlvo = (o == "(todos)") and nil or o end,
-})
-
-UI.section(farmTab, "📏 RANGES")
-UI.slider(farmTab, { name = "M1 Range", min = 8, max = 40, default = 12, suffix = " st", callback = function(v) Config.M1_Range = v end })
-UI.slider(farmTab, { name = "M1 Delay", min = 10, max = 80, default = 35, suffix = " ms", callback = function(v) Config.M1_Delay = v / 100 end })
-UI.slider(farmTab, { name = "Skill Delay", min = 10, max = 50, default = 15, suffix = " x0.1s", callback = function(v) Config.Skill_Delay = v / 10 end })
-
--- COLLECT
-UI.section(collectTab, "💎 AUTO COLLECT")
-UI.toggle(collectTab, { name = "Ativar", default = false, callback = function(v) Config.AutoCollect = v end })
-UI.toggle(collectTab, { name = "ESP Drops", default = true, callback = function(v) Config.ESPDrops = v end })
-UI.label(collectTab, { text = "Detecta ItemDrop_* em PartStorage\ne voa até esferas automaticamente.", height = 44 })
-
--- REBIRTH
-UI.section(rebirthTab, "🔄 AUTO REBIRTH")
-UI.toggle(rebirthTab, { name = "Ativar", default = false, callback = function(v) Config.AutoRebirth = v end })
-UI.slider(rebirthTab, { name = "Multiplicador", min = 1, max = 10, default = 3, callback = function(v) Config.RebirthMult = v end })
-UI.button(rebirthTab, { name = "🔄 Forçar Rebirth", callback = function() fazerRebirth() end })
-local infoReb = UI.label(rebirthTab, { text = "Aguardando...", height = 50 })
-
--- CONFIG
-UI.section(configTab, "✈ MOVIMENTO")
-UI.slider(configTab, { name = "Voo", min = 50, max = 500, default = 120, suffix = " st/s", callback = function(v) Config.FlySpeed = v end })
-UI.toggle(configTab, { name = "Forçar WalkSpeed", default = false, callback = function(v) Config.OverrideSpeed = v end })
-UI.slider(configTab, { name = "WalkSpeed", min = 16, max = 200, default = 16, callback = function(v) Config.WalkSpeed = v end })
-
-UI.section(configTab, "💠 KI")
-UI.slider(configTab, { name = "Ki mínimo %", min = 10, max = 80, default = 30, suffix = "%", callback = function(v) KiCfg.Limite = v / 100 end })
-UI.slider(configTab, { name = "Ki alvo %", min = 50, max = 100, default = 95, suffix = "%", callback = function(v) KiCfg.Alvo = v / 100 end })
-UI.slider(configTab, { name = "Tempo máx.", min = 2, max = 15, default = 5, suffix = " s", callback = function(v) KiCfg.TempoMax = v end })
-
-UI.section(configTab, "🛠 UTILITÁRIOS")
-UI.toggle(configTab, { name = "Noclip", default = false, callback = function(v) Config.Noclip = v end })
-
-UI.section(configTab, "🌌 VOO NATIVO")
-UI.button(configTab, { name = "SuperFlight (5s)", callback = function()
-    if RE_SuperFlight then
-        pcall(function() RE_SuperFlight:FireServer(true) end)
+criarSecao(farmTab, "Movimento")
+criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
+    if SuperFlight then
+        safe(function() SuperFlight:FireServer(true) end)
         task.wait(5)
-        pcall(function() RE_SuperFlight:FireServer(false) end)
+        safe(function() SuperFlight:FireServer(false) end)
     end
-end })
+end)
 
-UI.section(configTab, "🛑 SISTEMA")
-UI.button(configTab, { name = "Encerrar Hub", callback = function()
-    Ativo = false
-    if gui then gui:Destroy() end
-    if espGui then espGui:Destroy() end
-end })
+local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
 
--- SOBRE
-UI.section(sobreTab, "📊 SEUS STATUS")
-local infoP = UI.label(sobreTab, { text = "Carregando...", height = 80 })
-UI.section(sobreTab, "🖥 SERVIDOR")
-local infoS = UI.label(sobreTab, { text = "Carregando...", height = 50 })
+criarSecao(rebirthTab, "Auto Rebirth")
+criarToggle(rebirthTab, "Ativar", false, function(v)
+    Config.AutoRebirth = v
+    if not v then return end
+    task.spawn(function()
+        while Ativo and Config.AutoRebirth do
+            local pronto = checarRebirth()
+            if pronto and RequestRebirth then
+                safe(function()
+                    if PromptRemote then
+                        PromptRemote:FireServer({
+                            UniqueTag = "HudRebirth",
+                            Prompt = "HudRebirth",
+                            MiddleButton = "Confirm",
+                            RightButton = "Cancel",
+                        }, "Confirm")
+                    end
+                end)
+                task.wait(0.5)
+                safe(function() RequestRebirth:InvokeServer(true) end)
+                task.wait(8)
+            end
+            task.wait(10)
+        end
+    end)
+end)
 
--- [LOOPS]
--- combate
+criarSlider(rebirthTab, "Acumular (x requisito)", 1, 10, 3, 1, function(v) Config.RebirthMultiplier = v end)
+criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
+    if RequestRebirth then safe(function() RequestRebirth:InvokeServer(true) end) end
+end)
+
+local infoRebirth = criarLabel(rebirthTab, "Rebirth: --\nStats: --\nAlvo: --", 80)
+
 task.spawn(function()
-    local ultimoM1 = 0
-    local ultimoSkill = 0
-    local alvoTravado = nil
-
     while Ativo do
-        task.wait(0.1)
-
-        if not Config.AutoFarm and not Config.AutoBoss and not Config.AutoSkill then
-            alvoTravado = nil
-            pararVoo()
-            task.wait(0.4)
-            continue
+        local _, info = checarRebirth()
+        if info then
+            infoRebirth.Text = "Rebirth: " .. info.rebirth ..
+                "\nSeus stats: " .. info.total ..
+                "\nAlvo (" .. Config.RebirthMultiplier .. "x): " .. info.alvo
         end
+        task.wait(3)
+    end
+end)
 
-        local cur, max = getKi()
-        local pct = max > 0 and (cur / max) or 1
-        if pct < KiCfg.Limite and Config.AutoSkill then
-            lockOn(nil)
-            pararVoo()
-            recarregarKi()
-            ultimoSkill = os.clock()
-            continue
-        end
+local configTab = criarAba("config", "⚙️ Config")
 
-        local mob = getMob()
-        if not mob then
-            pararVoo()
-            task.wait(0.3)
-            continue
-        end
+criarSecao(configTab, "Movimento")
+criarSlider(configTab, "WalkSpeed", 16, 200, 16, 1, function(v) Config.WalkSpeed = v end)
+criarSlider(configTab, "FlySpeed", 50, 500, 250, 10, function(v) Config.FlySpeed = v end)
+criarSlider(configTab, "Attack Range", 5, 20, 8, 1, function(v) Config.AttackRange = v end)
 
-        local _, hrp = getChar()
-        if not hrp then continue end
+criarSecao(configTab, "Combate")
+criarSlider(configTab, "Skill Delay x0.1s", 5, 50, 15, 5, function(v) Config.SkillDelay = v * 0.1 end)
 
-        if Config.AutoLock and alvoTravado ~= mob.baseName then
-            lockOn(mob.model)
-            alvoTravado = mob.baseName
-        end
+criarSecao(configTab, "Sobrevivência")
+criarSlider(configTab, "Ki pra Regen (%)", 10, 50, 30, 5, function(v) Config.KiMin = v / 100 end)
+criarSlider(configTab, "Altura Segura (studs)", 40, 300, 100, 10, function(v) Config.SafeHeight = v end)
 
-        if mob.dist > Config.M1_Range then
-            voarPara(mob.pos)
-            task.wait(0.05)
-            continue
-        end
+criarSecao(configTab, "Sistema")
+criarBotao(configTab, "🔴 MATAR SCRIPT", function()
+    Ativo = false
+    for k, v in pairs(Config) do
+        if type(v) == "boolean" then Config[k] = false end
+    end
+    gui:Destroy()
+    espGui:Destroy()
+end)
 
-        pararVoo()
-        hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
+local sobreTab = criarAba("sobre", "ℹ️ Sobre")
 
-        if Config.AutoM1 and (Config.AutoFarm or Config.AutoBoss)
-        and (os.clock() - ultimoM1) >= Config.M1_Delay then
-            m1(mob)
-            ultimoM1 = os.clock()
-        end
+criarSecao(sobreTab, "Criadores")
+criarLabel(sobreTab, "🐉 DRAGON BLOX HUB\n\nzyyx & elliot\n\nv5.0 - 2026", 100)
 
-        if Config.AutoSkill and (os.clock() - ultimoSkill) >= Config.Skill_Delay then
-            local s = proximaSkill()
-            usarSkill(s, mob)
-            ultimoSkill = os.clock()
+criarSecao(sobreTab, "Servidor")
+local infoServidor = criarLabel(sobreTab, "Carregando...", 120)
+
+task.spawn(function()
+    while Ativo and gui.Parent do
+        local jobId = game.JobId ~= "" and game.JobId:sub(1, 8) .. "..." or "Privado"
+        local ping = math.floor(plr:GetNetworkPing() * 1000)
+        infoServidor.Text =
+            "Hora: " .. os.date("%H:%M:%S") ..
+            "\nData: " .. os.date("%d/%m/%Y") ..
+            "\nServidor: " .. jobId ..
+            "\nJogadores: " .. #Players:GetPlayers() ..
+            "\nPing: " .. ping .. " ms" ..
+            "\nFPS: " .. math.floor(workspace:GetRealPhysicsFPS())
+        task.wait(2)
+    end
+end)
+
+abas.farm.ativar()
+
+homeBar.MouseButton1Click:Connect(function()
+    janela.Visible = not janela.Visible
+end)
+
+local dragging = false
+local dragStart = nil
+local startPos = nil
+
+titulo.MouseButton1Down:Connect(function()
+    dragging = true
+    dragStart = UserInputService:GetMouseLocation()
+    startPos = janela.Position
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+        resizing = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging then
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local current = UserInputService:GetMouseLocation()
+            local delta = current - dragStart
+            janela.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                                        startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
     end
 end)
 
--- noclip
+local resizing = false
+local resizeStartPos = nil
+local sizeStart = nil
+
+resizeHandle.MouseButton1Down:Connect(function()
+    resizing = true
+    resizeStartPos = UserInputService:GetMouseLocation()
+    sizeStart = janela.AbsoluteSize
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if resizing then
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local current = UserInputService:GetMouseLocation()
+            local delta = current - resizeStartPos
+            local newX = math.clamp(sizeStart.X + delta.X, 400, 900)
+            local newY = math.clamp(sizeStart.Y + delta.Y, 300, 700)
+            janela.Size = UDim2.new(0, newX, 0, newY)
+        end
+    end
+end)
+
 task.spawn(function()
-    while Ativo do
-        task.wait(0.2)
-        if Config.Noclip then
-            local c = plr.Character
-            if c then
-                for _, p in ipairs(c:GetDescendants()) do
-                    if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+    while Ativo and task.wait(0.3) do
+        if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
+            local alvo = getAlvo()
+            if alvo then
+                atacar(alvo)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while Ativo and task.wait(1) do
+        if Config.AutoRegen and (Config.AutoFarm or Config.AutoBoss) then
+            local curr, max = getKi()
+            if curr and max then
+                local ratio = curr / max
+                if ratio < Config.KiMin and not emRegen then
+                    iniciarRegen()
+                elseif ratio > 0.9 and emRegen then
+                    pararRegen()
                 end
             end
+        elseif emRegen then
+            pararRegen()
         end
     end
 end)
 
--- walkspeed
 task.spawn(function()
-    while Ativo do
-        task.wait(0.5)
-        if Config.OverrideSpeed then
-            local c = plr.Character
-            if c then
-                local h = c:FindFirstChildOfClass("Humanoid")
-                if h then h.WalkSpeed = Config.WalkSpeed end
+    local idx = 1
+    while Ativo and task.wait(Config.SkillDelay) do
+        if Config.AutoSkills and not emRegen then
+            local alvo = getAlvo()
+            if alvo and alvo.Parent then
+                usarSkill(SKILLS[idx], alvo)
+                idx = idx + 1
+                if idx > #SKILLS then idx = 1 end
             end
         end
     end
 end)
 
--- rebirth
 task.spawn(function()
-    while Ativo do
-        task.wait(5)
-        if Config.AutoRebirth then
-            local pronto = checarRebirth()
-            if pronto then
-                fazerRebirth()
-                task.wait(10)
-            end
+    while Ativo and task.wait(5) do
+        if Config.AutoTransform and SelectMode then
+            safe(function() SelectMode:FireServer(Config.TransformMode) end)
         end
     end
 end)
 
--- esp mobs
 task.spawn(function()
-    while Ativo do
-        task.wait(0.4)
-        if not Config.ESPMobs then
-            for m in pairs(espCache) do removerESP(m) end
-            continue
+    while Ativo and task.wait(0.5) do
+        if plr.Character and plr.Character:FindFirstChild("Humanoid") then
+            plr.Character.Humanoid.WalkSpeed = Config.WalkSpeed
         end
-        local vivos = {}
-        local wm = WS:FindFirstChild("World Mobs")
-        if wm then
-            for _, p in ipairs(wm:GetChildren()) do
-                for _, m in ipairs(p:GetChildren()) do
-                    if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart") then
-                        vivos[m] = true
-                        if not espCache[m] then criarESP(m) end
+    end
+end)
+
+task.spawn(function()
+    while Ativo and task.wait(0.4) do
+        if Config.ESPMobs then
+            local vivos = {}
+            local wm = WS:FindFirstChild("World Mobs")
+            if wm then
+                for _, p in ipairs(wm:GetChildren()) do
+                    for _, m in ipairs(p:GetChildren()) do
+                        if m:IsA("Model") and m:FindFirstChild("HumanoidRootPart") then
+                            vivos[m] = true
+                            if not espCache[m] then criarESP(m) end
+                        end
                     end
                 end
             end
-        end
-        for m in pairs(espCache) do
-            if not vivos[m] then removerESP(m) end
-        end
-    end
-end)
-
--- esp drops + autocollect
-task.spawn(function()
-    while Ativo do
-        task.wait(0.5)
-        if Config.ESPDrops then atualizarDropESP() end
-        if Config.AutoCollect then tentarColetar() end
-    end
-end)
-
--- stats
-task.spawn(function()
-    while Ativo do
-        task.wait(2)
-        local st = plr:FindFirstChild("Stats")
-        if st then
-            local function g(n)
-                local v = st:FindFirstChild(n)
-                return v and tostring(v.Value) or "0"
+            for m in pairs(espCache) do
+                if not vivos[m] then removerESP(m) end
             end
-            infoP.Text = string.format(
-                "Level: %s\nRebirth: %s\nStrength: %s\nKi: %s",
-                g("Level"), g("Rebirth"), g("Strength"), g("Ki"))
-        end
-        local jobId = game.JobId ~= "" and game.JobId:sub(1, 8) .. "..." or "Privado"
-        local ping = 0
-        pcall(function() ping = math.floor(plr:GetNetworkPing() * 1000) end)
-        infoS.Text = string.format("%s • %s\nServ: %s • %d players • %d ms",
-            os.date("%d/%m/%Y"), os.date("%H:%M:%S"),
-            jobId, #Players:GetPlayers(), ping)
-        local _, info = checarRebirth()
-        if info then
-            infoReb.Text = "Rebirth: " .. info.reb .. "\nTotal: " .. info.total .. "\nAlvo: " .. info.alvo
+        else
+            for m in pairs(espCache) do removerESP(m) end
         end
     end
 end)
 
-print("[DBH] ✅ v8 carregado!")
+task.spawn(function()
+    while Ativo and task.wait(0.5) do
+        if Config.ESPItems then
+            atualizarDropESP()
+        else
+            for i, bb in pairs(dropESP) do bb:Destroy(); dropESP[i] = nil end
+        end
+    end
+end)
+
+print("[DBH] ✅ Carregado")
