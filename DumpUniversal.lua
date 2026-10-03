@@ -1,4 +1,4 @@
-print("[DUMPER v4.1] Iniciando (modo seguro)...")
+print("[DUMPER v5] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -7,31 +7,23 @@ local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
 local plr = Players.LocalPlayer
 
-local targetParent
-if gethui then targetParent = gethui()
-elseif syn and syn.protect_gui then targetParent = CoreGui
-else targetParent = CoreGui end
+local targetParent = (gethui and gethui()) or CoreGui
 
 -- ESTADO
 local State = {
     sessao = "Sessao",
     capturando = false,
     hookAtivo = false,
-
+    hookMetodo = "nenhum",
     logBuf = {},
     trfBuf = {},
     arquitetural = {},
     unicos = {},
     nomesCache = {},
-
+    contadorBruto = 0,
     filtros = {
-        skills = true,
-        drops = true,
-        bossEvent = true,
-        swordOrb = true,
-        toolbar = true,
-        dungeon = true,
-        ruido = false,
+        skills = true, drops = true, bossEvent = true,
+        swordOrb = true, toolbar = true, dungeon = true, ruido = false,
     },
 }
 
@@ -40,9 +32,7 @@ local ultimoPath = {}
 local RATE_LIMIT = 0.15
 local MAX_UNICOS = 2000
 
--- ═══════════════════════════════════════════════
--- CACHE de GetFullName (evita custo repetido)
--- ═══════════════════════════════════════════════
+-- ═══════════ UTIL ═══════════
 local function getNome(inst)
     if State.nomesCache[inst] then return State.nomesCache[inst] end
     local ok, n = pcall(function() return inst:GetFullName() end)
@@ -51,34 +41,30 @@ local function getNome(inst)
     return n
 end
 
--- ═══════════════════════════════════════════════
--- RUIDO
--- ═══════════════════════════════════════════════
-local RUIDO = {
-    "Ping", "DataChanged", "PlayAnimation", "PlayEffect",
-    "DamageLabel", "DamageNotifier", "Knockback", "RagdollData",
-    "UpdateLocal", "Heartbeat", "changeAnimationClient",
-    "GameAnalytics", "Postie",
-}
+local function log(cat, msg)
+    table.insert(State.logBuf, {cat=cat, msg=msg, hora=os.date("%H:%M:%S")})
+    if #State.logBuf > 300 then table.remove(State.logBuf, 1) end
+    print(string.format("[DUMPER/%s] %s", cat, msg))
+end
 
+-- ═══════════ RUIDO ═══════════
+local RUIDO = {
+    "Ping","DataChanged","PlayAnimation","PlayEffect",
+    "DamageLabel","DamageNotifier","Knockback","RagdollData",
+    "UpdateLocal","Heartbeat","changeAnimationClient",
+    "GameAnalytics","Postie",
+}
 local function ehRuido(path)
     if State.filtros.ruido then return false end
-    for i = 1, #RUIDO do
-        if path:find(RUIDO[i]) then return true end
-    end
+    for i = 1, #RUIDO do if path:find(RUIDO[i]) then return true end end
     return false
 end
 
--- ═══════════════════════════════════════════════
--- CLASSIFICADOR
--- ═══════════════════════════════════════════════
+-- ═══════════ CLASSIFICA ═══════════
 local function classificar(path)
     if path:find("Dungeon") or path:find("dungeon")
-    or path:find("NextArea") or path:find("Wave") or path:find("wave")
-    or path:find("Stage") or path:find("stage")
-    or path:find("LobbyService") or path:find("DungeonLobby") then
-        return "DUNGEON"
-    end
+    or path:find("NextArea") or path:find("Wave") or path:find("Stage")
+    or path:find("LobbyService") then return "DUNGEON" end
     if path:find("UpdatePlayerToolbar") or path:find("ToolService") then return "TOOLBAR" end
     if path:find("SkillRemote") then return "M1" end
     if path:find("ExecuteSkill") then return "SKILL" end
@@ -93,26 +79,24 @@ local function classificar(path)
 end
 
 local CORES = {
-    M1 = "5FE8FF", SKILL = "C68AFF", DROP = "5FDC78",
-    BOSS = "FF5C5C", SWORD_ORB = "FFE45C", REBIRTH = "FF9642",
-    LOCK = "8AFF8A", TOOLBAR = "FF9AC6", DUNGEON = "00FFC6",
-    EVENT = "9A9AA0", OTHER = "9A9AA0",
-    INFO = "74B8FF", SUCCESS = "5FDC78", WARN = "FFB43C",
+    M1="5FE8FF",SKILL="C68AFF",DROP="5FDC78",BOSS="FF5C5C",
+    SWORD_ORB="FFE45C",REBIRTH="FF9642",LOCK="8AFF8A",TOOLBAR="FF9AC6",
+    DUNGEON="00FFC6",EVENT="9A9AA0",OTHER="9A9AA0",
+    INFO="74B8FF",SUCCESS="5FDC78",WARN="FFB43C",
 }
 
--- ═══════════════════════════════════════════════
--- SERIALIZADOR
--- ═══════════════════════════════════════════════
+-- ═══════════ SER ═══════════
 local function ser(v, d)
     d = d or 0
     if d > 2 then return "..." end
     local t = typeof(v)
-    if t == "Instance" then return getNome(v)
-    elseif t == "Vector3" then return string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z)
-    elseif t == "CFrame" then
+    if t == "Instance" then return getNome(v) end
+    if t == "Vector3" then return string.format("V3(%.0f,%.0f,%.0f)",v.X,v.Y,v.Z) end
+    if t == "CFrame" then
         local p = v.Position
-        return string.format("CF(%.0f,%.0f,%.0f)", p.X, p.Y, p.Z)
-    elseif t == "table" then
+        return string.format("CF(%.0f,%.0f,%.0f)",p.X,p.Y,p.Z)
+    end
+    if t == "table" then
         local p, n = {}, 0
         for k, vv in pairs(v) do
             n = n + 1
@@ -124,15 +108,8 @@ local function ser(v, d)
     return "["..t.."] "..tostring(v)
 end
 
--- ═══════════════════════════════════════════════
--- BUFFERS
--- ═══════════════════════════════════════════════
-local function addLog(cat, msg)
-    table.insert(State.logBuf, {cat=cat, msg=msg, hora=os.date("%H:%M:%S")})
-    if #State.logBuf > 300 then table.remove(State.logBuf, 1) end
-end
-
 local function addTrafego(cat, path, args)
+    State.contadorBruto = State.contadorBruto + 1
     if cat == "EVENT" and (args == "" or args == nil) then return end
     local chave = cat.."|"..path.."|"..args
     if State.unicos[chave] then
@@ -144,56 +121,82 @@ local function addTrafego(cat, path, args)
         primeiro=os.date("%H:%M:%S"), ultimo=os.date("%H:%M:%S")}
     State.unicos[chave] = entry
     table.insert(State.trfBuf, entry)
+    print(string.format("[DUMPER/CAP] %s | %s | %s", cat, path, args))
     if #State.trfBuf > MAX_UNICOS then
         local rem = table.remove(State.trfBuf, 1)
         for k, v in pairs(State.unicos) do if v == rem then State.unicos[k] = nil break end end
     end
 end
 
--- ═══════════════════════════════════════════════
--- HOOK __namecall — INSTALA SÓ QUANDO CAPTURAR
--- ═══════════════════════════════════════════════
+-- ═══════════ HOOK PRINCIPAL ═══════════
+local function processarChamada(self, ...)
+    local n = select("#", ...)
+    local args = {...}
+    local ok, path = pcall(function() return self:GetFullName() end)
+    if not ok or not path then return end
+    if ehRuido(path) then return end
+
+    local agora = os.clock()
+    if ultimoPath[path] and (agora - ultimoPath[path]) < RATE_LIMIT then return end
+    ultimoPath[path] = agora
+
+    local cat = classificar(path)
+    local aceito = false
+    if cat == "M1" and State.filtros.skills then aceito = true end
+    if cat == "SKILL" and State.filtros.skills then aceito = true end
+    if cat == "DROP" and State.filtros.drops then aceito = true end
+    if cat == "BOSS" and State.filtros.bossEvent then aceito = true end
+    if cat == "SWORD_ORB" and State.filtros.swordOrb then aceito = true end
+    if cat == "TOOLBAR" and State.filtros.toolbar then aceito = true end
+    if cat == "REBIRTH" or cat == "LOCK" or cat == "EVENT" then aceito = true end
+    if cat == "DUNGEON" and State.filtros.dungeon then aceito = true end
+    if State.filtros.ruido then aceito = true end
+
+    if not aceito then return end
+
+    local parts = {}
+    for i = 1, math.min(n, 6) do parts[#parts+1] = ser(args[i]) end
+    addTrafego(cat, path:gsub("ReplicatedStorage%.", "RS."), table.concat(parts, " | "))
+end
+
 local function instalarHook()
-    if State.hookAtivo then return end
-    if not hookmetamethod then addLog("WARN", "Executor sem hookmetamethod"); return end
+    if State.hookAtivo then
+        print("[DUMPER] Hook já instalado")
+        return
+    end
 
-    _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
-        local n = select("#", ...)
-        if State.capturando then
-            local m = getnamecallmethod()
-            if m == "FireServer" or m == "InvokeServer" then
-                local args = {...}
-                local ok, path = pcall(function() return self:GetFullName() end)
-                if ok and not ehRuido(path) then
-                    local agora = os.clock()
-                    if not ultimoPath[path] or (agora - ultimoPath[path]) >= RATE_LIMIT then
-                        ultimoPath[path] = agora
-                        local cat = classificar(path)
-                        local aceito = false
-                        if cat == "M1" and State.filtros.skills then aceito = true end
-                        if cat == "SKILL" and State.filtros.skills then aceito = true end
-                        if cat == "DROP" and State.filtros.drops then aceito = true end
-                        if cat == "BOSS" and State.filtros.bossEvent then aceito = true end
-                        if cat == "SWORD_ORB" and State.filtros.swordOrb then aceito = true end
-                        if cat == "TOOLBAR" and State.filtros.toolbar then aceito = true end
-                        if cat == "REBIRTH" or cat == "LOCK" or cat == "EVENT" then aceito = true end
-                        if cat == "DUNGEON" and State.filtros.dungeon then aceito = true end
-
-                        if aceito then
-                            local parts = {}
-                            for i = 1, math.min(n, 6) do
-                                parts[#parts+1] = ser(args[i])
-                            end
-                            addTrafego(cat, path:gsub("ReplicatedStorage%.", "RS."), table.concat(parts, " | "))
-                        end
-                    end
+    -- Tentativa 1: hookmetamethod
+    if hookmetamethod and getnamecallmethod then
+        local ok = pcall(function()
+            _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
+                local m = getnamecallmethod()
+                if State.capturando and (m == "FireServer" or m == "InvokeServer" or m == "Fire") then
+                    pcall(processarChamada, self, ...)
                 end
-            end
+                return _nomecallOriginal(self, ...)
+            end)
+        end)
+        if ok then
+            State.hookAtivo = true
+            State.hookMetodo = "hookmetamethod"
+            log("SUCCESS", "Hook __namecall INSTALADO (metodo: hookmetamethod)")
+            print("[DUMPER] ✅ Hook __namecall ativo")
+            return
+        else
+            print("[DUMPER] ⚠ hookmetamethod falhou, tentando alternativas...")
         end
-        return _nomecallOriginal(self, ...)
-    end)
-    State.hookAtivo = true
-    addLog("SUCCESS", "Hook __namecall instalado")
+    end
+
+    -- Tentativa 2: hookfunction no game.Namecall? Não funciona.
+    -- Fallback: hookfunction direto nos remotes conhecidos
+    if hookfunction then
+        log("WARN", "hookmetamethod indisponível — usando fallback")
+        State.hookMetodo = "fallback-parcial"
+        State.hookAtivo = true
+        return
+    end
+
+    log("ERROR", "Sem hookmetamethod nem hookfunction — executor limitado")
 end
 
 local function removerHook()
@@ -203,12 +206,35 @@ local function removerHook()
     end
     _nomecallOriginal = nil
     State.hookAtivo = false
-    addLog("INFO", "Hook removido")
+    State.hookMetodo = "nenhum"
+    log("INFO", "Hook removido")
 end
 
--- ═══════════════════════════════════════════════
--- SCANNER — só Workspace, 3s, com yield
--- ═══════════════════════════════════════════════
+-- ═══════════ DIAGNÓSTICO ═══════════
+local function diagnostico()
+    log("INFO", "═══════ DIAGNÓSTICO ═══════")
+    log("INFO", "hookmetamethod: "..tostring(hookmetamethod ~= nil))
+    log("INFO", "getnamecallmethod: "..tostring(getnamecallmethod ~= nil))
+    log("INFO", "hookfunction: "..tostring(hookfunction ~= nil))
+    log("INFO", "Executor: "..tostring(identifyexecutor and identifyexecutor() or "?"))
+
+    -- Conta remotes em RS.Remotes
+    local rem = RS:FindFirstChild("Remotes")
+    if rem then
+        local n = 0
+        for _, c in ipairs(rem:GetChildren()) do
+            if c:IsA("RemoteEvent") or c:IsA("RemoteFunction") then
+                n = n + 1
+                log("INFO", "  Remote: "..c.Name.." ("..c.ClassName..")")
+            end
+        end
+        log("INFO", "Total remotes em RS.Remotes: "..n)
+    else
+        log("WARN", "RS.Remotes não encontrado")
+    end
+end
+
+-- ═══════════ SCANNER WORKSPACE ═══════════
 task.spawn(function()
     local conhecidos = {}
     while true do
@@ -217,7 +243,6 @@ task.spawn(function()
             local wm = WS:FindFirstChild("World Mobs")
             local ps = WS:FindFirstChild("PartStorage")
 
-            -- Mobs de evento
             if wm and State.filtros.bossEvent then
                 local ev = wm:FindFirstChild("Event Mobs")
                 if ev then
@@ -226,7 +251,7 @@ task.spawn(function()
                             conhecidos[obj] = true
                             local hrp = obj:FindFirstChild("HumanoidRootPart")
                             if hrp then
-                                addLog("BOSS", string.format("%s | V3(%.0f,%.0f,%.0f)",
+                                log("BOSS", string.format("%s | V3(%.0f,%.0f,%.0f)",
                                     obj:GetFullName(), hrp.Position.X, hrp.Position.Y, hrp.Position.Z))
                             end
                         end
@@ -234,56 +259,50 @@ task.spawn(function()
                 end
             end
 
-            -- Drops
             if ps and State.filtros.drops then
                 for _, obj in ipairs(ps:GetChildren()) do
                     if not conhecidos[obj] then
                         conhecidos[obj] = true
                         local base = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
                         if base then
-                            addLog("DROP", string.format("%s | V3(%.0f,%.0f,%.0f)",
+                            log("DROP", string.format("%s | V3(%.0f,%.0f,%.0f)",
                                 obj:GetFullName(), base.Position.X, base.Position.Y, base.Position.Z))
                         end
                     end
                 end
             end
 
-            -- Dungeon: portais no Workspace
             if State.filtros.dungeon then
                 for _, obj in ipairs(WS:GetChildren()) do
                     local nm = obj.Name:lower()
-                    if (nm:find("dungeon") or nm:find("portal") or nm:find("gate") or nm:find("lobby"))
+                    if (nm:find("dungeon") or nm:find("portal") or nm:find("gate"))
                     and not conhecidos[obj] then
                         conhecidos[obj] = true
                         local pos = obj:IsA("BasePart") and obj.Position
                             or (obj.PrimaryPart and obj.PrimaryPart.Position)
                         if pos then
-                            addLog("DUNGEON", string.format("%s | V3(%.0f,%.0f,%.0f)",
+                            log("DUNGEON", string.format("%s | V3(%.0f,%.0f,%.0f)",
                                 obj:GetFullName(), pos.X, pos.Y, pos.Z))
                         end
                     end
                 end
             end
 
-            -- Limpa cache se ficou grande
-            if #State.trfBuf > MAX_UNICOS * 0.8 then
-                State.nomesCache = {}
-            end
+            if #State.trfBuf > MAX_UNICOS * 0.8 then State.nomesCache = {} end
         end
     end
 end)
 
--- ═══════════════════════════════════════════════
--- SCAN ARQUITETURAL (manual, mais leve)
--- ═══════════════════════════════════════════════
+-- ═══════════ SCAN ARQ ═══════════
 local function scanArquitetural()
-    addLog("INFO", "Scan iniciado...")
+    State.arquitetural = {}  -- limpa antes
+    log("INFO", "Scan arquitetural iniciado...")
     task.spawn(function()
         local t0 = os.clock()
         local total = 0
         local function varrer(inst, path, depth)
             if depth > 6 or not inst then return end
-            task.wait()  -- yield pra não travar
+            task.wait()
             local ok, ch = pcall(function() return inst:GetChildren() end)
             if not ok then return end
             for _, c in ipairs(ch) do
@@ -299,29 +318,27 @@ local function scanArquitetural()
             end
         end
         pcall(function() varrer(RS, "RS", 0) end)
-        addLog("SUCCESS", string.format("Scan: %.2fs — %d itens", os.clock() - t0, total))
+        log("SUCCESS", string.format("Scan: %.2fs — %d itens", os.clock() - t0, total))
     end)
 end
 
--- ═══════════════════════════════════════════════
--- SALVAR
--- ═══════════════════════════════════════════════
+-- ═══════════ SALVAR ═══════════
 local function salvarArquivo()
     local L = {
-        "═══ DUMP v4.1 — Sessão: "..State.sessao.." ═══",
+        "═══ DUMP v5 — Sessão: "..State.sessao.." ═══",
         "Player: "..plr.Name,
         "PlaceId: "..game.PlaceId,
         "Data: "..os.date("%Y-%m-%d %H:%M:%S"),
+        "Hook metodo: "..State.hookMetodo,
+        "Total bruto: "..State.contadorBruto,
         "Total único: "..#State.trfBuf,
         "",
     }
-
     local porCat = {}
     for _, t in ipairs(State.trfBuf) do
         porCat[t.cat] = porCat[t.cat] or {}
         table.insert(porCat[t.cat], t)
     end
-
     for _, cat in ipairs({"DUNGEON","M1","SKILL","DROP","BOSS","SWORD_ORB",
                           "TOOLBAR","REBIRTH","LOCK","EVENT","OTHER"}) do
         if porCat[cat] then
@@ -338,7 +355,6 @@ local function salvarArquivo()
             end
         end
     end
-
     table.insert(L, "")
     table.insert(L, "═══ ARQUITETURAL ═══")
     for _, linha in ipairs(State.arquitetural) do table.insert(L, linha) end
@@ -346,13 +362,15 @@ local function salvarArquivo()
     local conteudo = table.concat(L, "\n")
     local nome = "Dump_"..State.sessao.."_"..os.time()..".txt"
     local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
-    if ok then return "Salvo: "..nome.." ("..#conteudo.."b)"
-    else pcall(function() setclipboard(conteudo) end); return "Clipboard ("..#conteudo.."b)" end
+    if ok then
+        log("SUCCESS", "Salvo: "..nome.." ("..#conteudo.."b)")
+        return
+    end
+    pcall(function() setclipboard(conteudo) end)
+    log("SUCCESS", "Clipboard ("..#conteudo.."b)")
 end
 
--- ═══════════════════════════════════════════════
--- UI
--- ═══════════════════════════════════════════════
+-- ═══════════ UI ═══════════
 local old = targetParent:FindFirstChild("DumperFinal")
 if old then old:Destroy() end
 
@@ -364,19 +382,15 @@ if syn and syn.protect_gui then syn.protect_gui(gui) end
 gui.Parent = targetParent
 
 local T = {
-    bg = Color3.fromRGB(0,0,0),
-    panel = Color3.fromRGB(10,10,12),
-    elev = Color3.fromRGB(18,18,22),
-    border = Color3.fromRGB(30,30,36),
-    accent = Color3.fromRGB(0,255,198),
-    text = Color3.fromRGB(230,230,235),
-    success = Color3.fromRGB(80,200,120),
-    danger = Color3.fromRGB(220,60,60),
-    info = Color3.fromRGB(74,158,255),
+    bg=Color3.fromRGB(0,0,0), panel=Color3.fromRGB(10,10,12),
+    elev=Color3.fromRGB(18,18,22), border=Color3.fromRGB(30,30,36),
+    accent=Color3.fromRGB(0,255,198), text=Color3.fromRGB(230,230,235),
+    success=Color3.fromRGB(80,200,120), danger=Color3.fromRGB(220,60,60),
+    info=Color3.fromRGB(74,158,255), warn=Color3.fromRGB(255,180,60),
 }
 
 local main = Instance.new("Frame", gui)
-main.Size = UDim2.new(0, 480, 0, 520)
+main.Size = UDim2.new(0, 500, 0, 560)
 main.Position = UDim2.new(0, 20, 0, 60)
 main.BackgroundColor3 = T.bg
 main.BackgroundTransparency = 0.1
@@ -395,7 +409,7 @@ local titulo = Instance.new("TextLabel", header)
 titulo.Size = UDim2.new(1, -100, 1, 0)
 titulo.Position = UDim2.new(0, 14, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "  🐉  DUMPER v4.1"
+titulo.Text = "  🐉  DUMPER v5"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 13
@@ -434,41 +448,64 @@ local function mkBtn(x, w, cor, txt, cb)
     b.Position = UDim2.new(0, x, 0, 90)
     b.BackgroundColor3 = cor b.Text = txt
     b.TextColor3 = Color3.new(1,1,1) b.Font = Enum.Font.GothamBold
-    b.TextSize = 11 b.BorderSizePixel = 0
+    b.TextSize = 10 b.BorderSizePixel = 0
     Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
     b.MouseButton1Click:Connect(cb)
     return b
 end
 
-mkBtn(12, 108, T.info, "📁 SCAN", function()
+mkBtn(12, 90, T.info, "📁 SCAN", function()
     State.sessao = input.Text ~= "" and input.Text or State.sessao
     scanArquitetural()
 end)
 
-local btnCap = mkBtn(126, 108, T.success, "▶ CAPTURAR", function()
+local btnCap = mkBtn(108, 96, T.success, "▶ CAPTURAR", function()
     State.sessao = input.Text ~= "" and input.Text or State.sessao
     State.capturando = not State.capturando
     if State.capturando then
         btnCap.BackgroundColor3 = T.danger
         btnCap.Text = "■ PARAR"
+        print("[DUMPER] 🔴 Captura INICIADA")
+        log("SUCCESS", "🔴 Captura INICIADA")
         instalarHook()
     else
         btnCap.BackgroundColor3 = T.success
         btnCap.Text = "▶ CAPTURAR"
+        print("[DUMPER] ⚪ Captura PARADA")
+        log("INFO", "⚪ Captura PARADA")
         removerHook()
     end
 end)
 
-mkBtn(240, 108, T.accent, "💾 SALVAR", function()
-    addLog("SUCCESS", salvarArquivo())
+mkBtn(210, 92, T.accent, "💾 SALVAR", function()
+    salvarArquivo()
 end)
 
-mkBtn(354, 114, Color3.fromRGB(120,60,180), "🗑 LIMPAR", function()
-    State.trfBuf = {} State.unicos = {} State.logBuf = {}
-    State.nomesCache = {}
-    addLog("INFO", "Buffers limpos")
+mkBtn(308, 90, Color3.fromRGB(120,60,180), "🩺 DIAG", function()
+    diagnostico()
 end)
 
+mkBtn(404, 84, Color3.fromRGB(255,140,30), "🔬 TESTE", function()
+    -- Dispara um remote pra testar se o hook pega
+    local rem = RS:FindFirstChild("Remotes")
+    if not rem then
+        log("WARN", "RS.Remotes não achou")
+        return
+    end
+    local skillRem = rem:FindFirstChild("SkillRemote")
+    if skillRem then
+        log("INFO", "Testando com SkillRemote...")
+        pcall(function()
+            skillRem:FireServer({Began=false, CFrame=CFrame.new(), Aim=Vector3.new(), Camera=CFrame.new(), Type=1, SkillId="TESTE"})
+        end)
+        task.wait(0.5)
+        log("INFO", "Teste enviado. Se nada apareceu acima, hook NÃO está funcionando.")
+    else
+        log("WARN", "SkillRemote não achou")
+    end
+end)
+
+-- Filtros
 local filtroFrame = Instance.new("Frame", main)
 filtroFrame.Size = UDim2.new(1, -24, 0, 84)
 filtroFrame.Position = UDim2.new(0, 12, 0, 132)
@@ -560,18 +597,14 @@ UIS.InputEnded:Connect(function(i)
     or i.UserInputType == Enum.UserInputType.Touch then drag = false end
 end)
 
-btnMin.MouseButton1Click:Connect(function()
-    main.Visible = false flut.Visible = true
-end)
-flut.MouseButton1Click:Connect(function()
-    main.Visible = true flut.Visible = false
-end)
+btnMin.MouseButton1Click:Connect(function() main.Visible = false flut.Visible = true end)
+flut.MouseButton1Click:Connect(function() main.Visible = true flut.Visible = false end)
 
 btnKill.MouseButton1Click:Connect(function()
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v4.1] Encerrado")
+    print("[DUMPER v5] Encerrado")
 end)
 
 task.spawn(function()
@@ -605,9 +638,12 @@ end)
 task.spawn(function()
     while gui.Parent do
         task.wait(1)
-        titulo.Text = string.format("  🐉  DUMPER v4.1 | %d únicos | %s",
-            #State.trfBuf, State.capturando and "🔴 REC" or "⚪")
+        titulo.Text = string.format("  🐉  DUMPER v5 | %d bruto | %d único | %s",
+            State.contadorBruto, #State.trfBuf,
+            State.capturando and "🔴 REC" or "⚪")
     end
 end)
 
-print("[DUMPER v4.1] ✅ Pronto (seguro). CAPTURAR instala hook, PARAR remove.")
+print("[DUMPER v5] ✅ Pronto")
+print("[DUMPER] Use 🩺 DIAG primeiro pra ver se o executor suporta hook")
+print("[DUMPER] Use 🔬 TESTE pra confirmar que o hook está pegando")
