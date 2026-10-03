@@ -28,6 +28,7 @@ local PromptRemote         = KnitSVC and KnitSVC.PromptService and KnitSVC.Promp
 local SuperFlight          = KnitSVC and KnitSVC.FlightService and KnitSVC.FlightService.RE.SuperFlight
 local SelectMode           = KnitSVC and KnitSVC.ModeTransformService and KnitSVC.ModeTransformService.RE.SelectMode
 local ToolbarRemote        = KnitSVC and KnitSVC.ToolService and KnitSVC.ToolService.RE.UpdatePlayerToolbarSelection
+local LockedOnRemote       = KnitSVC and KnitSVC.SkillManager and KnitSVC.SkillManager.RE and KnitSVC.SkillManager.RE.LockedOnChanged
 local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
 local Ativo = true
@@ -43,6 +44,16 @@ local Config = {
     ESPMobs = false,
     ESPItems = false,
     AutoRegen = false,
+    AutoLock = true,
+    Noclip = true,
+    HitboxExpandida = false,
+    HitboxMulti = 2,
+    AutoCollect = false,
+    ColetarComum = false,
+    ColetarIncomum = true,
+    ColetarRaro = true,
+    ColetarEpico = true,
+    ColetarLendario = true,
     KiMin = 0.3,
     SafeHeight = 100,
     WalkSpeed = 16,
@@ -52,7 +63,7 @@ local Config = {
     TrackerAuto = true,
 }
 
--- [SKILLS - PATCH 07]
+-- [SKILLS]
 local SKILLS = {
     { nome = "UniqueSets_2_1", hold = "Hold_Kamehameha", release = "Release_Kamehameha", pause = 3, slot = 1, trocaSlot = true },
     { nome = "UniqueSets_2_2", pause = 1, slot = 1, trocaSlot = true },
@@ -91,12 +102,38 @@ end
 
 local emRegen = false
 local ultimaAcao = 0
+local alvoTravado = nil
+local LockConexao = nil
+local LockAlvo = nil
 
 local function podeAgir()
     local agora = tick()
     if agora - ultimaAcao < 0.05 then return false end
     ultimaAcao = agora
     return true
+end
+
+-- [LOCK-ON]
+local function pararLock()
+    if LockConexao then LockConexao:Disconnect(); LockConexao = nil end
+    LockAlvo = nil
+end
+
+local function lockOn(mobModel)
+    if LockedOnRemote then
+        safe(function() LockedOnRemote:FireServer(mobModel) end)
+    end
+    pararLock()
+    if not mobModel or not mobModel:FindFirstChild("HumanoidRootPart") then return end
+    LockAlvo = mobModel
+    LockConexao = RunService.RenderStepped:Connect(function()
+        if not LockAlvo or not LockAlvo.Parent then pararLock() return end
+        local mh = LockAlvo:FindFirstChild("HumanoidRootPart")
+        local hum = LockAlvo:FindFirstChildOfClass("Humanoid")
+        if not mh or not hum or hum.Health <= 0 then pararLock() return end
+        local cam = workspace.CurrentCamera
+        if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, mh.Position) end
+    end)
 end
 
 -- [VOO]
@@ -132,7 +169,7 @@ local function voarPara(destino, velocidade)
     end)
 end
 
--- [M1]
+-- [M1 - PATCH 10: sem teleporte]
 local function atacar(alvo)
     if not SkillRemote or not plr.Character or not podeAgir() then return end
     if not alvo or not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -140,7 +177,7 @@ local function atacar(alvo)
     if not hrp then return end
 
     local mhrp = alvo.HumanoidRootPart
-    hrp.CFrame = mhrp.CFrame * CFrame.new(0, 0, Config.AttackRange)
+    hrp.CFrame = CFrame.lookAt(hrp.Position, mhrp.Position)
 
     local cframe = hrp.CFrame
     local aim = mhrp.Position
@@ -161,7 +198,7 @@ local function atacar(alvo)
     end)
 end
 
--- [SKILL - PATCH 07]
+-- [SKILL]
 local function usarSkill(skill, alvo)
     if not ExecuteSkill or not alvo or not alvo.Parent then return end
     if not alvo:FindFirstChild("HumanoidRootPart") then return end
@@ -300,6 +337,66 @@ local function getAlvo()
     return closest
 end
 
+-- [HITBOX EXPANDIDA - PATCH 13]
+local function expandirHitbox()
+    if not Config.HitboxExpandida then return end
+    local wm = WS:FindFirstChild("World Mobs")
+    if not wm then return end
+    for _, p in ipairs({wm:FindFirstChild("Mobs"), wm:FindFirstChild("Boss Mobs"), wm:FindFirstChild("Event Mobs")}) do
+        if p then
+            for _, m in ipairs(p:GetChildren()) do
+                local hrp = m:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local orig = hrp:FindFirstChild("__OrigSize")
+                    if not orig then
+                        orig = Instance.new("Vector3Value")
+                        orig.Name = "__OrigSize"
+                        orig.Value = hrp.Size
+                        orig.Parent = hrp
+                    end
+                    hrp.Size = orig.Value * Config.HitboxMulti
+                    hrp.Transparency = math.max(hrp.Transparency, 0.95)
+                end
+            end
+        end
+    end
+end
+
+-- [AUTOCOLLECT - PATCH 14]
+local coletando = false
+local function tentarColetar()
+    if coletando then return end
+    local c = plr.Character
+    if not c or not c:FindFirstChild("HumanoidRootPart") then return end
+
+    local ps = WS:FindFirstChild("PartStorage")
+    if not ps then return end
+
+    for _, item in ipairs(ps:GetChildren()) do
+        if item.Name:find("ItemDrop_") then
+            local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+            if base then
+                local nome = item.Name:lower()
+                local podeColetar = false
+
+                if nome:find("wish") then podeColetar = Config.ColetarLendario
+                elseif nome:find("powerscroll") then podeColetar = Config.ColetarEpico
+                elseif nome:find("orb") then podeColetar = Config.ColetarRaro
+                elseif nome:find("expmat") then podeColetar = Config.ColetarComum
+                else podeColetar = Config.ColetarIncomum end
+
+                if podeColetar then
+                    coletando = true
+                    voarPara(base.Position, Config.FlySpeed * 1.2)
+                    task.wait(1.5)
+                    coletando = false
+                    return
+                end
+            end
+        end
+    end
+end
+
 -- [ESP GUI]
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
@@ -394,9 +491,7 @@ local function atualizarDropESP()
     end
 end
 
--- ═══════════════════════════════════════════════════════════════
--- [UI NOVA - AMOLED CIANO + TABS NO TOPO]
--- ═══════════════════════════════════════════════════════════════
+-- [UI]
 local oldGui = CoreGui:FindFirstChild("DragonBloxHub")
 if oldGui then oldGui:Destroy() end
 
@@ -407,14 +502,13 @@ gui.DisplayOrder = 100
 gui.IgnoreGuiInset = true
 gui.Parent = CoreGui
 
--- Paleta AMOLED
 local P = {
     bg          = Color3.fromRGB(8, 8, 10),
     panel       = Color3.fromRGB(14, 14, 18),
     elev        = Color3.fromRGB(22, 22, 28),
     stroke      = Color3.fromRGB(40, 40, 48),
-    accent      = Color3.fromRGB(0, 200, 255),        -- ciano
-    accent2     = Color3.fromRGB(120, 220, 255),      -- ciano claro
+    accent      = Color3.fromRGB(0, 200, 255),
+    accent2     = Color3.fromRGB(120, 220, 255),
     text        = Color3.fromRGB(230, 235, 240),
     textDim     = Color3.fromRGB(130, 135, 145),
     success     = Color3.fromRGB(80, 220, 140),
@@ -422,21 +516,30 @@ local P = {
     off         = Color3.fromRGB(45, 45, 55),
 }
 
--- Home bar (iPhone-style, fina)
+-- [PATCH 15: home bar clicável]
 local homeBar = Instance.new("TextButton")
-homeBar.Size = UDim2.new(0, 140, 0, 5)
-homeBar.Position = UDim2.new(0.5, 0, 1, -12)
+homeBar.Size = UDim2.new(0, 200, 0, 30)
+homeBar.Position = UDim2.new(0.5, 0, 1, -8)
 homeBar.AnchorPoint = Vector2.new(0.5, 1)
-homeBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-homeBar.BackgroundTransparency = 0.35
+homeBar.BackgroundTransparency = 1
 homeBar.Text = ""
 homeBar.AutoButtonColor = false
 homeBar.Active = true
 homeBar.ZIndex = 50
 homeBar.Parent = gui
-Instance.new("UICorner", homeBar).CornerRadius = UDim.new(1, 0)
 
--- Janela principal
+local barVisual = Instance.new("Frame", homeBar)
+barVisual.Size = UDim2.new(0, 140, 0, 5)
+barVisual.Position = UDim2.new(0.5, 0, 0.5, 0)
+barVisual.AnchorPoint = Vector2.new(0.5, 0.5)
+barVisual.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+barVisual.BackgroundTransparency = 0.3
+barVisual.BorderSizePixel = 0
+barVisual.ZIndex = 51
+barVisual.Active = false
+Instance.new("UICorner", barVisual).CornerRadius = UDim.new(1, 0)
+
+-- Janela
 local janela = Instance.new("Frame")
 janela.Size = UDim2.new(0, 440, 0, 340)
 janela.Position = UDim2.new(0.5, -220, 0.5, -170)
@@ -453,7 +556,6 @@ jStroke.Thickness = 1
 jStroke.Transparency = 0.4
 jStroke.Parent = janela
 
--- Header
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 36)
 header.BackgroundColor3 = P.panel
@@ -499,7 +601,6 @@ btnKill.AutoButtonColor = false
 btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 5)
 
--- Tab bar (topo, horizontal)
 local tabBar = Instance.new("Frame")
 tabBar.Size = UDim2.new(1, -20, 0, 32)
 tabBar.Position = UDim2.new(0, 10, 0, 40)
@@ -515,7 +616,6 @@ tabLayout.Padding = UDim.new(0, 3)
 tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
 
--- Content
 local contentArea = Instance.new("Frame")
 contentArea.Size = UDim2.new(1, -20, 1, -86)
 contentArea.Position = UDim2.new(0, 10, 0, 78)
@@ -526,12 +626,12 @@ local abas = {}
 
 local function criarAba(nome, display)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 80, 0, 26)
+    btn.Size = UDim2.new(0, 78, 0, 26)
     btn.BackgroundColor3 = P.elev
     btn.BackgroundTransparency = 1
     btn.Text = display
     btn.TextColor3 = P.textDim
-    btn.TextSize = 11
+    btn.TextSize = 10
     btn.Font = Enum.Font.GothamBold
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
@@ -606,7 +706,6 @@ local function criarToggle(parent, texto, default, callback)
     label.TextXAlignment = Enum.TextXAlignment.Left
     label.Parent = frame
 
-    -- Switch iOS-like
     local sw = Instance.new("Frame")
     sw.Size = UDim2.new(0, 36, 0, 20)
     sw.Position = UDim2.new(1, -48, 0.5, -10)
@@ -745,11 +844,7 @@ local function criarLabel(parent, texto, altura)
     return lbl
 end
 
--- ═══════════════════════════════════════════════════════════════
--- [ABAS]
--- ═══════════════════════════════════════════════════════════════
-
--- FARM
+-- [ABA FARM]
 local farmTab = criarAba("farm", "⚔ Farm")
 criarSecao(farmTab, "Farm")
 criarToggle(farmTab, "Auto Farm", false, function(v) Config.AutoFarm = v end)
@@ -757,6 +852,11 @@ criarToggle(farmTab, "Auto Boss", false, function(v) Config.AutoBoss = v end)
 criarToggle(farmTab, "Auto Skills", false, function(v) Config.AutoSkills = v end)
 criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
 criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
+criarSecao(farmTab, "Combate Avançado")
+criarToggle(farmTab, "Auto Lock-On", true, function(v) Config.AutoLock = v end)
+criarToggle(farmTab, "Noclip com farm", true, function(v) Config.Noclip = v end)
+criarToggle(farmTab, "Hitbox Expandida", false, function(v) Config.HitboxExpandida = v end)
+criarSlider(farmTab, "Multiplicador Hitbox", 1, 5, 2, 1, function(v) Config.HitboxMulti = v end)
 criarSecao(farmTab, "Visual")
 criarToggle(farmTab, "ESP Mobs", false, function(v) Config.ESPMobs = v end)
 criarToggle(farmTab, "ESP Itens", false, function(v) Config.ESPItems = v end)
@@ -769,7 +869,18 @@ criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     end
 end)
 
--- REBIRTH - PATCH 08
+-- [ABA COLLECT - PATCH 14]
+local collectTab = criarAba("collect", "💎 Collect")
+criarSecao(collectTab, "Auto Coletar")
+criarToggle(collectTab, "Auto Coletar", false, function(v) Config.AutoCollect = v end)
+criarSecao(collectTab, "Filtro de Raridade")
+criarToggle(collectTab, "Comum (ExpMat)", false, function(v) Config.ColetarComum = v end)
+criarToggle(collectTab, "Incomum", true, function(v) Config.ColetarIncomum = v end)
+criarToggle(collectTab, "Raro (Orbs)", true, function(v) Config.ColetarRaro = v end)
+criarToggle(collectTab, "Épico (Scrolls)", true, function(v) Config.ColetarEpico = v end)
+criarToggle(collectTab, "Lendário (Wish)", true, function(v) Config.ColetarLendario = v end)
+
+-- [ABA REBIRTH]
 local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
 criarSecao(rebirthTab, "Auto Rebirth")
 criarToggle(rebirthTab, "Auto Rebirth", false, function(v) Config.AutoRebirth = v end)
@@ -814,7 +925,7 @@ task.spawn(function()
     end
 end)
 
--- TRACKER - PATCH 09
+-- [ABA TRACKER]
 local trackerTab = criarAba("tracker", "⏱ Tracker")
 criarSecao(trackerTab, "Detecção")
 criarToggle(trackerTab, "Auto-detectar bosses", true, function(v) Config.TrackerAuto = v end)
@@ -918,7 +1029,7 @@ task.spawn(function()
     end
 end)
 
--- CONFIG
+-- [ABA CONFIG]
 local configTab = criarAba("config", "⚙ Config")
 criarSecao(configTab, "Movimento")
 criarSlider(configTab, "WalkSpeed", 16, 200, 16, 1, function(v) Config.WalkSpeed = v end)
@@ -939,7 +1050,7 @@ criarBotao(configTab, "🔴 MATAR SCRIPT", function()
     espGui:Destroy()
 end)
 
--- SOBRE
+-- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.0", 80)
@@ -961,10 +1072,7 @@ end)
 
 abas.farm.ativar()
 
--- ═══════════════════════════════════════════════════════════════
 -- [INTERAÇÕES]
--- ═══════════════════════════════════════════════════════════════
-
 homeBar.MouseButton1Click:Connect(function()
     janela.Visible = not janela.Visible
 end)
@@ -1006,21 +1114,73 @@ btnKill.MouseButton1Click:Connect(function()
     espGui:Destroy()
 end)
 
--- ═══════════════════════════════════════════════════════════════
--- [LOOPS]
--- ═══════════════════════════════════════════════════════════════
-
+-- [LOOP FARM PRINCIPAL - PATCH 10 + 12]
 task.spawn(function()
-    while Ativo and task.wait(0.3) do
+    while Ativo and task.wait(0.15) do
         if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
             local alvo = getAlvo()
             if alvo then
-                atacar(alvo)
+                -- Auto Lock-On
+                if Config.AutoLock and alvoTravado ~= alvo.Name then
+                    lockOn(alvo)
+                    alvoTravado = alvo.Name
+                end
+
+                local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local dist = (alvo.HumanoidRootPart.Position - hrp.Position).Magnitude
+                    if dist > Config.AttackRange + 3 then
+                        voarPara(alvo.HumanoidRootPart.Position, Config.FlySpeed)
+                    else
+                        atacar(alvo)
+                    end
+                end
+            else
+                alvoTravado = nil
+                pararLock()
+            end
+        else
+            alvoTravado = nil
+        end
+    end
+end)
+
+-- [NOCLIP - PATCH 11]
+task.spawn(function()
+    while Ativo do
+        task.wait(0.3)
+        if (Config.AutoFarm or Config.AutoBoss) and Config.Noclip then
+            local char = plr.Character
+            if char then
+                for _, p in ipairs(char:GetDescendants()) do
+                    if p:IsA("BasePart") and p.CanCollide then
+                        p.CanCollide = false
+                    end
+                end
             end
         end
     end
 end)
 
+-- [HITBOX LOOP - PATCH 13]
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        expandirHitbox()
+    end
+end)
+
+-- [AUTOCOLLECT LOOP - PATCH 14]
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if Config.AutoCollect then
+            tentarColetar()
+        end
+    end
+end)
+
+-- [REGEN]
 task.spawn(function()
     while Ativo and task.wait(1) do
         if Config.AutoRegen and (Config.AutoFarm or Config.AutoBoss) then
@@ -1039,6 +1199,7 @@ task.spawn(function()
     end
 end)
 
+-- [SKILLS]
 task.spawn(function()
     local idx = 1
     while Ativo and task.wait(Config.SkillDelay) do
@@ -1053,6 +1214,7 @@ task.spawn(function()
     end
 end)
 
+-- [TRANSFORM]
 task.spawn(function()
     while Ativo and task.wait(5) do
         if Config.AutoTransform and SelectMode then
@@ -1071,6 +1233,7 @@ task.spawn(function()
     end
 end)
 
+-- [WALKSPEED]
 task.spawn(function()
     while Ativo and task.wait(0.5) do
         if plr.Character and plr.Character:FindFirstChild("Humanoid") then
@@ -1079,6 +1242,7 @@ task.spawn(function()
     end
 end)
 
+-- [ESP MOBS]
 task.spawn(function()
     while Ativo and task.wait(0.4) do
         if Config.ESPMobs then
@@ -1103,6 +1267,7 @@ task.spawn(function()
     end
 end)
 
+-- [ESP ITENS]
 task.spawn(function()
     while Ativo and task.wait(0.5) do
         if Config.ESPItems then
