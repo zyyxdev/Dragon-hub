@@ -136,8 +136,7 @@ local function lockOn(mobModel)
     end)
 end
 
--- [VOO]
-local vooBv, vooBg
+-- [VOO - reescrito sem variável global]
 local function voarPara(destino, velocidade)
     local myChar = plr.Character
     if not myChar then return end
@@ -145,32 +144,34 @@ local function voarPara(destino, velocidade)
     if not hrp then return end
     velocidade = velocidade or Config.FlySpeed
 
-    if not vooBv or vooBv.Parent ~= hrp then
-        vooBv = Instance.new("BodyVelocity")
-        vooBv.Name = "__dbh_v"
-        vooBv.MaxForce = Vector3.new(4e4, 4e4, 4e4)
-        vooBv.P = 1250
-        vooBv.Parent = hrp
+    local bv = hrp:FindFirstChild("__dbh_v")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "__dbh_v"
+        bv.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+        bv.P = 1250
+        bv.Parent = hrp
     end
-    if not vooBg or vooBg.Parent ~= hrp then
-        vooBg = Instance.new("BodyGyro")
-        vooBg.Name = "__dbh_g"
-        vooBg.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
-        vooBg.P = 3000
-        vooBg.D = 100
-        vooBg.Parent = hrp
+
+    local bg = hrp:FindFirstChild("__dbh_g")
+    if not bg then
+        bg = Instance.new("BodyGyro")
+        bg.Name = "__dbh_g"
+        bg.MaxTorque = Vector3.new(4e4, 4e4, 4e4)
+        bg.P = 3000
+        bg.D = 100
+        bg.Parent = hrp
     end
 
     local dir = destino - hrp.Position
     local dist = dir.Magnitude
-
     local spd
     if dist > 30 then spd = velocidade
     elseif dist > 10 then spd = velocidade * 0.5
     else spd = velocidade * 0.2 end
 
-    vooBv.Velocity = dir.Unit * spd
-    vooBg.CFrame = CFrame.new(hrp.Position, destino)
+    bv.Velocity = dir.Unit * spd
+    bg.CFrame = CFrame.new(hrp.Position, destino)
 end
 
 -- [M1]
@@ -239,7 +240,7 @@ local function getKi()
     return curr.Value, max.Value
 end
 
--- [REGEN - PATCH 21]
+-- [REGEN]
 local function iniciarRegen()
     if emRegen then return end
     emRegen = true
@@ -370,7 +371,7 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT - PATCH 23]
+-- [AUTOCOLLECT]
 local coletando = false
 
 local function tentarColetar()
@@ -459,6 +460,16 @@ local function tentarColetar()
     end
 
     task.wait(0.3)
+
+    local charEnd = plr.Character
+    if charEnd then
+        local hrpEnd = charEnd:FindFirstChild("HumanoidRootPart")
+        if hrpEnd then
+            local bvEnd = hrpEnd:FindFirstChild("__dbh_v")
+            if bvEnd then bvEnd.Velocity = Vector3.zero end
+        end
+    end
+
     coletando = false
 end
 
@@ -499,7 +510,6 @@ local function removerESP(mob)
     if espCache[mob] then espCache[mob]:Destroy(); espCache[mob] = nil end
 end
 
--- [ESP ITENS - PATCH 20]
 local function getItemLabel(item)
     local nome = item.Name:lower()
     local itemName = item.Name
@@ -1186,7 +1196,7 @@ btnKill.MouseButton1Click:Connect(function()
     espGui:Destroy()
 end)
 
--- [LOOP FARM]
+-- [LOOP FARM - patch aplicado]
 task.spawn(function()
     while Ativo and task.wait(0.08) do
         if (Config.AutoFarm or Config.AutoBoss) and not emRegen then
@@ -1208,7 +1218,8 @@ task.spawn(function()
                     elseif dist > 3 then
                         voarPara(mpos, Config.FlySpeed * 0.3)
                     else
-                        if vooBv then vooBv.Velocity = Vector3.zero end
+                        local bv = hrp:FindFirstChild("__dbh_v")
+                        if bv then bv.Velocity = Vector3.zero end
                         atacar(alvo)
                     end
                 end
