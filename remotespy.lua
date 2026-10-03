@@ -1,0 +1,575 @@
+--[[
+    Advanced Mobile Remote Spy & Inspector (AMOLED Edition v2)
+    Engine: __namecall hook + Serializer + Dedup Cache
+    Alvo: Delta / Mobile (Android AMOLED)
+    Autor base: (você) — Refactor: Eng. Sênior
+]]
+
+-- ==========================================
+-- 0. SERVIÇOS E ESTADO
+-- ==========================================
+local CoreGui          = game:GetService("CoreGui")
+local Players          = game:GetService("Players")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService      = game:GetService("HttpService")
+
+local LocalPlayer = Players.LocalPlayer
+
+if _G.AmoledSpyGui then pcall(function() _G.AmoledSpyGui:Destroy() end) end
+
+-- Estado global da ferramenta
+local State = {
+    Paused       = false,
+    Filter       = "All",       -- "All" | "FireServer" | "InvokeServer"
+    LogCount     = 0,
+    MaxLogs      = 150,         -- trava dura pra não fritar o device
+    Seen         = {},          -- [signature] = { frame, counterLabel, count, lastSeen }
+    TotalRaw     = 0,           -- requisições interceptadas cruas (todas)
+    TotalUnique  = 0,           -- únicas
+    DumpOrder    = {},          -- ordem dos únicos, pro .txt
+}
+
+-- Ruído conhecido que NUNCA deve aparecer (evita ping visual inútil)
+local NOISE_PATTERNS = {
+    "ClientReplication", "RakNet", "TeleportService", "Chat%.",
+    "PlayerScripts", "CoreGui",
+}
+
+local function isNoise(path)
+    for _, pat in ipairs(NOISE_PATTERNS) do
+        if string.find(path, pat) then return true end
+    end
+    return false
+end
+
+-- ==========================================
+-- 1. SERIALIZER + GERADOR DE SNIPPET
+-- ==========================================
+local function serializeValue(v, depth)
+    depth = depth or 0
+    if depth > 3 then return "..." end
+
+    local t = typeof(v)
+    if t == "string" then
+        return string.format("%q", v)
+    elseif t == "number" then
+        return tostring(v)
+    elseif t == "boolean" or t == "nil" then
+        return tostring(v)
+    elseif t == "Instance" then
+        local ok, name = pcall(function() return v:GetFullName() end)
+        return ok and ("game." .. name) or "Instance"
+    elseif t == "Vector3" then
+        return string.format("Vector3.new(%g, %g, %g)", v.X, v.Y, v.Z)
+    elseif t == "Vector2" then
+        return string.format("Vector2.new(%g, %g)", v.X, v.Y)
+    elseif t == "CFrame" then
+        return "CFrame.new(...)"
+    elseif t == "Color3" then
+        return string.format("Color3.fromRGB(%d,%d,%d)",
+            math.floor(v.R*255), math.floor(v.G*255), math.floor(v.B*255))
+    elseif t == "EnumItem" then
+        return string.format("Enum.%s.%s", tostring(v.EnumType), v.Name)
+    elseif t == "table" then
+        local parts, n = {}, 0
+        for k, val in pairs(v) do
+            n += 1
+            if n > 12 then parts[#parts+1] = "..." break end
+            local key = typeof(k) == "string" and k or ("["..serializeValue(k, depth+1).."]")
+            parts[#parts+1] = string.format("%s = %s", key, serializeValue(val, depth+1))
+        end
+        return "{" .. table.concat(parts, ", ") .. "}"
+    end
+    return "nil --[[ " .. t .. " ]]"
+end
+
+local function serializeArgs(...)
+    local args = {...}
+    local out = {}
+    for i = 1, #args do out[i] = serializeValue(args[i]) end
+    return table.concat(out, ", ")
+end
+
+-- Monta `game:GetService("ReplicatedStorage").Remotes.X` a partir de GetFullName
+local function buildAccessCode(fullPath)
+    local service, rest = fullPath:match("^([^%.]+)%.?(.*)$")
+    if not service then return fullPath end
+    if rest == "" then
+        return string.format('game:GetService("%s")', service)
+    end
+    return string.format('game:GetService("%s").%s', service, rest)
+end
+
+local function makeSnippet(remote, method, args)
+    local path  = remote:GetFullName()
+    local code  = buildAccessCode(path)
+    local sArgs = serializeArgs(table.unpack(args))
+    return string.format("%s:%s(%s)", code, method, sArgs)
+end
+
+-- ==========================================
+-- 2. INTERFACE — BOLA FLUTUANTE
+-- ==========================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AmoledRemoteSpy"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
+
+if syn and syn.protect_gui then
+    syn.protect_gui(ScreenGui); ScreenGui.Parent = CoreGui
+elseif gethui then
+    ScreenGui.Parent = gethui()
+else
+    ScreenGui.Parent = CoreGui
+end
+_G.AmoledSpyGui = ScreenGui
+
+local NEON_GREEN = Color3.fromRGB(0, 255, 128)
+local NEON_RED   = Color3.fromRGB(255, 80, 80)
+local CYAN       = Color3.fromRGB(0, 220, 255)
+local ORANGE     = Color3.fromRGB(255, 180, 0)
+
+local Ball = Instance.new("TextButton")
+Ball.Name = "FloatingBall"
+Ball.Size = UDim2.new(0, 52, 0, 52)   -- alvo de toque confortável
+Ball.Position = UDim2.new(0, 24, 0, 140)
+Ball.BackgroundColor3 = Color3.fromRGB(12, 12, 16)
+Ball.BackgroundTransparency = 0.15
+Ball.Text = "⚡"
+Ball.TextColor3 = NEON_GREEN
+Ball.TextSize = 22
+Ball.Font = Enum.Font.GothamBold
+Ball.AutoButtonColor = false
+Ball.Active = true
+Ball.Parent = ScreenGui
+
+Instance.new("UICorner", Ball).CornerRadius = UDim.new(1, 0)
+local BallStroke = Instance.new("UIStroke", Ball)
+BallStroke.Color = NEON_GREEN
+BallStroke.Thickness = 1.6
+BallStroke.Transparency = 0.35
+
+-- ==========================================
+-- 3. INTERFACE — JANELA PRINCIPAL
+-- ==========================================
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 390, 0, 300)
+MainFrame.Position = UDim2.new(0.5, -195, 0.5, -150)
+MainFrame.BackgroundColor3 = Color3.fromRGB(6, 6, 9)     -- AMOLED real
+MainFrame.BackgroundTransparency = 0.15
+MainFrame.Visible = false
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+local MainStroke = Instance.new("UIStroke", MainFrame)
+MainStroke.Color = Color3.fromRGB(32, 32, 42)
+MainStroke.Thickness = 1
+
+-- ---- Top bar (arrastável) ----
+local TopBar = Instance.new("Frame")
+TopBar.Size = UDim2.new(1, 0, 0, 38)
+TopBar.BackgroundTransparency = 1
+TopBar.Parent = MainFrame
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -160, 1, 0)
+TitleLabel.Position = UDim2.new(0, 14, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "SPY // DRAGON CORE"
+TitleLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
+TitleLabel.TextSize = 13
+TitleLabel.Font = Enum.Font.Code
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TopBar
+
+-- Mini botões da header
+local function makeHeaderBtn(text, xOffset, color)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 26, 0, 26)
+    b.Position = UDim2.new(1, xOffset, 0, 6)
+    b.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    b.Text = text
+    b.TextColor3 = color or Color3.fromRGB(200, 200, 210)
+    b.TextSize = 14
+    b.Font = Enum.Font.GothamBold
+    b.AutoButtonColor = false
+    b.Parent = TopBar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+
+local PauseBtn    = makeHeaderBtn("⏸", -98, NEON_GREEN)
+local ClearBtn    = makeHeaderBtn("🗑", -68, ORANGE)
+local SaveBtn     = makeHeaderBtn("💾", -38, CYAN)
+local MinimizeBtn = makeHeaderBtn("–",  -8, Color3.fromRGB(200, 200, 210))
+
+-- ---- Linha de filtros ----
+local FilterRow = Instance.new("Frame")
+FilterRow.Size = UDim2.new(1, -16, 0, 26)
+FilterRow.Position = UDim2.new(0, 8, 0, 42)
+FilterRow.BackgroundTransparency = 1
+FilterRow.Parent = MainFrame
+
+local filterButtons = {}
+local function makeFilterBtn(label, xOffset, width)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, width, 1, 0)
+    b.Position = UDim2.new(0, xOffset, 0, 0)
+    b.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    b.Text = label
+    b.TextColor3 = Color3.fromRGB(180, 180, 190)
+    b.TextSize = 11
+    b.Font = Enum.Font.Code
+    b.AutoButtonColor = false
+    b.Parent = FilterRow
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    filterButtons[label] = b
+    return b
+end
+
+makeFilterBtn("All",           0, 60)
+makeFilterBtn("FireServer",   66, 90)
+makeFilterBtn("InvokeServer", 162, 100)
+
+-- ---- Área de logs ----
+local LogScroll = Instance.new("ScrollingFrame")
+LogScroll.Size = UDim2.new(1, -16, 1, -78)
+LogScroll.Position = UDim2.new(0, 8, 0, 72)
+LogScroll.BackgroundTransparency = 1
+LogScroll.BorderSizePixel = 0
+LogScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+LogScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+LogScroll.ScrollBarThickness = 3
+LogScroll.ScrollBarImageColor3 = NEON_GREEN
+LogScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+LogScroll.ElasticBehavior = Enum.ElasticBehavior.WhenScrollable
+LogScroll.Parent = MainFrame
+
+local ListLayout = Instance.new("UIListLayout", LogScroll)
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Padding = UDim.new(0, 6)
+
+local ListPad = Instance.new("UIPadding", LogScroll)
+ListPad.PaddingRight = UDim.new(0, 4)
+ListPad.PaddingBottom = UDim.new(0, 8)
+
+-- ==========================================
+-- 4. DRAG ROBUSTO (bola + janela)
+-- ==========================================
+local function makeDraggable(target, handle, onTap)
+    local dragging, dragStart, startPos, moved = false, nil, nil, false
+
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch
+           or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging  = true
+            moved     = false
+            dragStart = input.Position
+            startPos  = target.Position
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.Touch
+           and input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+
+        local delta = input.Position - dragStart
+        if math.abs(delta.X) > 6 or math.abs(delta.Y) > 6 then moved = true end
+
+        if moved then
+            target.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType ~= Enum.UserInputType.Touch
+           and input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+        dragging = false
+        if not moved and onTap then onTap() end
+    end)
+end
+
+-- ==========================================
+-- 5. ABRIR / FECHAR
+-- ==========================================
+local windowOpen = false
+local function setWindowOpen(v)
+    windowOpen = v
+    MainFrame.Visible = v
+    local col = v and NEON_RED or NEON_GREEN
+    Ball.TextColor3   = col
+    BallStroke.Color  = col
+end
+
+makeDraggable(Ball, Ball, function() setWindowOpen(not windowOpen) end)
+makeDraggable(MainFrame, TopBar, nil) -- janela arrasta só pela header
+
+MinimizeBtn.MouseButton1Click:Connect(function() setWindowOpen(false) end)
+
+-- ==========================================
+-- 6. RENDERIZAÇÃO DE LOG (com dedup)
+-- ==========================================
+local function passesFilter(method)
+    return State.Filter == "All" or State.Filter == method
+end
+
+local function updateCounterLabel(entry)
+    entry.counterLabel.Text = entry.count > 1 and ("x" .. entry.count) or ""
+end
+
+local function createLogEntry(method, path, snippet, signature)
+    -- Aplica filtro: mesmo filtrado, continua contando
+    local visible = passesFilter(method)
+
+    local Frame = Instance.new("Frame")
+    Frame.Size = UDim2.new(1, 0, 0, 62)
+    Frame.BackgroundColor3 = Color3.fromRGB(12, 12, 17)
+    Frame.BackgroundTransparency = 0.35
+    Frame.Visible = visible
+    Frame.Parent = LogScroll
+    Instance.new("UICorner", Frame).CornerRadius = UDim.new(0, 6)
+
+    local TypeLabel = Instance.new("TextLabel")
+    TypeLabel.Size = UDim2.new(0, 90, 0, 18)
+    TypeLabel.Position = UDim2.new(0, 8, 0, 4)
+    TypeLabel.BackgroundTransparency = 1
+    TypeLabel.Text = "[" .. method .. "]"
+    TypeLabel.TextColor3 = (method == "FireServer") and CYAN or ORANGE
+    TypeLabel.TextSize = 11
+    TypeLabel.Font = Enum.Font.Code
+    TypeLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TypeLabel.Parent = Frame
+
+    local Counter = Instance.new("TextLabel")
+    Counter.Size = UDim2.new(0, 40, 0, 18)
+    Counter.Position = UDim2.new(1, -46, 0, 4)
+    Counter.BackgroundTransparency = 1
+    Counter.Text = ""
+    Counter.TextColor3 = NEON_GREEN
+    Counter.TextSize = 11
+    Counter.Font = Enum.Font.Code
+    Counter.TextXAlignment = Enum.TextXAlignment.Right
+    Counter.Parent = Frame
+
+    local PathLabel = Instance.new("TextLabel")
+    PathLabel.Size = UDim2.new(1, -110, 0, 18)
+    PathLabel.Position = UDim2.new(0, 100, 0, 4)
+    PathLabel.BackgroundTransparency = 1
+    PathLabel.Text = path
+    PathLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+    PathLabel.TextSize = 11
+    PathLabel.Font = Enum.Font.Code
+    PathLabel.TextXAlignment = Enum.TextXAlignment.Left
+    PathLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    PathLabel.Parent = Frame
+
+    local SnippetBox = Instance.new("TextBox")
+    SnippetBox.Size = UDim2.new(1, -16, 0, 30)
+    SnippetBox.Position = UDim2.new(0, 8, 0, 26)
+    SnippetBox.BackgroundColor3 = Color3.fromRGB(4, 4, 6)
+    SnippetBox.BackgroundTransparency = 0.5
+    SnippetBox.Text = snippet
+    SnippetBox.TextColor3 = NEON_GREEN
+    SnippetBox.TextSize = 10
+    SnippetBox.Font = Enum.Font.Code
+    SnippetBox.TextXAlignment = Enum.TextXAlignment.Left
+    SnippetBox.TextYAlignment = Enum.TextYAlignment.Top
+    SnippetBox.ClearTextOnFocus = false
+    SnippetBox.TextWrapped = false
+    SnippetBox.Parent = Frame
+    Instance.new("UICorner", SnippetBox).CornerRadius = UDim.new(0, 4)
+
+    -- Clicar no snippet copia (Delta tem setclipboard)
+    SnippetBox.MouseButton1Click:Connect(function()
+        if setclipboard then
+            setclipboard(snippet)
+            SnippetBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+            task.delay(0.3, function()
+                SnippetBox.TextColor3 = NEON_GREEN
+            end)
+        end
+    end)
+
+    return Frame, Counter
+end
+
+local function pushLog(remote, method, args)
+    local path = remote:GetFullName()
+    if isNoise(path) then return end
+
+    State.TotalRaw += 1
+
+    local signature = method .. "|" .. path .. "|" .. serializeArgs(table.unpack(args))
+
+    -- Dedup
+    local cached = State.Seen[signature]
+    if cached then
+        cached.count += 1
+        cached.lastSeen = tick()
+        updateCounterLabel(cached)
+        return
+    end
+
+    -- Trava de segurança
+    if State.LogCount >= State.MaxLogs then
+        -- remove o mais antigo (FIFO)
+        local oldest = LogScroll:FindFirstChildWhichIsA("Frame")
+        if oldest then oldest:Destroy() end
+        State.LogCount -= 1
+    end
+
+    local snippet = makeSnippet(remote, method, args)
+    local frame, counter = createLogEntry(method, path, snippet, signature)
+
+    local entry = {
+        frame = frame,
+        counterLabel = counter,
+        count = 1,
+        lastSeen = tick(),
+        method = method,
+        path = path,
+        snippet = snippet,
+    }
+    State.Seen[signature] = entry
+    table.insert(State.DumpOrder, signature)
+
+    State.LogCount     += 1
+    State.TotalUnique  += 1
+end
+
+-- ==========================================
+-- 7. HOOK __namecall
+-- ==========================================
+local originalNamecall
+originalNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+
+    if not State.Paused
+       and (method == "FireServer" or method == "InvokeServer")
+       and typeof(self) == "Instance"
+       and (self:IsA("RemoteEvent") or self:IsA("RemoteFunction")) then
+        -- Throttle: só agenda renderização, não bloqueia o namecall
+        local args = table.pack(...)
+        task.spawn(function()
+            pcall(pushLog, self, method, args)
+        end)
+    end
+
+    return originalNamecall(self, ...)
+end)
+
+-- ==========================================
+-- 8. BOTÕES: PAUSAR / LIMPAR / FILTRO
+-- ==========================================
+PauseBtn.MouseButton1Click:Connect(function()
+    State.Paused = not State.Paused
+    PauseBtn.Text = State.Paused and "▶" or "⏸"
+    PauseBtn.TextColor3 = State.Paused and NEON_RED or NEON_GREEN
+    BallStroke.Transparency = State.Paused and 0.8 or 0.35
+end)
+
+ClearBtn.MouseButton1Click:Connect(function()
+    for _, child in ipairs(LogScroll:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    State.Seen = {}
+    State.DumpOrder = {}
+    State.LogCount = 0
+    State.TotalUnique = 0
+    State.TotalRaw = 0
+end)
+
+local function applyFilter()
+    for _, child in ipairs(LogScroll:GetChildren()) do
+        if child:IsA("Frame") then
+            -- O TypeLabel do frame diz o método
+            local tl = child:FindFirstChildWhichIsA("TextLabel")
+            local m = tl and tl.Text:match("%[(.-)%]")
+            child.Visible = (State.Filter == "All") or (m == State.Filter)
+        end
+    end
+    -- Reset visual dos botões de filtro
+    for label, btn in pairs(filterButtons) do
+        local on = (label == State.Filter)
+        btn.BackgroundColor3 = on and Color3.fromRGB(28, 28, 36) or Color3.fromRGB(14, 14, 18)
+        btn.TextColor3 = on and NEON_GREEN or Color3.fromRGB(180, 180, 190)
+    end
+end
+
+for label, btn in pairs(filterButtons) do
+    btn.MouseButton1Click:Connect(function()
+        State.Filter = label
+        applyFilter()
+    end)
+end
+applyFilter()
+
+-- ==========================================
+-- 9. SALVAR .TXT ESTRUTURADO
+-- ==========================================
+SaveBtn.MouseButton1Click:Connect(function()
+    if not writefile then
+        SaveBtn.TextColor3 = NEON_RED
+        task.delay(0.5, function() SaveBtn.TextColor3 = CYAN end)
+        return
+    end
+
+    local lines = {}
+    local ts = os.date("%Y-%m-%d %H:%M:%S")
+
+    table.insert(lines, "==================================================")
+    table.insert(lines, " DRAGON CORE // REMOTE SPY DUMP")
+    table.insert(lines, " Gerado em: " .. ts)
+    table.insert(lines, string.format(" Únicos: %d | Total interceptado: %d", State.TotalUnique, State.TotalRaw))
+    table.insert(lines, "==================================================")
+    table.insert(lines, "")
+
+    -- Agrupa por categoria
+    local categories = {
+        FireServer   = {},
+        InvokeServer = {},
+    }
+
+    for _, sig in ipairs(State.DumpOrder) do
+        local e = State.Seen[sig]
+        if e then
+            table.insert(categories[e.method], e)
+        end
+    end
+
+    for _, method in ipairs({ "FireServer", "InvokeServer" }) do
+        local list = categories[method]
+        table.insert(lines, "--------------------------------------------------")
+        table.insert(lines, " [" .. method .. "]  (" .. #list .. " únicos)")
+        table.insert(lines, "--------------------------------------------------")
+        table.insert(lines, "")
+
+        for i, e in ipairs(list) do
+            table.insert(lines, string.format("[%03d] %s   (chamado %dx)", i, e.path, e.count))
+            table.insert(lines, "      Call:")
+            table.insert(lines, "      " .. e.snippet)
+            table.insert(lines, "")
+        end
+    end
+
+    local content = table.concat(lines, "\n")
+    local filename = "RemoteSpy_Dump_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
+
+    local ok = pcall(function() writefile(filename, content) end)
+    SaveBtn.TextColor3 = ok and NEON_GREEN or NEON_RED
+    task.delay(0.7, function() SaveBtn.TextColor3 = CYAN end)
+end)
+
+-- ==========================================
+-- 10. BOOT
+-- ==========================================
+print("[Amoled Spy v2] Hook ativo. Total cache: " .. State.MaxLogs .. " entradas.")
