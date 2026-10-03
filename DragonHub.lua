@@ -17,18 +17,26 @@ end
 -- [REMOTES]
 local KnitSVC
 safe(function()
-    local Knit = RS.Packages._Index["sleitnick_knit@1.4.7"].knit
-    KnitSVC = Knit.Services
+    local Knit = RS:FindFirstChild("Packages") 
+        and RS.Packages:FindFirstChild("_Index") 
+        and RS.Packages._Index:FindFirstChild("sleitnick_knit@1.4.7") 
+        and RS.Packages._Index["sleitnick_knit@1.4.7"].knit
+    
+    if Knit and Knit:FindFirstChild("Services") then
+        KnitSVC = Knit.Services
+    elseif rawget(getgenv(), "KnitServices") then
+        KnitSVC = getgenv().KnitServices
+    end
 end)
 
-local ExecuteSkill         = KnitSVC and KnitSVC.SkillManagerV2 and KnitSVC.SkillManagerV2.RE.ExecuteSkill
-local ExecuteSkill_Special = KnitSVC and KnitSVC.SkillManagerV2 and KnitSVC.SkillManagerV2.RE.ExecuteSkill_Special
-local RequestRebirth       = KnitSVC and KnitSVC.PlayerLevelService and KnitSVC.PlayerLevelService.RF.RequestRebirth
-local PromptRemote         = KnitSVC and KnitSVC.PromptService and KnitSVC.PromptService.RE.Prompt
-local SuperFlight          = KnitSVC and KnitSVC.FlightService and KnitSVC.FlightService.RE.SuperFlight
-local SelectMode           = KnitSVC and KnitSVC.ModeTransformService and KnitSVC.ModeTransformService.RE.SelectMode
-local ToolbarRemote        = KnitSVC and KnitSVC.ToolService and KnitSVC.ToolService.RE.UpdatePlayerToolbarSelection
-local LockedOnRemote       = KnitSVC and KnitSVC.SkillManager and KnitSVC.SkillManager.RE and KnitSVC.SkillManager.RE.LockedOnChanged
+local ExecuteSkill         = KnitSVC and KnitSVC:FindFirstChild("SkillManagerV2") and KnitSVC.SkillManagerV2.RE and KnitSVC.SkillManagerV2.RE.ExecuteSkill
+local ExecuteSkill_Special = KnitSVC and KnitSVC:FindFirstChild("SkillManagerV2") and KnitSVC.SkillManagerV2.RE and KnitSVC.SkillManagerV2.RE.ExecuteSkill_Special
+local RequestRebirth       = KnitSVC and KnitSVC:FindFirstChild("PlayerLevelService") and KnitSVC.PlayerLevelService.RF and KnitSVC.PlayerLevelService.RF.RequestRebirth
+local PromptRemote         = KnitSVC and KnitSVC:FindFirstChild("PromptService") and KnitSVC.PromptService.RE and KnitSVC.PromptService.RE.Prompt
+local SuperFlight          = KnitSVC and KnitSVC:FindFirstChild("FlightService") and KnitSVC.FlightService.RE and KnitSVC.FlightService.RE.SuperFlight
+local SelectMode           = KnitSVC and KnitSVC:FindFirstChild("ModeTransformService") and KnitSVC.ModeTransformService.RE and KnitSVC.ModeTransformService.RE.SelectMode
+local ToolbarRemote        = KnitSVC and KnitSVC:FindFirstChild("ToolService") and KnitSVC.ToolService.RE and KnitSVC.ToolService.RE.UpdatePlayerToolbarSelection
+local LockedOnRemote       = KnitSVC and KnitSVC:FindFirstChild("SkillManager") and KnitSVC.SkillManager.RE and KnitSVC.SkillManager.RE.LockedOnChanged
 local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
 local Ativo = true
