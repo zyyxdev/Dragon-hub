@@ -32,6 +32,7 @@ local LockedOnRemote       = KnitSVC and KnitSVC.SkillManager and KnitSVC.SkillM
 local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
 local Ativo = true
+local matarTudo  -- [PATCH KILL] forward declaration
 
 -- [CONFIG]
 local Config = {
@@ -190,7 +191,6 @@ local function atacar(alvo)
     local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    -- Se marcado pra usar VIM direto, pula FireServer
     if not Config.UsarM1VIM and SkillRemote then
         local mhrp = alvo.HumanoidRootPart
         local cframe = hrp.CFrame
@@ -206,7 +206,6 @@ local function atacar(alvo)
         return
     end
 
-    -- VIM: clique virtual no centro da tela
     local cam = workspace.CurrentCamera
     if cam then
         local vp = cam.ViewportSize
@@ -390,17 +389,25 @@ local function expandirHitbox()
     end
 end
 
--- [PATCH A+] AutoCollect histerese + cooldown por item + global
+-- [AUTOCOLLECT] PATCH A+: histerese + cooldown por item + global
 local COLETA_PARAR = 5
 local COLETA_TIMEOUT = 10
 local COLETA_CD_ITEM = 8
-local COLETA_CD_GLOBAL = 1.5
 
+local coletando = false
 local _coletaAlvo = nil
 local _coletaInicio = 0
 local _coletaUltimoDrop = nil
 local _coletaUltimaGlobal = 0
 local _coletaIgnorar = setmetatable({}, {__mode = "k"})
+
+local function extrairInfo(item)
+    local id = tonumber(item.Name:match("ItemDrop_(%d+)")) or 0
+    local nome = item.Name
+    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
+    if sv and sv:IsA("StringValue") then nome = sv.Value end
+    return id, nome
+end
 
 local function _dropBase(drop)
     if not drop or not drop.Parent then return nil end
@@ -428,16 +435,8 @@ end
 local function tentarColetar()
     if coletando then return end
     if not Config.AutoCollect then _resetColeta() return end
+
     local agora = os.clock()
-    if agora - _coletaUltimaGlobal < COLETA_CD_GLOBAL then return end
-
-    local c = plr.Character
-    if not c then _resetColeta() return end
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if not hrp then _resetColeta() return end
-
-    local ps = WS:FindFirstChild("PartStorage")
-    if not ps then return end
 
     if _coletaAlvo and (not _coletaAlvo.Parent or _coletaAlvo == _coletaUltimoDrop) then
         _resetColeta()
@@ -446,6 +445,16 @@ local function tentarColetar()
         _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
         _resetColeta()
     end
+
+    if not _coletaAlvo and (agora - _coletaUltimaGlobal < (Config.ColetaCooldown or 3)) then return end
+
+    local c = plr.Character
+    if not c then _resetColeta() return end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if not hrp then _resetColeta() return end
+
+    local ps = WS:FindFirstChild("PartStorage")
+    if not ps then return end
 
     if not _coletaAlvo then
         local melhor, melhorD = nil, math.huge
@@ -515,6 +524,7 @@ local function tentarColetar()
         voarPara(base.Position, Config.FlySpeed * 0.3)
     end
 end
+
 -- [ESP GUI]
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
@@ -1088,7 +1098,7 @@ criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
     end
 end)
 
--- [ABA COLLECT] PATCH 6: labels simplificados
+-- [ABA COLLECT]
 local collectTab = criarAba("collect", "💎 Collect")
 criarSecao(collectTab, "Auto Coletar")
 criarToggle(collectTab, "Auto Coletar", false, function(v) Config.AutoCollect = v end)
@@ -1203,6 +1213,7 @@ criarBotao(trackerTab, "✈️ Ir para o boss", function()
     if not achou then warn("[DBH] Boss '"..nome.."' não encontrado") end
 end)
 
+-- [PATCH T] tracker: limpa estado quando boss respawna + primeira detecção
 task.spawn(function()
     while Ativo do
         task.wait(1)
@@ -1223,6 +1234,11 @@ task.spawn(function()
                     end
                 end
                 _G.bossEstado = _G.bossEstado or {}
+                -- [PATCH T] boss respawnou -> limpa timer
+                for nome in pairs(_G.bossEstado) do
+                    if vivos[nome] then _G.bossEstado[nome] = nil end
+                end
+                -- [PATCH T] boss visto sumiu -> inicia timer
                 for nome in pairs(_G.bossVistos or {}) do
                     if not vivos[nome] and not _G.bossEstado[nome] then
                         local tempo = BossTimers[nome] or BossTimers._default
@@ -1257,6 +1273,148 @@ task.spawn(function()
     end
 end)
 
+-- [DUMP DUNGEON] hook isolado, install/uninstall sob demanda
+local _dungeonHook = nil
+local _dungeonBuf = {}
+local _dungeonAtivo = false
+local DUNGEON_MAX = 400
+local DUNGEON_PATHS = {
+    "Dungeon", "dungeon", "Portal", "Teleport",
+    "NextArea", "NextFloor", "StartDungeon", "EnterDungeon",
+    "Lobby", "Match", "Queue", "StartMatch", "EnterMatch",
+}
+
+local function _dungeonMatch(m)
+    for _, k in ipairs(DUNGEON_PATHS) do
+        if m:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+local function _dungeonSer(v, depth)
+    depth = depth or 0
+    if depth > 3 then return "<...>" end
+    local t = type(v)
+    if t == "string" then return string.format("%q", v) end
+    if t == "number" or t == "boolean" or t == "nil" then return tostring(v) end
+    if t == "Instance" then return v:GetFullName() end
+    if t == "Vector3" then return string.format("V3(%.1f,%.1f,%.1f)", v.X, v.Y, v.Z) end
+    if t == "CFrame" then
+        local p = v.Position
+        return string.format("CF(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
+    end
+    if t == "table" then
+        local parts, n = {}, 0
+        for k, vv in pairs(v) do
+            n = n + 1
+            if n > 10 then parts[#parts+1] = "..." break end
+            parts[#parts+1] = tostring(k) .. "=" .. _dungeonSer(vv, depth+1)
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    return "<" .. t .. ">"
+end
+
+local function dungeonHookStart()
+    if _dungeonHook then return end
+    if not hookmetamethod then warn("[DUMP] sem hookmetamethod"); return end
+    local mt = getrawmetatable(game)
+    if not mt then warn("[DUMP] sem metatable"); return end
+    local old = mt.__namecall
+    setreadonly(mt, false)
+    _dungeonHook = function(self, ...)
+        local m = getnamecallmethod()
+        if _dungeonAtivo and _dungeonMatch(m) then
+            local n = select("#", ...)
+            local out = {}
+            for i = 1, n do out[i] = _dungeonSer((select(i, ...))) end
+            if #_dungeonBuf >= DUNGEON_MAX then table.remove(_dungeonBuf, 1) end
+            _dungeonBuf[#_dungeonBuf+1] = string.format("[%s] %s(%s)",
+                os.date("%H:%M:%S"), m, table.concat(out, ", "))
+        end
+        return old(self, ...)
+    end
+    mt.__namecall = _dungeonHook
+    setreadonly(mt, true)
+    _dungeonAtivo = true
+    print("[DUMP] hook dungeon ON")
+end
+
+local function dungeonHookStop()
+    if not _dungeonHook then return end
+    _dungeonAtivo = false
+    pcall(function()
+        local mt = getrawmetatable(game)
+        if not mt then return end
+        setreadonly(mt, false)
+        mt.__namecall = _dungeonHook
+        setreadonly(mt, true)
+    end)
+    _dungeonHook = nil
+    print("[DUMP] hook dungeon OFF")
+end
+
+local function dungeonHookDump()
+    dungeonHookStop()
+    if #_dungeonBuf == 0 then print("[DUMP] vazio"); return end
+    local txt = table.concat(_dungeonBuf, "\n")
+    if writefile then
+        local fn = "Dungeon_dump_" .. os.time() .. ".txt"
+        writefile(fn, txt)
+        print("[DUMP] salvo: " .. fn)
+    else
+        print(txt)
+    end
+    _dungeonBuf = {}
+end
+
+-- [PATCH KILL] cleanup completo
+matarTudo = function()
+    Ativo = false
+    for k, v in pairs(Config) do
+        if type(v) == "boolean" then Config[k] = false end
+    end
+
+    pcall(function() dungeonHookStop() end)
+    pcall(function() pararRegen() end)
+    pcall(function() pararLock() end)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+
+    if vooBv then pcall(function() vooBv:Destroy() end); vooBv = nil end
+    if vooBg then pcall(function() vooBg:Destroy() end); vooBg = nil end
+
+    local c = plr.Character
+    if c then
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then pcall(function() p.CanCollide = true end) end
+        end
+    end
+
+    local wm = WS:FindFirstChild("World Mobs")
+    if wm then
+        for _, pasta in ipairs(wm:GetChildren()) do
+            for _, m in ipairs(pasta:GetChildren()) do
+                local hrp = m.FindFirstChild and m:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local orig = hrp:FindFirstChild("__OrigSize")
+                    if orig then
+                        pcall(function() hrp.Size = orig.Value end)
+                        orig:Destroy()
+                    end
+                end
+            end
+        end
+    end
+
+    for m, bb in pairs(espCache) do pcall(function() bb:Destroy() end) end
+    for i, bb in pairs(dropESP) do pcall(function() bb:Destroy() end) end
+
+    pcall(function() gui:Destroy() end)
+    pcall(function() espGui:Destroy() end)
+    print("[DBH] kill switch executado")
+end
+
 -- [ABA CONFIG]
 local configTab = criarAba("config", "⚙ Config")
 criarSecao(configTab, "Movimento")
@@ -1268,18 +1426,29 @@ criarSlider(configTab, "Skill Delay (x0.1s)", 5, 50, 15, 5, function(v) Config.S
 criarSecao(configTab, "Sobrevivência")
 criarSlider(configTab, "Ki pra Regen (%)", 10, 50, 30, 5, function(v) Config.KiMin = v / 100 end)
 criarSlider(configTab, "Altura Segura", 40, 300, 100, 10, function(v) Config.SafeHeight = v end)
+
+-- [DUMP DUNGEON] botões
+criarSecao(configTab, "Dump Dungeon")
+criarBotao(configTab, "▶️ START DUMP", function()
+    dungeonHookStart()
+end)
+criarBotao(configTab, "⏹ STOP + SALVAR", function()
+    dungeonHookDump()
+end)
+criarBotao(configTab, "❌ CANCELAR (sem salvar)", function()
+    _dungeonBuf = {}
+    dungeonHookStop()
+end)
+
 criarSecao(configTab, "Sistema")
 criarBotao(configTab, "🔴 MATAR SCRIPT", function()
-    Ativo = false
-    for k, v in pairs(Config) do if type(v) == "boolean" then Config[k] = false end end
-    gui:Destroy()
-    espGui:Destroy()
+    matarTudo()
 end)
 
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.2", 80)
+criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv5.3", 80)
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
 
 task.spawn(function()
@@ -1330,13 +1499,10 @@ btnMin.MouseButton1Click:Connect(function()
 end)
 
 btnKill.MouseButton1Click:Connect(function()
-    Ativo = false
-    for k, v in pairs(Config) do if type(v) == "boolean" then Config[k] = false end end
-    gui:Destroy()
-    espGui:Destroy()
+    matarTudo()
 end)
 
--- [LOOP FARM] PATCH 4: força aproximação até boss
+-- [LOOP FARM]
 task.spawn(function()
     while Ativo and task.wait(0.08) do
         if farmLigado() and not emRegen then
@@ -1401,12 +1567,14 @@ task.spawn(function()
     end
 end)
 
--- [AUTOCOLLECT]
+-- [AUTOCOLLECT] loop mais responsivo (PATCH A+)
 task.spawn(function()
     while Ativo do
-        task.wait(1)
+        task.wait(0.15)
         if Config.AutoCollect and not farmLigado() then
             tentarColetar()
+        elseif not Config.AutoCollect then
+            _resetColeta()
         end
     end
 end)
@@ -1451,7 +1619,7 @@ task.spawn(function()
     end
 end)
 
--- [TRANSFORM] PATCH 3: usa transformação equipada
+-- [TRANSFORM]
 local function getTransformEquipada()
     local char = plr.Character
     if not char then return nil end
@@ -1526,4 +1694,4 @@ task.spawn(function()
     end
 end)
 
-print("[DBH] ✅ v5.2 Carregado")
+print("[DBH] ✅ v5.3 Carregado")
