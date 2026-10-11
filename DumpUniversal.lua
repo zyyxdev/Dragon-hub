@@ -1,4 +1,4 @@
-print("[DUMPER v6.4] Iniciando...")
+print("[DUMPER v6.5] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -24,10 +24,12 @@ local State = {
     unicos = {},
     nomesCache = {},
     contadorBruto = 0,
+    _silencioso = false,  -- [PATCH D-1] modo silencioso
     filtros = {
         dungeon = true, skills = false, drops = false,
         bossEvent = false, swordOrb = false, toolbar = false,
         rebirth = false, ruido = false,
+        raw = false,  -- [PATCH D-1] modo raw
     },
     catAtiva = "captura",
     filtroLogCat = "todos",
@@ -38,6 +40,15 @@ local _hookFireInst = nil
 local ultimoPath = {}
 local RATE_LIMIT = 0.25
 local MAX_UNICOS = 2000
+
+-- [PATCH D-1] rate-limit dinâmico + modo raw
+local MODO_RAW = false
+local _ultimoPathArgs = {}
+
+local function _chaveRateLimit(path, args)
+    if not MODO_RAW then return path end
+    return path .. "||" .. tostring(args)
+end
 
 -- ═══════════════════════════════════════════════
 -- UTIL
@@ -153,9 +164,24 @@ local function ser(v, d)
     return "["..t.."] "..tostring(v)
 end
 
+-- [PATCH D-1] addTrafego com modo raw + silencioso
 local function addTrafego(cat, path, args)
     State.contadorBruto = State.contadorBruto + 1
     if cat == "EVENT" and (args == "" or args == nil) then return end
+
+    if MODO_RAW then
+        local entry = {
+            cat = cat, path = path, args = args, count = 1,
+            primeiro = os.date("%H:%M:%S"), ultimo = os.date("%H:%M:%S"),
+        }
+        table.insert(State.trfBuf, entry)
+        if #State.trfBuf > MAX_UNICOS then table.remove(State.trfBuf, 1) end
+        if not State._silencioso then
+            print(string.format("[RAW/%s] %s | %s", cat, path, args))
+        end
+        return
+    end
+
     local chave = cat.."|"..path.."|"..args
     if State.unicos[chave] then
         State.unicos[chave].count = State.unicos[chave].count + 1
@@ -168,7 +194,9 @@ local function addTrafego(cat, path, args)
     }
     State.unicos[chave] = entry
     table.insert(State.trfBuf, entry)
-    print(string.format("[CAP/%s] %s | %s", cat, path, args))
+    if not State._silencioso then
+        print(string.format("[CAP/%s] %s | %s", cat, path, args))
+    end
     if #State.trfBuf > MAX_UNICOS then
         local rem = table.remove(State.trfBuf, 1)
         for k, v in pairs(State.unicos) do
@@ -189,8 +217,12 @@ local function processarChamada(self, ...)
     if ehRuido(path) then return end
 
     local agora = os.clock()
-    if ultimoPath[path] and (agora - ultimoPath[path]) < RATE_LIMIT then return end
-    ultimoPath[path] = agora
+
+    -- [PATCH D-1] rate-limit dinâmico
+    local chaveRL = _chaveRateLimit(path, table.concat(args, "|"))
+    local rl = MODO_RAW and 0.02 or RATE_LIMIT
+    if _ultimoPathArgs[chaveRL] and (agora - _ultimoPathArgs[chaveRL]) < rl then return end
+    _ultimoPathArgs[chaveRL] = agora
 
     local cat = classificar(path)
     local aceito = false
@@ -214,15 +246,17 @@ local function processarChamada(self, ...)
 end
 
 -- ═══════════════════════════════════════════════
--- HOOK LAZY (instala só ao capturar)
+-- HOOK LAZY (PATCH D-2: install/remove robusto)
 -- ═══════════════════════════════════════════════
 local function instalarHook()
     if State.hookAtivo then return end
 
-    if hookmetamethod and getnamecallmethod then
-        local ok = pcall(function()
-            _nomecallOriginal = hookmetamethod(game, "__namecall", function(self, ...)
-                -- Checa captura ANTES de qualquer trabalho
+    if hookmetamethod and getnamecallmethod and getrawmetatable then
+        local mt = getrawmetatable(game)
+        if mt then
+            _nomecallOriginal = mt.__namecall
+            setreadonly(mt, false)
+            mt.__namecall = function(self, ...)
                 if not State.capturando then
                     return _nomecallOriginal(self, ...)
                 end
@@ -231,17 +265,17 @@ local function instalarHook()
                     pcall(processarChamada, self, ...)
                 end
                 return _nomecallOriginal(self, ...)
-            end)
-        end)
-        if ok and _nomecallOriginal then
+            end
+            setreadonly(mt, true)
+
             State.hookAtivo = true
-            State.hookMetodo = "hookmetamethod"
-            log("SUCCESS", "✅ Hook ativo")
+            State.hookMetodo = "hookmetamethod-mt"
+            log("SUCCESS", "✅ Hook ativo (mt)")
             return
         end
     end
 
-    -- Fallback: hookfunction
+    -- Fallback: hookfunction em SkillRemote
     if hookfunction then
         local rem = RS:FindFirstChild("Remotes")
         local alvo = rem and rem:FindFirstChild("SkillRemote")
@@ -266,12 +300,19 @@ local function instalarHook()
 end
 
 local function removerHook()
-    if _nomecallOriginal and hookmetamethod then
-        pcall(function() hookmetamethod(game, "__namecall", _nomecallOriginal) end)
-        _nomecallOriginal = nil
+    if _nomecallOriginal and getrawmetatable then
+        pcall(function()
+            local mt = getrawmetatable(game)
+            if not mt then return end
+            setreadonly(mt, false)
+            mt.__namecall = _nomecallOriginal
+            setreadonly(mt, true)
+        end)
     end
+    _nomecallOriginal = nil
     _hookFireInst = nil
     State.hookAtivo = false
+    State.hookMetodo = "nenhum"
 end
 
 -- ═══════════════════════════════════════════════
@@ -284,8 +325,35 @@ local function diagnostico()
 end
 
 -- ═══════════════════════════════════════════════
--- SCANNER (só roda com captura ativa)
+-- SCANNER (PATCH D-3: dungeon recursivo com cap)
 -- ═══════════════════════════════════════════════
+local _dungeonPathsEncontrados = {}
+
+local function _varrerDungeon(inst, path, depth)
+    if depth > 4 then return end
+    local ok, ch = pcall(function() return inst:GetChildren() end)
+    if not ok then return end
+    for _, c in ipairs(ch) do
+        local nm = c.Name:lower()
+        if nm:find("dungeon") or nm:find("portal") or nm:find("gate")
+        or nm:find("entrance") or nm:find("nextarea") or nm:find("nextfloor") then
+            if not _dungeonPathsEncontrados[c] then
+                _dungeonPathsEncontrados[c] = true
+                local pos
+                if c:IsA("BasePart") then pos = c.Position
+                elseif c.PrimaryPart then pos = c.PrimaryPart.Position end
+                if pos then
+                    addTrafego("DUNGEON", "WS."..path.."."..c.Name,
+                        string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
+                end
+            end
+        end
+        if c:IsA("Folder") or c:IsA("Model") then
+            _varrerDungeon(c, path.."."..c.Name, depth + 1)
+        end
+    end
+end
+
 task.spawn(function()
     local conhecidos = {}
     while true do
@@ -327,20 +395,9 @@ task.spawn(function()
                 end
             end
 
+            -- [PATCH D-3] dungeon scan recursivo
             if State.filtros.dungeon then
-                for _, obj in ipairs(WS:GetChildren()) do
-                    local nm = obj.Name:lower()
-                    if (nm:find("dungeon") or nm:find("portal") or nm:find("gate"))
-                    and not conhecidos[obj] then
-                        conhecidos[obj] = true
-                        local pos = obj:IsA("BasePart") and obj.Position
-                            or (obj.PrimaryPart and obj.PrimaryPart.Position)
-                        if pos then
-                            addTrafego("DUNGEON", "WS."..obj.Name,
-                                string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
-                        end
-                    end
-                end
+                pcall(function() _varrerDungeon(WS, "WS", 0) end)
             end
         end
     end
@@ -388,7 +445,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v6.4 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v6.5 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -398,6 +455,7 @@ local function salvarArquivo()
     add("│ Data:         "..os.date("%Y-%m-%d %H:%M:%S"))
     add("│ Sessão:       "..State.sessao)
     add("│ Hook:         "..State.hookMetodo)
+    add("│ Modo:         "..(MODO_RAW and "RAW (sequencial)" or "dedup"))
     add("│ Bruto:        "..State.contadorBruto.." chamadas")
     add("│ Únicos:       "..#State.trfBuf.." entradas")
     add("└──────────────────────────────────────────────────────")
@@ -542,7 +600,6 @@ mStroke.Color = T.border
 mStroke.Thickness = 1
 mStroke.Transparency = 0.4
 
--- HOME BAR
 local homeBar = Instance.new("TextButton")
 homeBar.Size = UDim2.new(0, 160, 0, 26)
 homeBar.Position = UDim2.new(0.5, -80, 1, -34)
@@ -586,7 +643,6 @@ homeBar.MouseButton1Click:Connect(safeUI(function()
     main.Visible = not main.Visible
 end))
 
--- HEADER
 local header = Instance.new("Frame")
 header.Size = UDim2.new(1, 0, 0, 42)
 header.BackgroundTransparency = 1
@@ -596,7 +652,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER"
+titulo.Text = "🐉  DUMPER v6.5"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -648,7 +704,6 @@ btnKill.AutoButtonColor = false
 btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 6)
 
--- SIDEBAR
 local sidebar = Instance.new("Frame")
 sidebar.Size = UDim2.new(0, 118, 1, -78)
 sidebar.Position = UDim2.new(0, 12, 0, 50)
@@ -722,7 +777,6 @@ local function criarItemSidebar(id, icone, nome, subtituloFn)
     return btn
 end
 
--- CONTEÚDO
 local content = Instance.new("Frame")
 content.Size = UDim2.new(1, -142, 1, -78)
 content.Position = UDim2.new(0, 130, 0, 50)
@@ -732,7 +786,6 @@ content.BorderSizePixel = 0
 content.Parent = main
 Instance.new("UICorner", content).CornerRadius = UDim.new(0, 10)
 
--- CAPTURA
 local painelCaptura = Instance.new("Frame")
 painelCaptura.Size = UDim2.new(1, 0, 1, 0)
 painelCaptura.BackgroundTransparency = 1
@@ -780,9 +833,29 @@ hint.TextWrapped = true
 hint.TextXAlignment = Enum.TextXAlignment.Left
 hint.Parent = painelCaptura
 
+-- [PATCH D-4] botão modo silencioso
+local btnSilencioso = Instance.new("TextButton")
+btnSilencioso.Size = UDim2.new(1, -24, 0, 30)
+btnSilencioso.Position = UDim2.new(0, 12, 0, 148)
+btnSilencioso.BackgroundColor3 = T.elev
+btnSilencioso.Text = "🔇  Modo silencioso"
+btnSilencioso.TextColor3 = T.text
+btnSilencioso.Font = Enum.Font.GothamBold
+btnSilencioso.TextSize = 10
+btnSilencioso.BorderSizePixel = 0
+btnSilencioso.AutoButtonColor = false
+btnSilencioso.Parent = painelCaptura
+Instance.new("UICorner", btnSilencioso).CornerRadius = UDim.new(0, 8)
+btnSilencioso.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
+    State._silencioso = not State._silencioso
+    btnSilencioso.Text = State._silencioso and "🔊  Modo verboso" or "🔇  Modo silencioso"
+    btnSilencioso.TextColor3 = State._silencioso and T.warn or T.text
+end))
+
 local feedTitulo = Instance.new("TextLabel")
 feedTitulo.Size = UDim2.new(1, -24, 0, 20)
-feedTitulo.Position = UDim2.new(0, 12, 0, 148)
+feedTitulo.Position = UDim2.new(0, 12, 0, 184)
 feedTitulo.BackgroundTransparency = 1
 feedTitulo.Text = "FLUXO RECENTE"
 feedTitulo.TextColor3 = T.textDim
@@ -792,8 +865,8 @@ feedTitulo.TextXAlignment = Enum.TextXAlignment.Left
 feedTitulo.Parent = painelCaptura
 
 local feedScroll = Instance.new("ScrollingFrame")
-feedScroll.Size = UDim2.new(1, -24, 1, -180)
-feedScroll.Position = UDim2.new(0, 12, 0, 172)
+feedScroll.Size = UDim2.new(1, -24, 1, -216)
+feedScroll.Position = UDim2.new(0, 12, 0, 208)
 feedScroll.BackgroundColor3 = T.bg
 feedScroll.BackgroundTransparency = 0.5
 feedScroll.BorderSizePixel = 0
@@ -820,7 +893,6 @@ feedText.TextWrapped = true
 feedText.Text = ""
 feedText.Parent = feedScroll
 
--- FILTROS
 local painelFiltros = Instance.new("Frame")
 painelFiltros.Size = UDim2.new(1, 0, 1, 0)
 painelFiltros.BackgroundTransparency = 1
@@ -895,6 +967,8 @@ local function criarFiltro(icone, nome, descricao, key)
         local ativo = State.filtros[key]
         f.BackgroundColor3 = ativo and T.elevHover or T.elev
         dot.BackgroundColor3 = ativo and T.accent or T.textMuted
+        -- [PATCH D-1] sincroniza MODO_RAW
+        if key == "raw" then MODO_RAW = ativo end
         if atualizarSidebar then atualizarSidebar() end
     end))
 end
@@ -906,9 +980,9 @@ criarFiltro("👹", "Bosses", "Event Mobs spawns", "bossEvent")
 criarFiltro("🔮", "Armas / Orbs", "Weapon e Orb remotes", "swordOrb")
 criarFiltro("🎒", "Toolbar", "Troca de slots", "toolbar")
 criarFiltro("🔄", "Rebirth", "Prompt + RequestRebirth", "rebirth")
+criarFiltro("⚡", "Modo RAW", "Loga toda chamada (dump dungeon)", "raw")
 criarFiltro("🔊", "Ruído", "⚠ Loga TUDO (pode lagar)", "ruido")
 
--- LOGS
 local painelLogs = Instance.new("Frame")
 painelLogs.Size = UDim2.new(1, 0, 1, 0)
 painelLogs.BackgroundTransparency = 1
@@ -987,7 +1061,6 @@ logsText.TextWrapped = true
 logsText.Text = ""
 logsText.Parent = logsScroll
 
--- ARQUIVO
 local painelArquivo = Instance.new("Frame")
 painelArquivo.Size = UDim2.new(1, 0, 1, 0)
 painelArquivo.BackgroundTransparency = 1
@@ -1066,7 +1139,6 @@ mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego capturado", T.warn, T
     log("INFO", "Buffers limpos")
 end)
 
--- DIAG
 local painelDiag = Instance.new("Frame")
 painelDiag.Size = UDim2.new(1, 0, 1, 0)
 painelDiag.BackgroundTransparency = 1
@@ -1117,7 +1189,6 @@ btnTeste.AutoButtonColor = false
 btnTeste.Parent = painelDiag
 Instance.new("UICorner", btnTeste).CornerRadius = UDim.new(0, 8)
 
--- RODAPÉ
 local footer = Instance.new("Frame")
 footer.Size = UDim2.new(1, -24, 0, 26)
 footer.Position = UDim2.new(0, 12, 1, -34)
@@ -1134,7 +1205,6 @@ footTxt.TextSize = 10
 footTxt.TextXAlignment = Enum.TextXAlignment.Left
 footTxt.Parent = footer
 
--- SIDEBAR ITENS
 criarItemSidebar("captura", "📡", "Captura", function()
     if State.capturando then return "REC • "..State.contadorBruto end
     return State.contadorBruto > 0 and (State.contadorBruto.." bruto") or "parado"
@@ -1214,7 +1284,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v6.4] Encerrado")
+    print("[DUMPER v6.5] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1226,6 +1296,8 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     table.insert(info, "hookfunction:     "..tostring(hookfunction ~= nil))
     table.insert(info, "Hook instalado:   "..tostring(State.hookAtivo))
     table.insert(info, "Método:           "..State.hookMetodo)
+    table.insert(info, "Modo RAW:         "..tostring(MODO_RAW))
+    table.insert(info, "Silencioso:       "..tostring(State._silencioso))
     table.insert(info, "PlaceId:          "..game.PlaceId)
     diagText.Text = table.concat(info, "\n")
     diagnostico()
@@ -1248,10 +1320,9 @@ btnTeste.MouseButton1Click:Connect(safeUI(function()
         })
     end)
     task.wait(0.3)
-    print("[DUMPER] Se não apareceu [CAP/M1], hook falhou.")
+    print("[DUMPER] Se não apareceu [CAP/M1] ou [RAW/M1], hook falhou.")
 end))
 
--- DRAG
 local dragging, dStart, sStart = false, nil, nil
 header.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
@@ -1278,7 +1349,6 @@ UIS.InputEnded:Connect(function(i)
     end
 end)
 
--- LOOP
 local _ultimoCount = -1
 local _ultimaCat = nil
 local _ultimoSidebar = -1
@@ -1286,8 +1356,9 @@ local _ultimoSidebar = -1
 task.spawn(function()
     while gui.Parent do
         task.wait(1.2)
-        footTxt.Text = string.format("%d bruto • %d únicos • %s",
-            State.contadorBruto, #State.trfBuf, State.hookMetodo)
+        footTxt.Text = string.format("%d bruto • %d únicos • %s%s",
+            State.contadorBruto, #State.trfBuf, State.hookMetodo,
+            MODO_RAW and " • RAW" or "")
 
         if #State.trfBuf == _ultimoCount and State.catAtiva == _ultimaCat then
             if State.contadorBruto ~= _ultimoSidebar then
@@ -1340,4 +1411,4 @@ end)
 atualizarSidebar()
 atualizarConteudo()
 
-print("[DUMPER v6.4] ✅ Pronto — hook só instala ao capturar")
+print("[DUMPER v6.5] ✅ Pronto — hook só instala ao capturar")
