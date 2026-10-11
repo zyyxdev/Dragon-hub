@@ -1,145 +1,168 @@
-print("[DUMPER v6.6] Iniciando...")
+print("[DUMPER v7.0] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
 local UIS = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local HapticService = game:GetService("HapticService")
 local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
 local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local State = {
-    sessao = "Sessao",
-    capturando = false,
-    hookAtivo = false,
-    hookMetodo = "nenhum",
-    trfBuf = {},
-    arquitetural = {},
-    unicos = {},
-    nomesCache = setmetatable({}, {__mode = "k"}),
-    contadorBruto = 0,
-    _silencioso = false,
-    filtros = {
-        dungeon = true, skills = false, drops = false,
-        bossEvent = false, swordOrb = false, toolbar = false,
-        rebirth = false, ruido = false,
-        raw = false,
-    },
-    catAtiva = "captura",
-    filtroLogCat = "todos",
+local MAX_BUFFER = 800
+
+local CATEGORIAS = {
+    Dungeon = {"Dungeon", "Portal", "NextArea", "Wave", "Stage", "Lobby", "Match", "Queue", "Floor"},
+    Skills  = {"ExecuteSkill", "SkillRemote", "LockedOn"},
+    Drops   = {"ClaimItem", "WishService", "ItemDropService", "Wish"},
+    Bosses  = {"Boss"},
+    Orbs    = {"Weapon", "Orb"},
+    Toolbar = {"Toolbar", "ToolService", "UpdatePlayerToolbar"},
+    Rebirth = {"Rebirth", "Prompt"},
+    Tudo    = nil,
 }
 
-local _nomecallOriginal = nil
-local _hookFireInst = nil
-local RATE_LIMIT = 0.25
-local MAX_UNICOS = 2000
-local MAX_EVENTOS_SEGUNDO = 200
-local BUFFER_HARD_CAP = MAX_UNICOS + 200
-local BUFFER_TRIM_LOTE = 200
+local IGNORAR = {
+    Ping = true, DataChanged = true, PlayAnimation = true, PlayEffect = true,
+    DamageLabel = true, DamageNotifier = true, Knockback = true,
+    RagdollData = true, UpdateLocal = true, Heartbeat = true,
+    changeAnimationClient = true, GameAnalytics = true, Postie = true,
+}
 
-local MODO_RAW = false
-local _ultimoPathArgs = {}
-
-local _horaCache = os.date("%H:%M:%S")
-local _eventosNoSegundo = 0
-local _segundoAtual = os.time()
-
-local function _chaveRateLimit(path, args)
-    if not MODO_RAW then return path end
-    return path .. "||" .. tostring(args)
-end
-
-local function getNome(inst)
-    local cache = State.nomesCache[inst]
-    if cache then return cache end
-    local ok, n = pcall(function() return inst:GetFullName() end)
-    n = ok and n or "?"
-    State.nomesCache[inst] = n
-    return n
-end
+local State = {
+    capturando = false,
+    categoria = "Dungeon",
+    hooks = {},
+    buffer = {},
+    total = 0,
+    remotesEncontrados = 0,
+    sessao = "Sessao",
+}
 
 local function log(cat, msg)
     print(string.format("[DUMPER/%s] %s", cat, msg))
 end
 
-local _ultimoHaptic = 0
-local _hapticSuportado = nil
-
-local function haptic(tipo)
-    tipo = tipo or "sucesso"
-    if _hapticSuportado == nil then
-        _hapticSuportado = pcall(function()
-            return HapticService:IsMotorSupported(Enum.UserInputType.Touch, Enum.VibrationMotor.Small)
-        end) and HapticService:IsMotorSupported(Enum.UserInputType.Touch, Enum.VibrationMotor.Small)
-    end
-    if not _hapticSuportado then return end
-    local agora = tick()
-    if agora - _ultimoHaptic < 0.2 then return end
-    _ultimoHaptic = agora
-    pcall(function()
-        HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, tipo == "erro" and 0.6 or 0.3)
-        task.delay(0.06, function()
-            pcall(function()
-                HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Small, 0)
-            end)
-        end)
-    end)
-end
-
-local RUIDO = {
-    "Ping","DataChanged","PlayAnimation","PlayEffect",
-    "DamageLabel","DamageNotifier","Knockback","RagdollData",
-    "UpdateLocal","Heartbeat","changeAnimationClient",
-    "GameAnalytics","Postie",
-}
-
-local function ehRuido(path)
-    if State.filtros.ruido then return false end
-    for i = 1, #RUIDO do
-        if path:find(RUIDO[i]) then return true end
+local function pathBate(path, categoria)
+    local lista = CATEGORIAS[categoria]
+    if not lista then return true end
+    for i = 1, #lista do
+        if path:find(lista[i], 1, true) then return true end
     end
     return false
 end
 
-local function classificar(path)
-    if path:find("Dungeon") or path:find("dungeon")
-    or path:find("NextArea") or path:find("Wave") or path:find("Stage")
-    or path:find("LobbyService") then return "DUNGEON" end
-    if path:find("UpdatePlayerToolbar") or path:find("ToolService") then return "TOOLBAR" end
-    if path:find("SkillRemote") then return "M1" end
-    if path:find("ExecuteSkill") then return "SKILL" end
-    if path:find("ClaimItem") or path:find("WishService")
-    or path:find("ItemDropService") then return "DROP" end
-    if path:find("Boss") or path:find("Zaja") or path:find("Destroyer") then return "BOSS" end
-    if path:find("Weapon") or path:find("Orb") then return "SWORD_ORB" end
-    if path:find("Rebirth") or path:find("Prompt") then return "REBIRTH" end
-    if path:find("LockedOn") then return "LOCK" end
-    if path:find("Event") then return "EVENT" end
-    return "OTHER"
+local function pathIgnorado(path)
+    for k in pairs(IGNORAR) do
+        if path:find(k, 1, true) then return true end
+    end
+    return false
 end
 
-local CAT_INFO = {
-    DUNGEON   = { icone = "🎮", nome = "Dungeon" },
-    M1        = { icone = "🖱", nome = "M1/Ataque" },
-    SKILL     = { icone = "⚔", nome = "Skills" },
-    DROP      = { icone = "💰", nome = "Drops" },
-    BOSS      = { icone = "👹", nome = "Bosses" },
-    SWORD_ORB = { icone = "🔮", nome = "Armas/Orbs" },
-    TOOLBAR   = { icone = "🎒", nome = "Toolbar" },
-    REBIRTH   = { icone = "🔄", nome = "Rebirth" },
-    LOCK      = { icone = "🔒", nome = "Lock-On" },
-    EVENT     = { icone = "📢", nome = "Eventos" },
-    OTHER     = { icone = "❔", nome = "Outros" },
-}
+local function listarRemotes()
+    local out = {}
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") or d:IsA("UnreliableRemoteEvent") then
+            out[#out+1] = d
+        end
+    end
+    return out
+end
+
+local function captura(remote, metodo, args)
+    if not State.capturando then return end
+    if #State.buffer >= MAX_BUFFER then return end
+    local ok, path = pcall(function() return remote:GetFullName() end)
+    if not ok or not path then return end
+    if pathIgnorado(path) then return end
+    if not pathBate(path, State.categoria) then return end
+
+    State.total = State.total + 1
+    State.buffer[#State.buffer+1] = {
+        path = path,
+        metodo = metodo,
+        args = args,
+        t = os.clock(),
+    }
+end
+
+local function instalarHookEm(remote)
+    if State.hooks[remote] then return end
+    local ok = pcall(function()
+        if remote:IsA("RemoteFunction") then
+            local orig = remote.InvokeServer
+            local wrapper = function(self, ...)
+                local args = {...}
+                pcall(captura, remote, "InvokeServer", args)
+                return orig(self, ...)
+            end
+            remote.InvokeServer = wrapper
+            State.hooks[remote] = {orig = orig, wrapper = wrapper}
+        else
+            local orig = remote.FireServer
+            local wrapper = function(self, ...)
+                local args = {...}
+                pcall(captura, remote, "FireServer", args)
+                return orig(self, ...)
+            end
+            remote.FireServer = wrapper
+            State.hooks[remote] = {orig = orig, wrapper = wrapper}
+        end
+    end)
+    if not ok then
+        log("ERRO", "Falha hook: "..remote.Name)
+    end
+end
+
+local function removerTodosHooks()
+    for remote, info in pairs(State.hooks) do
+        pcall(function()
+            if remote:IsA("RemoteFunction") then
+                remote.InvokeServer = info.orig
+            else
+                remote.FireServer = info.orig
+            end
+        end)
+    end
+    State.hooks = {}
+end
+
+local function instalarHooks()
+    removerTodosHooks()
+    local remotes = listarRemotes()
+    State.remotesEncontrados = #remotes
+    local lista = CATEGORIAS[State.categoria]
+    local instalados = 0
+    for _, r in ipairs(remotes) do
+        local ok, path = pcall(function() return r:GetFullName() end)
+        if ok and path then
+            if pathIgnorado(path) then goto continue end
+            local bate = true
+            if lista then
+                bate = false
+                for i = 1, #lista do
+                    if path:find(lista[i], 1, true) then bate = true break end
+                end
+            end
+            if bate then
+                instalarHookEm(r)
+                instalados = instalados + 1
+            end
+        end
+        ::continue::
+    end
+    log("SUCCESS", string.format("Hooks instalados: %d/%d", instalados, #remotes))
+    return instalados
+end
 
 local function ser(v, d)
     d = d or 0
     if d > 2 then return "..." end
     local t = typeof(v)
-    if t == "Instance" then return getNome(v) end
+    if t == "Instance" then
+        local ok, n = pcall(function() return v:GetFullName() end)
+        return ok and n or "?"
+    end
     if t == "Vector3" then
         return string.format("V3(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z)
     end
@@ -156,1265 +179,343 @@ local function ser(v, d)
         end
         return "{"..table.concat(p,",").."}"
     end
+    if t == "string" then
+        if #v > 200 then v = v:sub(1, 200) .. "..." end
+        return string.format("%q", v)
+    end
     return "["..t.."] "..tostring(v)
 end
 
-local function addTrafego(cat, path, args)
-    local seg = os.time()
-    if seg ~= _segundoAtual then
-        _segundoAtual = seg
-        _eventosNoSegundo = 0
-    end
-    _eventosNoSegundo = _eventosNoSegundo + 1
-    if _eventosNoSegundo > MAX_EVENTOS_SEGUNDO then return end
-
-    State.contadorBruto = State.contadorBruto + 1
-    if cat == "EVENT" and (args == "" or args == nil) then return end
-
-    if MODO_RAW then
-        local entry = {
-            cat = cat, path = path, args = args, count = 1,
-            primeiro = _horaCache, ultimo = _horaCache,
-        }
-        table.insert(State.trfBuf, entry)
-        if #State.trfBuf > BUFFER_HARD_CAP then
-            for i = 1, BUFFER_TRIM_LOTE do
-                table.remove(State.trfBuf, 1)
-            end
-        end
-        if not State._silencioso then
-            print(string.format("[RAW/%s] %s | %s", cat, path, args))
-        end
-        return
-    end
-
-    local chave = cat.."|"..path.."|"..args
-    local existente = State.unicos[chave]
-    if existente then
-        existente.count = existente.count + 1
-        existente.ultimo = _horaCache
-        return
-    end
-    local entry = {
-        cat = cat, path = path, args = args, count = 1,
-        primeiro = _horaCache, ultimo = _horaCache,
-    }
-    State.unicos[chave] = entry
-    table.insert(State.trfBuf, entry)
-    if not State._silencioso then
-        print(string.format("[CAP/%s] %s | %s", cat, path, args))
-    end
-    if #State.trfBuf > BUFFER_HARD_CAP then
-        for i = 1, BUFFER_TRIM_LOTE do
-            local rem = table.remove(State.trfBuf, 1)
-            if rem then
-                local ch = rem.cat.."|"..rem.path.."|"..rem.args
-                State.unicos[ch] = nil
-            end
-        end
-    end
-end
-
-local function processarChamada(self, ...)
-    if not State.capturando then return end
-    local n = select("#", ...)
-    local args = {...}
-    local ok, path = pcall(function() return self:GetFullName() end)
-    if not ok or not path then return end
-    if ehRuido(path) then return end
-
-    local agora = os.clock()
-
-    local chaveRL = _chaveRateLimit(path, table.concat(args, "|"))
-    local rl = MODO_RAW and 0.02 or RATE_LIMIT
-    if _ultimoPathArgs[chaveRL] and (agora - _ultimoPathArgs[chaveRL]) < rl then return end
-    _ultimoPathArgs[chaveRL] = agora
-
-    local cat = classificar(path)
-    local aceito = false
-    local f = State.filtros
-    if cat == "DUNGEON" and f.dungeon then aceito = true end
-    if (cat == "M1" or cat == "SKILL" or cat == "LOCK") and f.skills then aceito = true end
-    if cat == "DROP" and f.drops then aceito = true end
-    if cat == "BOSS" and f.bossEvent then aceito = true end
-    if cat == "SWORD_ORB" and f.swordOrb then aceito = true end
-    if cat == "TOOLBAR" and f.toolbar then aceito = true end
-    if cat == "REBIRTH" and f.rebirth then aceito = true end
-    if cat == "EVENT" then aceito = true end
-    if f.ruido then aceito = true end
-    if not aceito then return end
-
-    local parts = {}
-    for i = 1, math.min(n, 6) do
-        parts[#parts+1] = ser(args[i])
-    end
-    addTrafego(cat, path:gsub("ReplicatedStorage%.", "RS."), table.concat(parts, " | "))
-end
-
-local function instalarHook()
-    if State.hookAtivo then return end
-
-    if hookmetamethod and getnamecallmethod and getrawmetatable then
-        local mt = getrawmetatable(game)
-        if mt then
-            _nomecallOriginal = mt.__namecall
-            setreadonly(mt, false)
-            mt.__namecall = function(self, ...)
-                if not State.capturando then
-                    return _nomecallOriginal(self, ...)
-                end
-                local metodo = getnamecallmethod()
-                if metodo == "FireServer" or metodo == "InvokeServer" or metodo == "Fire" then
-                    pcall(processarChamada, self, ...)
-                end
-                return _nomecallOriginal(self, ...)
-            end
-            setreadonly(mt, true)
-
-            State.hookAtivo = true
-            State.hookMetodo = "hookmetamethod-mt"
-            log("SUCCESS", "✅ Hook ativo (mt)")
-            return
-        end
-    end
-
-    if hookfunction then
-        local rem = RS:FindFirstChild("Remotes")
-        local alvo = rem and rem:FindFirstChild("SkillRemote")
-        if alvo then
-            local ok = pcall(function()
-                _hookFireInst = hookfunction(alvo.FireServer, function(self, ...)
-                    pcall(processarChamada, self, ...)
-                    return _hookFireInst(self, ...)
-                end)
-            end)
-            if ok and _hookFireInst then
-                State.hookAtivo = true
-                State.hookMetodo = "hookfunction-1remote"
-                log("SUCCESS", "✅ Hook em SkillRemote")
-                return
-            end
-        end
-    end
-
-    State.hookMetodo = "FALHOU"
-    log("ERROR", "❌ Hook falhou")
-end
-
-local function removerHook()
-    if _nomecallOriginal and getrawmetatable then
-        pcall(function()
-            local mt = getrawmetatable(game)
-            if not mt then return end
-            setreadonly(mt, false)
-            mt.__namecall = _nomecallOriginal
-            setreadonly(mt, true)
-        end)
-    end
-    _nomecallOriginal = nil
-    _hookFireInst = nil
-    State.hookAtivo = false
-    State.hookMetodo = "nenhum"
-end
-
-local function diagnostico()
-    log("INFO", "Executor: "..tostring(identifyexecutor and identifyexecutor() or "?"))
-    log("INFO", "hookmetamethod: "..tostring(hookmetamethod ~= nil))
-    log("INFO", "Hook: "..tostring(State.hookAtivo).." ("..State.hookMetodo..")")
-end
-
-task.spawn(function()
-    while true do
-        task.wait(1)
-        _horaCache = os.date("%H:%M:%S")
-    end
-end)
-
-task.spawn(function()
-    while true do
-        task.wait(30)
-        for k in pairs(_ultimoPathArgs) do
-            _ultimoPathArgs[k] = nil
-        end
-    end
-end)
-
-local _dungeonPathsEncontrados = setmetatable({}, {__mode = "k"})
-
-local function _varrerDungeon(inst, path, depth)
-    if depth > 4 then return end
-    local ok, ch = pcall(function() return inst:GetChildren() end)
-    if not ok then return end
-    for _, c in ipairs(ch) do
-        local nm = c.Name:lower()
-        if nm:find("dungeon") or nm:find("portal") or nm:find("gate")
-        or nm:find("entrance") or nm:find("nextarea") or nm:find("nextfloor") then
-            if not _dungeonPathsEncontrados[c] then
-                _dungeonPathsEncontrados[c] = true
-                local pos
-                if c:IsA("BasePart") then pos = c.Position
-                elseif c.PrimaryPart then pos = c.PrimaryPart.Position end
-                if pos then
-                    addTrafego("DUNGEON", "WS."..path.."."..c.Name,
-                        string.format("V3(%.0f,%.0f,%.0f)", pos.X, pos.Y, pos.Z))
-                end
-            end
-        end
-        if c:IsA("Folder") or c:IsA("Model") then
-            _varrerDungeon(c, path.."."..c.Name, depth + 1)
-        end
-    end
-end
-
-task.spawn(function()
-    local conhecidos = {}
-    while true do
-        task.wait(15)
-        if State.capturando then
-            local wm = WS:FindFirstChild("World Mobs")
-            local ps = WS:FindFirstChild("PartStorage")
-
-            if wm and State.filtros.bossEvent then
-                local ev = wm:FindFirstChild("Event Mobs")
-                if ev then
-                    for _, obj in ipairs(ev:GetChildren()) do
-                        if not conhecidos[obj] and obj:IsA("Model") then
-                            conhecidos[obj] = true
-                            local hrp = obj:FindFirstChild("HumanoidRootPart")
-                            if hrp then
-                                addTrafego("BOSS", "WS.Event Mobs."..obj.Name,
-                                    string.format("V3(%.0f,%.0f,%.0f)", hrp.Position.X, hrp.Position.Y, hrp.Position.Z))
-                            end
-                        end
-                    end
-                end
-            end
-
-            if ps and State.filtros.drops then
-                for _, obj in ipairs(ps:GetChildren()) do
-                    local nome = obj.Name
-                    local ehDrop = nome:find("ItemDrop_")
-                        or nome:lower():find("wish")
-                        or nome:lower():find("orb")
-                    if ehDrop and not conhecidos[obj] and obj:IsA("Model") then
-                        conhecidos[obj] = true
-                        local base = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
-                        if base then
-                            addTrafego("DROP", "WS.PartStorage."..obj.Name,
-                                string.format("V3(%.0f,%.0f,%.0f)", base.Position.X, base.Position.Y, base.Position.Z))
-                        end
-                    end
-                end
-            end
-
-            if State.filtros.dungeon then
-                pcall(function() _varrerDungeon(WS, "WS", 0) end)
-            end
-        end
-    end
-end)
-
-local function scanArquitetural()
-    State.arquitetural = {}
-    log("INFO", "Scan iniciado...")
-    task.spawn(function()
-        local t0 = os.clock()
-        local total = 0
-        local function varrer(inst, path, depth)
-            if depth > 8 or not inst then return end
-            task.wait()
-            local ok, ch = pcall(function() return inst:GetChildren() end)
-            if not ok then return end
-            for _, c in ipairs(ch) do
-                local cls = c.ClassName
-                if cls == "RemoteEvent" or cls == "RemoteFunction"
-                or cls == "UnreliableRemoteEvent" then
-                    table.insert(State.arquitetural, { tipo = "REMOTE", cls = cls, path = path.."."..c.Name })
-                    total = total + 1
-                elseif cls == "ModuleScript" then
-                    table.insert(State.arquitetural, { tipo = "MODULE", cls = cls, path = path.."."..c.Name })
-                    total = total + 1
-                end
-                if cls == "Folder" or cls == "Model" then
-                    varrer(c, path.."."..c.Name, depth + 1)
-                end
-            end
-        end
-        pcall(function() varrer(RS, "RS", 0) end)
-        log("SUCCESS", string.format("Scan: %.2fs — %d itens", os.clock() - t0, total))
-    end)
-end
-
 local function salvarArquivo()
+    if #State.buffer == 0 then
+        log("INFO", "Buffer vazio")
+        return false
+    end
+
     local L = {}
-    local function add(s) table.insert(L, s or "") end
+    local function add(s) L[#L+1] = s or "" end
 
-    add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v6.6 — RELATÓRIO DE SESSÃO          ║")
-    add("╚══════════════════════════════════════════════════════╝")
+    add("=== DUMPER v7.0 ===")
+    add("Player:   "..plr.Name)
+    add("PlaceId:  "..game.PlaceId)
+    add("JobId:    "..(game.JobId ~= "" and game.JobId or "privado"))
+    add("Data:     "..os.date("%Y-%m-%d %H:%M:%S"))
+    add("Sessao:   "..State.sessao)
+    add("Categoria:"..State.categoria)
+    add("Remotes:  "..State.remotesEncontrados)
+    add("Eventos:  "..State.total)
+    add("Buffer:   "..#State.buffer)
     add("")
-    add("┌─ 📋 METADATA ────────────────────────────────────────")
-    add("│ Player:       "..plr.Name)
-    add("│ PlaceId:      "..game.PlaceId)
-    add("│ JobId:        "..(game.JobId ~= "" and game.JobId or "privado"))
-    add("│ Data:         "..os.date("%Y-%m-%d %H:%M:%S"))
-    add("│ Sessão:       "..State.sessao)
-    add("│ Hook:         "..State.hookMetodo)
-    add("│ Modo:         "..(MODO_RAW and "RAW (sequencial)" or "dedup"))
-    add("│ Bruto:        "..State.contadorBruto.." chamadas")
-    add("│ Únicos:       "..#State.trfBuf.." entradas")
-    add("└──────────────────────────────────────────────────────")
+    add("=== TRÁFEGO ===")
     add("")
 
-    local porCat = {}
-    for _, t in ipairs(State.trfBuf) do
-        porCat[t.cat] = porCat[t.cat] or {}
-        table.insert(porCat[t.cat], t)
+    local t0 = State.buffer[1] and State.buffer[1].t or 0
+    for i = 1, #State.buffer do
+        local e = State.buffer[i]
+        local delta = string.format("%.2f", e.t - t0)
+        local argsStr = ""
+        for j = 1, math.min(#e.args, 6) do
+            argsStr = argsStr .. (j > 1 and " | " or "") .. ser(e.args[j])
+        end
+        add(string.format("[+%ss] %s -> %s(%s)", delta, e.path, e.metodo, argsStr))
     end
-
-    add("╔══════════════════════════════════════════════════════╗")
-    add("║              📡 TRÁFEGO CAPTURADO                    ║")
-    add("╚══════════════════════════════════════════════════════╝")
-
-    local ordem = {"DUNGEON","M1","SKILL","DROP","BOSS","SWORD_ORB",
-                   "TOOLBAR","REBIRTH","LOCK","EVENT","OTHER"}
-
-    for _, cat in ipairs(ordem) do
-        if porCat[cat] and #porCat[cat] > 0 then
-            local info = CAT_INFO[cat] or CAT_INFO.OTHER
-            add("")
-            add("┏━━ "..info.icone.." "..string.upper(info.nome)..
-                " ── "..#porCat[cat].." entradas "..
-                string.rep("━", math.max(1, 40 - #info.nome)).."┓")
-            for _, t in ipairs(porCat[cat]) do
-                if t.count > 1 then
-                    add("┃ ▸ "..t.path)
-                    add("┃   ⏱ "..t.primeiro.." ~ "..t.ultimo.."  (×"..t.count.." chamadas)")
-                    add("┃   ↳ "..t.args)
-                else
-                    add("┃ ▸ "..t.path)
-                    add("┃   ⏱ "..t.primeiro)
-                    add("┃   ↳ "..t.args)
-                end
-                add("┃")
-            end
-            add("┗"..string.rep("━", 54).."┛")
-        end
-    end
-
-    if #State.arquitetural > 0 then
-        add("")
-        add("╔══════════════════════════════════════════════════════╗")
-        add("║              🏗️  ESTRUTURA ARQUITETURAL              ║")
-        add("╚══════════════════════════════════════════════════════╝")
-        add("")
-
-        local remotes, modules = {}, {}
-        for _, item in ipairs(State.arquitetural) do
-            if item.tipo == "REMOTE" then table.insert(remotes, item)
-            else table.insert(modules, item) end
-        end
-
-        if #remotes > 0 then
-            add("┏━━ 📡 REMOTES ── "..#remotes.." ━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-            for _, r in ipairs(remotes) do add("┃ ["..r.cls.."] "..r.path) end
-            add("┗"..string.rep("━", 54).."┛")
-            add("")
-        end
-
-        if #modules > 0 then
-            add("┏━━ 📦 MODULES ── "..#modules.." ━━━━━━━━━━━━━━━━━━━━━━━━━┓")
-            for _, m in ipairs(modules) do add("┃ "..m.path) end
-            add("┗"..string.rep("━", 54).."┛")
-        end
-    end
-
-    add("")
-    add("╔══════════════════════════════════════════════════════╗")
-    add("║  Fim do dump — "..os.date("%Y-%m-%d %H:%M:%S").."            ║")
-    add("╚══════════════════════════════════════════════════════╝")
 
     local conteudo = table.concat(L, "\n")
     local nome = "Dump_"..State.sessao.."_"..os.time()..".txt"
-    local ok = pcall(function() if writefile then writefile(nome, conteudo) end end)
+    local ok = pcall(function()
+        if writefile then writefile(nome, conteudo) end
+    end)
     if ok then
         log("SUCCESS", "Salvo: "..nome)
         return true
     end
     pcall(function() setclipboard(conteudo) end)
-    log("SUCCESS", "Clipboard")
+    log("SUCCESS", "Copiado pro clipboard")
     return true
 end
 
-local old = targetParent:FindFirstChild("DumperFinal")
+local old = targetParent:FindFirstChild("DumperV7")
 if old then old:Destroy() end
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "DumperFinal"
+gui.Name = "DumperV7"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 if syn and syn.protect_gui then
     pcall(function() syn.protect_gui(gui) end)
 end
 gui.Parent = targetParent
 
 local T = {
-    bg         = Color3.fromRGB(0, 0, 0),
-    panel      = Color3.fromRGB(10, 10, 12),
-    elev       = Color3.fromRGB(20, 20, 24),
-    elevHover  = Color3.fromRGB(30, 30, 36),
-    border     = Color3.fromRGB(38, 38, 46),
-    accent     = Color3.fromRGB(0, 255, 198),
-    accent2    = Color3.fromRGB(0, 180, 140),
-    text       = Color3.fromRGB(240, 240, 245),
-    textDim    = Color3.fromRGB(140, 145, 155),
-    textMuted  = Color3.fromRGB(90, 95, 105),
-    success    = Color3.fromRGB(80, 220, 140),
-    danger     = Color3.fromRGB(255, 90, 90),
-    warn       = Color3.fromRGB(255, 180, 60),
-    info       = Color3.fromRGB(90, 170, 255),
+    bg = Color3.fromRGB(0, 0, 0),
+    panel = Color3.fromRGB(14, 14, 16),
+    elev = Color3.fromRGB(24, 24, 28),
+    accent = Color3.fromRGB(0, 255, 198),
+    danger = Color3.fromRGB(255, 80, 80),
+    warn = Color3.fromRGB(255, 180, 60),
+    text = Color3.fromRGB(235, 235, 240),
+    dim = Color3.fromRGB(130, 135, 145),
+    muted = Color3.fromRGB(80, 85, 95),
 }
 
 local function safeUI(fn)
     return function(...)
         local ok, err = pcall(fn, ...)
-        if not ok then print("[DUMPER/UI-ERRO] "..tostring(err)) end
+        if not ok then warn("[DUMPER/UI] "..tostring(err)) end
     end
 end
 
-local viewport = workspace.CurrentCamera.ViewportSize
-local W = math.min(420, viewport.X * 0.92)
-local H = math.min(520, viewport.Y * 0.85)
-
+local W, H = 300, 260
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0, W, 0, H)
 main.Position = UDim2.new(0.5, -W/2, 0.5, -H/2)
 main.BackgroundColor3 = T.bg
-main.BackgroundTransparency = 0.08
+main.BackgroundTransparency = 0.05
 main.BorderSizePixel = 0
 main.Active = true
-main.Visible = false
+main.Visible = true
 main.Parent = gui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
-local mStroke = Instance.new("UIStroke", main)
-mStroke.Color = T.border
-mStroke.Thickness = 1
-mStroke.Transparency = 0.4
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = T.accent
+stroke.Thickness = 1
+stroke.Transparency = 0.6
 
 local homeBar = Instance.new("TextButton")
-homeBar.Size = UDim2.new(0, 160, 0, 26)
-homeBar.Position = UDim2.new(0.5, -80, 1, -34)
-homeBar.BackgroundColor3 = T.bg
-homeBar.BackgroundTransparency = 0.5
+homeBar.Size = UDim2.new(0, 100, 0, 22)
+homeBar.Position = UDim2.new(0.5, -50, 1, -30)
+homeBar.BackgroundColor3 = T.panel
 homeBar.BorderSizePixel = 0
-homeBar.Text = ""
+homeBar.Text = "DUMPER"
+homeBar.TextColor3 = T.accent
+homeBar.Font = Enum.Font.GothamBold
+homeBar.TextSize = 10
 homeBar.AutoButtonColor = false
-homeBar.Active = true
 homeBar.ZIndex = 100
 homeBar.Parent = gui
 Instance.new("UICorner", homeBar).CornerRadius = UDim.new(1, 0)
-local hbStroke = Instance.new("UIStroke", homeBar)
-hbStroke.Color = T.accent
-hbStroke.Thickness = 1
-hbStroke.Transparency = 0.5
-
-local hbBar = Instance.new("Frame")
-hbBar.Size = UDim2.new(0, 120, 0, 5)
-hbBar.Position = UDim2.new(0.5, -60, 0.5, -2.5)
-hbBar.BackgroundColor3 = T.accent
-hbBar.BackgroundTransparency = 0.1
-hbBar.BorderSizePixel = 0
-hbBar.Parent = homeBar
-Instance.new("UICorner", hbBar).CornerRadius = UDim.new(1, 0)
-
-local function pulsarHomeBar()
-    TweenService:Create(hbBar, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {
-        BackgroundTransparency = 0.6
-    }):Play()
-    task.delay(0.15, function()
-        TweenService:Create(hbBar, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
-            BackgroundTransparency = 0.1
-        }):Play()
-    end)
-end
-
 homeBar.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    pulsarHomeBar()
     main.Visible = not main.Visible
 end))
 
 local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 42)
+header.Size = UDim2.new(1, 0, 0, 32)
 header.BackgroundTransparency = 1
 header.Parent = main
 
 local titulo = Instance.new("TextLabel")
-titulo.Size = UDim2.new(1, -140, 1, 0)
-titulo.Position = UDim2.new(0, 18, 0, 0)
+titulo.Size = UDim2.new(1, -80, 1, 0)
+titulo.Position = UDim2.new(0, 14, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v6.6"
+titulo.Text = "DUMPER v7.0"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
-titulo.TextSize = 14
+titulo.TextSize = 12
 titulo.TextXAlignment = Enum.TextXAlignment.Left
 titulo.Parent = header
 
-local statusDot = Instance.new("Frame")
-statusDot.Size = UDim2.new(0, 8, 0, 8)
-statusDot.Position = UDim2.new(1, -116, 0.5, -4)
-statusDot.BackgroundColor3 = T.textMuted
-statusDot.BorderSizePixel = 0
-statusDot.Parent = header
-Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
+local dot = Instance.new("Frame")
+dot.Size = UDim2.new(0, 8, 0, 8)
+dot.Position = UDim2.new(1, -68, 0.5, -4)
+dot.BackgroundColor3 = T.muted
+dot.BorderSizePixel = 0
+dot.Parent = header
+Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
 local statusTxt = Instance.new("TextLabel")
-statusTxt.Size = UDim2.new(0, 70, 1, 0)
-statusTxt.Position = UDim2.new(1, -104, 0, 0)
+statusTxt.Size = UDim2.new(0, 50, 1, 0)
+statusTxt.Position = UDim2.new(1, -56, 0, 0)
 statusTxt.BackgroundTransparency = 1
-statusTxt.Text = "parado"
-statusTxt.TextColor3 = T.textDim
+statusTxt.Text = "off"
+statusTxt.TextColor3 = T.dim
 statusTxt.Font = Enum.Font.GothamMedium
-statusTxt.TextSize = 10
+statusTxt.TextSize = 9
 statusTxt.TextXAlignment = Enum.TextXAlignment.Left
 statusTxt.Parent = header
 
-local btnMin = Instance.new("TextButton")
-btnMin.Size = UDim2.new(0, 26, 0, 26)
-btnMin.Position = UDim2.new(1, -68, 0.5, -13)
-btnMin.BackgroundColor3 = T.elev
-btnMin.Text = "—"
-btnMin.TextColor3 = T.text
-btnMin.Font = Enum.Font.GothamBold
-btnMin.TextSize = 14
-btnMin.BorderSizePixel = 0
-btnMin.AutoButtonColor = false
-btnMin.Parent = header
-Instance.new("UICorner", btnMin).CornerRadius = UDim.new(0, 6)
-
 local btnKill = Instance.new("TextButton")
-btnKill.Size = UDim2.new(0, 26, 0, 26)
-btnKill.Position = UDim2.new(1, -36, 0.5, -13)
+btnKill.Size = UDim2.new(0, 22, 0, 22)
+btnKill.Position = UDim2.new(1, -28, 0.5, -11)
 btnKill.BackgroundColor3 = T.elev
 btnKill.Text = "×"
 btnKill.TextColor3 = T.danger
 btnKill.Font = Enum.Font.GothamBold
-btnKill.TextSize = 16
+btnKill.TextSize = 14
 btnKill.BorderSizePixel = 0
 btnKill.AutoButtonColor = false
 btnKill.Parent = header
-Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 6)
+Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 5)
 
-local sidebar = Instance.new("Frame")
-sidebar.Size = UDim2.new(0, 118, 1, -78)
-sidebar.Position = UDim2.new(0, 12, 0, 50)
-sidebar.BackgroundColor3 = T.panel
-sidebar.BackgroundTransparency = 0.35
-sidebar.BorderSizePixel = 0
-sidebar.Parent = main
-Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 10)
-
-local sbList = Instance.new("UIListLayout", sidebar)
-sbList.Padding = UDim.new(0, 4)
-sbList.SortOrder = Enum.SortOrder.LayoutOrder
-local sbPad = Instance.new("UIPadding", sidebar)
-sbPad.PaddingTop = UDim.new(0, 6)
-sbPad.PaddingLeft = UDim.new(0, 6)
-sbPad.PaddingRight = UDim.new(0, 6)
-
-local sidebarItens = {}
-local atualizarSidebar, atualizarConteudo
-
-local function criarItemSidebar(id, icone, nome, subtituloFn)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 52)
-    btn.BackgroundColor3 = T.elev
-    btn.BackgroundTransparency = 0.5
-    btn.Text = ""
-    btn.AutoButtonColor = false
-    btn.BorderSizePixel = 0
-    btn.Parent = sidebar
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-
-    local ic = Instance.new("TextLabel")
-    ic.Size = UDim2.new(0, 26, 0, 26)
-    ic.Position = UDim2.new(0, 8, 0, 6)
-    ic.BackgroundTransparency = 1
-    ic.Text = icone
-    ic.TextSize = 16
-    ic.Parent = btn
-
-    local nm = Instance.new("TextLabel")
-    nm.Size = UDim2.new(1, -40, 0, 16)
-    nm.Position = UDim2.new(0, 38, 0, 8)
-    nm.BackgroundTransparency = 1
-    nm.Text = nome
-    nm.TextColor3 = T.text
-    nm.TextSize = 11
-    nm.Font = Enum.Font.GothamBold
-    nm.TextXAlignment = Enum.TextXAlignment.Left
-    nm.Parent = btn
-
-    local sub = Instance.new("TextLabel")
-    sub.Size = UDim2.new(1, -14, 0, 14)
-    sub.Position = UDim2.new(0, 10, 0, 32)
-    sub.BackgroundTransparency = 1
-    sub.Text = "—"
-    sub.TextColor3 = T.textMuted
-    sub.TextSize = 9
-    sub.Font = Enum.Font.GothamMedium
-    sub.TextXAlignment = Enum.TextXAlignment.Left
-    sub.Parent = btn
-
-    sidebarItens[id] = { btn = btn, sub = sub, subFn = subtituloFn }
-
-    btn.MouseButton1Click:Connect(safeUI(function()
-        haptic("sucesso")
-        State.catAtiva = id
-        if atualizarSidebar then atualizarSidebar() end
-        if atualizarConteudo then atualizarConteudo() end
-    end))
-
-    return btn
-end
-
-local content = Instance.new("Frame")
-content.Size = UDim2.new(1, -142, 1, -78)
-content.Position = UDim2.new(0, 130, 0, 50)
-content.BackgroundColor3 = T.panel
-content.BackgroundTransparency = 0.35
-content.BorderSizePixel = 0
-content.Parent = main
-Instance.new("UICorner", content).CornerRadius = UDim.new(0, 10)
-
-local painelCaptura = Instance.new("Frame")
-painelCaptura.Size = UDim2.new(1, 0, 1, 0)
-painelCaptura.BackgroundTransparency = 1
-painelCaptura.Parent = content
-
-local inputSessao = Instance.new("TextBox")
-inputSessao.Size = UDim2.new(1, -24, 0, 36)
-inputSessao.Position = UDim2.new(0, 12, 0, 12)
-inputSessao.BackgroundColor3 = T.elev
-inputSessao.Text = "Sessao"
-inputSessao.PlaceholderText = "Nome da sessão..."
-inputSessao.TextColor3 = T.text
-inputSessao.PlaceholderColor3 = T.textMuted
-inputSessao.Font = Enum.Font.GothamMedium
-inputSessao.TextSize = 12
-inputSessao.BorderSizePixel = 0
-inputSessao.ClearTextOnFocus = false
-inputSessao.Parent = painelCaptura
-Instance.new("UICorner", inputSessao).CornerRadius = UDim.new(0, 8)
-local ip = Instance.new("UIPadding", inputSessao)
-ip.PaddingLeft = UDim.new(0, 12)
-
-local btnCap = Instance.new("TextButton")
-btnCap.Size = UDim2.new(1, -24, 0, 48)
-btnCap.Position = UDim2.new(0, 12, 0, 58)
-btnCap.BackgroundColor3 = T.accent
-btnCap.Text = "▶  INICIAR CAPTURA"
-btnCap.TextColor3 = T.bg
-btnCap.Font = Enum.Font.GothamBold
-btnCap.TextSize = 13
-btnCap.BorderSizePixel = 0
-btnCap.AutoButtonColor = false
-btnCap.Parent = painelCaptura
-Instance.new("UICorner", btnCap).CornerRadius = UDim.new(0, 8)
-
-local hint = Instance.new("TextLabel")
-hint.Size = UDim2.new(1, -24, 0, 30)
-hint.Position = UDim2.new(0, 12, 0, 112)
-hint.BackgroundTransparency = 1
-hint.Text = "Após iniciar, faça ações no jogo."
-hint.TextColor3 = T.textMuted
-hint.TextSize = 10
-hint.Font = Enum.Font.GothamMedium
-hint.TextWrapped = true
-hint.TextXAlignment = Enum.TextXAlignment.Left
-hint.Parent = painelCaptura
-
-local btnSilencioso = Instance.new("TextButton")
-btnSilencioso.Size = UDim2.new(1, -24, 0, 30)
-btnSilencioso.Position = UDim2.new(0, 12, 0, 148)
-btnSilencioso.BackgroundColor3 = T.elev
-btnSilencioso.Text = "🔇  Modo silencioso"
-btnSilencioso.TextColor3 = T.text
-btnSilencioso.Font = Enum.Font.GothamBold
-btnSilencioso.TextSize = 10
-btnSilencioso.BorderSizePixel = 0
-btnSilencioso.AutoButtonColor = false
-btnSilencioso.Parent = painelCaptura
-Instance.new("UICorner", btnSilencioso).CornerRadius = UDim.new(0, 8)
-btnSilencioso.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    State._silencioso = not State._silencioso
-    btnSilencioso.Text = State._silencioso and "🔊  Modo verboso" or "🔇  Modo silencioso"
-    btnSilencioso.TextColor3 = State._silencioso and T.warn or T.text
-end))
-
-local feedTitulo = Instance.new("TextLabel")
-feedTitulo.Size = UDim2.new(1, -24, 0, 20)
-feedTitulo.Position = UDim2.new(0, 12, 0, 184)
-feedTitulo.BackgroundTransparency = 1
-feedTitulo.Text = "FLUXO RECENTE"
-feedTitulo.TextColor3 = T.textDim
-feedTitulo.TextSize = 9
-feedTitulo.Font = Enum.Font.GothamBold
-feedTitulo.TextXAlignment = Enum.TextXAlignment.Left
-feedTitulo.Parent = painelCaptura
-
-local feedScroll = Instance.new("ScrollingFrame")
-feedScroll.Size = UDim2.new(1, -24, 1, -216)
-feedScroll.Position = UDim2.new(0, 12, 0, 208)
-feedScroll.BackgroundColor3 = T.bg
-feedScroll.BackgroundTransparency = 0.5
-feedScroll.BorderSizePixel = 0
-feedScroll.ScrollBarThickness = 3
-feedScroll.ScrollBarImageColor3 = T.border
-feedScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-feedScroll.Parent = painelCaptura
-Instance.new("UICorner", feedScroll).CornerRadius = UDim.new(0, 8)
-local fpad = Instance.new("UIPadding", feedScroll)
-fpad.PaddingLeft = UDim.new(0, 10)
-fpad.PaddingTop = UDim.new(0, 8)
-fpad.PaddingRight = UDim.new(0, 10)
-fpad.PaddingBottom = UDim.new(0, 8)
-
-local feedText = Instance.new("TextLabel")
-feedText.Size = UDim2.new(1, 0, 0, 0)
-feedText.BackgroundTransparency = 1
-feedText.TextColor3 = T.text
-feedText.Font = Enum.Font.Code
-feedText.TextSize = 10
-feedText.TextXAlignment = Enum.TextXAlignment.Left
-feedText.TextYAlignment = Enum.TextYAlignment.Top
-feedText.TextWrapped = true
-feedText.Text = ""
-feedText.Parent = feedScroll
-
-local painelFiltros = Instance.new("Frame")
-painelFiltros.Size = UDim2.new(1, 0, 1, 0)
-painelFiltros.BackgroundTransparency = 1
-painelFiltros.Visible = false
-painelFiltros.Parent = content
-
-local filtrosScroll = Instance.new("ScrollingFrame")
-filtrosScroll.Size = UDim2.new(1, -24, 1, -24)
-filtrosScroll.Position = UDim2.new(0, 12, 0, 12)
-filtrosScroll.BackgroundTransparency = 1
-filtrosScroll.BorderSizePixel = 0
-filtrosScroll.ScrollBarThickness = 3
-filtrosScroll.ScrollBarImageColor3 = T.border
-filtrosScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-filtrosScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-filtrosScroll.Parent = painelFiltros
-local flList = Instance.new("UIListLayout", filtrosScroll)
-flList.Padding = UDim.new(0, 4)
-
-local function criarFiltro(icone, nome, descricao, key)
-    local f = Instance.new("TextButton")
-    f.Size = UDim2.new(1, 0, 0, 44)
-    f.BackgroundColor3 = State.filtros[key] and T.elevHover or T.elev
-    f.BackgroundTransparency = 0.3
-    f.Text = ""
-    f.AutoButtonColor = false
-    f.BorderSizePixel = 0
-    f.Parent = filtrosScroll
-    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
-
-    local ic = Instance.new("TextLabel")
-    ic.Size = UDim2.new(0, 24, 0, 24)
-    ic.Position = UDim2.new(0, 10, 0.5, -12)
-    ic.BackgroundTransparency = 1
-    ic.Text = icone
-    ic.TextSize = 15
-    ic.Parent = f
-
-    local nm = Instance.new("TextLabel")
-    nm.Size = UDim2.new(1, -100, 0, 16)
-    nm.Position = UDim2.new(0, 40, 0, 6)
-    nm.BackgroundTransparency = 1
-    nm.Text = nome
-    nm.TextColor3 = T.text
-    nm.TextSize = 11
-    nm.Font = Enum.Font.GothamBold
-    nm.TextXAlignment = Enum.TextXAlignment.Left
-    nm.Parent = f
-
-    local ds = Instance.new("TextLabel")
-    ds.Size = UDim2.new(1, -100, 0, 14)
-    ds.Position = UDim2.new(0, 40, 0, 22)
-    ds.BackgroundTransparency = 1
-    ds.Text = descricao
-    ds.TextColor3 = T.textMuted
-    ds.TextSize = 9
-    ds.Font = Enum.Font.GothamMedium
-    ds.TextXAlignment = Enum.TextXAlignment.Left
-    ds.Parent = f
-
-    local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 10, 0, 10)
-    dot.Position = UDim2.new(1, -22, 0.5, -5)
-    dot.BackgroundColor3 = State.filtros[key] and T.accent or T.textMuted
-    dot.BorderSizePixel = 0
-    dot.Parent = f
-    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
-
-    f.MouseButton1Click:Connect(safeUI(function()
-        haptic("sucesso")
-        State.filtros[key] = not State.filtros[key]
-        local ativo = State.filtros[key]
-        f.BackgroundColor3 = ativo and T.elevHover or T.elev
-        dot.BackgroundColor3 = ativo and T.accent or T.textMuted
-        if key == "raw" then MODO_RAW = ativo end
-        if atualizarSidebar then atualizarSidebar() end
-    end))
-end
-
-criarFiltro("🎮", "Dungeon", "Remotes de dungeon, waves, stages", "dungeon")
-criarFiltro("⚔", "Skills / M1", "ExecuteSkill, SkillRemote, Lock-On", "skills")
-criarFiltro("💰", "Drops", "ClaimItem, Wish, ItemDrop", "drops")
-criarFiltro("👹", "Bosses", "Event Mobs spawns", "bossEvent")
-criarFiltro("🔮", "Armas / Orbs", "Weapon e Orb remotes", "swordOrb")
-criarFiltro("🎒", "Toolbar", "Troca de slots", "toolbar")
-criarFiltro("🔄", "Rebirth", "Prompt + RequestRebirth", "rebirth")
-criarFiltro("⚡", "Modo RAW", "Loga toda chamada (dump dungeon)", "raw")
-criarFiltro("🔊", "Ruído", "⚠ Loga TUDO (pode lagar)", "ruido")
-
-local painelLogs = Instance.new("Frame")
-painelLogs.Size = UDim2.new(1, 0, 1, 0)
-painelLogs.BackgroundTransparency = 1
-painelLogs.Visible = false
-painelLogs.Parent = content
-
-local logTabs = Instance.new("Frame")
-logTabs.Size = UDim2.new(1, -24, 0, 60)
-logTabs.Position = UDim2.new(0, 12, 0, 12)
-logTabs.BackgroundTransparency = 1
-logTabs.Parent = painelLogs
-local ltLayout = Instance.new("UIListLayout", logTabs)
-ltLayout.FillDirection = Enum.FillDirection.Horizontal
-ltLayout.Padding = UDim.new(0, 4)
-ltLayout.Wraps = true
-ltLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-
-local filtroLogBtns = {}
-local function criarTabLog(cat, label)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 52, 0, 26)
-    b.BackgroundColor3 = T.elev
-    b.BackgroundTransparency = 0.3
-    b.Text = label
-    b.TextColor3 = T.textDim
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 9
-    b.BorderSizePixel = 0
-    b.AutoButtonColor = false
-    b.Parent = logTabs
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
-    filtroLogBtns[cat] = b
-    b.MouseButton1Click:Connect(safeUI(function()
-        haptic("sucesso")
-        State.filtroLogCat = cat
-        for c, bt in pairs(filtroLogBtns) do
-            bt.BackgroundColor3 = (c == cat) and T.accent2 or T.elev
-            bt.TextColor3 = (c == cat) and T.bg or T.textDim
-        end
-    end))
-end
-
-criarTabLog("todos", "todos")
-criarTabLog("DUNGEON", "dungeon")
-criarTabLog("SKILL", "skill")
-criarTabLog("DROP", "drop")
-criarTabLog("BOSS", "boss")
-criarTabLog("M1", "m1")
-
-local logsScroll = Instance.new("ScrollingFrame")
-logsScroll.Size = UDim2.new(1, -24, 1, -86)
-logsScroll.Position = UDim2.new(0, 12, 0, 78)
-logsScroll.BackgroundColor3 = T.bg
-logsScroll.BackgroundTransparency = 0.5
-logsScroll.BorderSizePixel = 0
-logsScroll.ScrollBarThickness = 3
-logsScroll.ScrollBarImageColor3 = T.border
-logsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-logsScroll.Parent = painelLogs
-Instance.new("UICorner", logsScroll).CornerRadius = UDim.new(0, 8)
-local lp = Instance.new("UIPadding", logsScroll)
-lp.PaddingLeft = UDim.new(0, 10)
-lp.PaddingTop = UDim.new(0, 8)
-lp.PaddingRight = UDim.new(0, 10)
-lp.PaddingBottom = UDim.new(0, 8)
-
-local logsText = Instance.new("TextLabel")
-logsText.Size = UDim2.new(1, 0, 0, 0)
-logsText.BackgroundTransparency = 1
-logsText.TextColor3 = T.text
-logsText.Font = Enum.Font.Code
-logsText.TextSize = 10
-logsText.TextXAlignment = Enum.TextXAlignment.Left
-logsText.TextYAlignment = Enum.TextYAlignment.Top
-logsText.TextWrapped = true
-logsText.Text = ""
-logsText.Parent = logsScroll
-
-local painelArquivo = Instance.new("Frame")
-painelArquivo.Size = UDim2.new(1, 0, 1, 0)
-painelArquivo.BackgroundTransparency = 1
-painelArquivo.Visible = false
-painelArquivo.Parent = content
-
-local function mkBotaoAcao(y, icone, nome, desc, cor, corFeedback, cb)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1, -24, 0, 54)
-    b.Position = UDim2.new(0, 12, 0, y)
-    b.BackgroundColor3 = T.elev
-    b.BackgroundTransparency = 0.3
-    b.Text = ""
-    b.AutoButtonColor = false
-    b.BorderSizePixel = 0
-    b.Parent = painelArquivo
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-
-    local ic = Instance.new("TextLabel")
-    ic.Size = UDim2.new(0, 32, 0, 32)
-    ic.Position = UDim2.new(0, 12, 0.5, -16)
-    ic.BackgroundTransparency = 1
-    ic.Text = icone
-    ic.TextSize = 20
-    ic.Parent = b
-
-    local nm = Instance.new("TextLabel")
-    nm.Size = UDim2.new(1, -70, 0, 18)
-    nm.Position = UDim2.new(0, 54, 0, 8)
-    nm.BackgroundTransparency = 1
-    nm.Text = nome
-    nm.TextColor3 = cor
-    nm.TextSize = 12
-    nm.Font = Enum.Font.GothamBold
-    nm.TextXAlignment = Enum.TextXAlignment.Left
-    nm.Parent = b
-
-    local ds = Instance.new("TextLabel")
-    ds.Size = UDim2.new(1, -70, 0, 16)
-    ds.Position = UDim2.new(0, 54, 0, 28)
-    ds.BackgroundTransparency = 1
-    ds.Text = desc
-    ds.TextColor3 = T.textMuted
-    ds.TextSize = 9
-    ds.Font = Enum.Font.GothamMedium
-    ds.TextXAlignment = Enum.TextXAlignment.Left
-    ds.Parent = b
-
-    local origCor = T.elev
-    b.MouseButton1Click:Connect(safeUI(function()
-        haptic("sucesso")
-        TweenService:Create(b, TweenInfo.new(0.08), { BackgroundColor3 = corFeedback }):Play()
-        task.delay(0.15, function()
-            TweenService:Create(b, TweenInfo.new(0.3), { BackgroundColor3 = origCor }):Play()
-        end)
-        if cb then cb() end
-    end))
-end
-
-mkBotaoAcao(12, "📁", "Scan Arquitetural", "Mapeia remotes e modules", T.info, T.info, function()
-    scanArquitetural()
-end)
-
-mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt organizado", T.accent, T.success, function()
-    State.sessao = inputSessao.Text ~= "" and inputSessao.Text or State.sessao
-    local ok = salvarArquivo()
-    if not ok then haptic("erro") end
-end)
-
-mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego capturado", T.warn, T.warn, function()
-    State.trfBuf = {}
-    State.unicos = {}
-    State.arquitetural = {}
-    State.nomesCache = setmetatable({}, {__mode = "k"})
-    State.contadorBruto = 0
-    log("INFO", "Buffers limpos")
-end)
-
-local painelDiag = Instance.new("Frame")
-painelDiag.Size = UDim2.new(1, 0, 1, 0)
-painelDiag.BackgroundTransparency = 1
-painelDiag.Visible = false
-painelDiag.Parent = content
-
-local diagText = Instance.new("TextLabel")
-diagText.Size = UDim2.new(1, -24, 1, -80)
-diagText.Position = UDim2.new(0, 12, 0, 12)
-diagText.BackgroundColor3 = T.bg
-diagText.BackgroundTransparency = 0.5
-diagText.Text = "Toque em 'Rodar diagnóstico'."
-diagText.TextColor3 = T.text
-diagText.Font = Enum.Font.Code
-diagText.TextSize = 10
-diagText.TextXAlignment = Enum.TextXAlignment.Left
-diagText.TextYAlignment = Enum.TextYAlignment.Top
-diagText.TextWrapped = true
-diagText.Parent = painelDiag
-Instance.new("UICorner", diagText).CornerRadius = UDim.new(0, 8)
-local dp = Instance.new("UIPadding", diagText)
-dp.PaddingLeft = UDim.new(0, 12)
-dp.PaddingTop = UDim.new(0, 10)
-
-local btnDiag = Instance.new("TextButton")
-btnDiag.Size = UDim2.new(1, -24, 0, 36)
-btnDiag.Position = UDim2.new(0, 12, 1, -48)
-btnDiag.BackgroundColor3 = T.elev
-btnDiag.Text = "🩺  Rodar diagnóstico"
-btnDiag.TextColor3 = T.text
-btnDiag.Font = Enum.Font.GothamBold
-btnDiag.TextSize = 11
-btnDiag.BorderSizePixel = 0
-btnDiag.AutoButtonColor = false
-btnDiag.Parent = painelDiag
-Instance.new("UICorner", btnDiag).CornerRadius = UDim.new(0, 8)
-
-local btnTeste = Instance.new("TextButton")
-btnTeste.Size = UDim2.new(1, -24, 0, 32)
-btnTeste.Position = UDim2.new(0, 12, 1, -88)
-btnTeste.BackgroundColor3 = T.elev
-btnTeste.Text = "🔬  Testar hook"
-btnTeste.TextColor3 = T.warn
-btnTeste.Font = Enum.Font.GothamBold
-btnTeste.TextSize = 10
-btnTeste.BorderSizePixel = 0
-btnTeste.AutoButtonColor = false
-btnTeste.Parent = painelDiag
-Instance.new("UICorner", btnTeste).CornerRadius = UDim.new(0, 8)
-
-local footer = Instance.new("Frame")
-footer.Size = UDim2.new(1, -24, 0, 26)
-footer.Position = UDim2.new(0, 12, 1, -34)
-footer.BackgroundTransparency = 1
-footer.Parent = main
-
-local footTxt = Instance.new("TextLabel")
-footTxt.Size = UDim2.new(1, 0, 1, 0)
-footTxt.BackgroundTransparency = 1
-footTxt.Text = "0 bruto • 0 únicos • hook: —"
-footTxt.TextColor3 = T.textMuted
-footTxt.Font = Enum.Font.GothamMedium
-footTxt.TextSize = 10
-footTxt.TextXAlignment = Enum.TextXAlignment.Left
-footTxt.Parent = footer
-
-criarItemSidebar("captura", "📡", "Captura", function()
-    if State.capturando then return "REC • "..State.contadorBruto end
-    return State.contadorBruto > 0 and (State.contadorBruto.." bruto") or "parado"
-end)
-criarItemSidebar("filtros", "🎛", "Filtros", function()
-    local ativos = 0
-    for _, v in pairs(State.filtros) do if v then ativos = ativos + 1 end end
-    return ativos.." ativos"
-end)
-criarItemSidebar("logs", "📊", "Logs", function()
-    return #State.trfBuf.." únicos"
-end)
-criarItemSidebar("arquivo", "📁", "Arquivo", function()
-    return #State.arquitetural > 0 and (#State.arquitetural.." mapeados") or "não escaneado"
-end)
-criarItemSidebar("diag", "🩺", "Diagnóstico", function()
-    return State.hookAtivo and "hook ok" or "sem hook"
-end)
-
-atualizarSidebar = function()
-    for id, item in pairs(sidebarItens) do
-        local ativo = (State.catAtiva == id)
-        item.btn.BackgroundColor3 = ativo and T.elevHover or T.elev
-        item.btn.BackgroundTransparency = ativo and 0.2 or 0.6
-        local sub = item.subFn and item.subFn() or "—"
-        item.sub.Text = sub
-        item.sub.TextColor3 = ativo and T.accent or T.textMuted
-    end
-end
-
-atualizarConteudo = function()
-    painelCaptura.Visible = (State.catAtiva == "captura")
-    painelFiltros.Visible = (State.catAtiva == "filtros")
-    painelLogs.Visible = (State.catAtiva == "logs")
-    painelArquivo.Visible = (State.catAtiva == "arquivo")
-    painelDiag.Visible = (State.catAtiva == "diag")
-end
-
-local function atualizarBtnCap()
-    if State.capturando then
-        btnCap.BackgroundColor3 = T.danger
-        btnCap.Text = "■  PARAR CAPTURA"
-        statusDot.BackgroundColor3 = T.danger
-        statusTxt.Text = "gravando"
-        statusTxt.TextColor3 = T.danger
-    else
-        btnCap.BackgroundColor3 = T.accent
-        btnCap.Text = "▶  INICIAR CAPTURA"
-        statusDot.BackgroundColor3 = T.textMuted
-        statusTxt.Text = "parado"
-        statusTxt.TextColor3 = T.textDim
-    end
-    atualizarSidebar()
-end
-
-btnCap.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    State.sessao = inputSessao.Text ~= "" and inputSessao.Text or State.sessao
-    State.capturando = not State.capturando
-    if State.capturando then
-        print("[DUMPER] 🔴 CAPTURA INICIADA")
-        instalarHook()
-    else
-        print("[DUMPER] ⚪ CAPTURA PARADA")
-        removerHook()
-    end
-    atualizarBtnCap()
-end))
-
-btnMin.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    main.Visible = false
-end))
-
-btnKill.MouseButton1Click:Connect(safeUI(function()
-    haptic("erro")
-    State.capturando = false
-    removerHook()
-    gui:Destroy()
-    print("[DUMPER v6.6] Encerrado")
-end))
-
-btnDiag.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    local info = {}
-    table.insert(info, "Executor:  "..tostring(identifyexecutor and identifyexecutor() or "?"))
-    table.insert(info, "hookmetamethod:   "..tostring(hookmetamethod ~= nil))
-    table.insert(info, "getnamecallmethod: "..tostring(getnamecallmethod ~= nil))
-    table.insert(info, "hookfunction:     "..tostring(hookfunction ~= nil))
-    table.insert(info, "Hook instalado:   "..tostring(State.hookAtivo))
-    table.insert(info, "Método:           "..State.hookMetodo)
-    table.insert(info, "Modo RAW:         "..tostring(MODO_RAW))
-    table.insert(info, "Silencioso:       "..tostring(State._silencioso))
-    table.insert(info, "Eventos/s:        ".._eventosNoSegundo)
-    table.insert(info, "RotaPathArgs:     "..(function()
-        local n = 0
-        for _ in pairs(_ultimoPathArgs) do n = n + 1 end
-        return n
-    end)())
-    table.insert(info, "PlaceId:          "..game.PlaceId)
-    diagText.Text = table.concat(info, "\n")
-    diagnostico()
-end))
-
-btnTeste.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    if not State.hookAtivo then
-        print("[DUMPER] ⚠ Inicie a captura antes de testar")
-        return
-    end
-    local rem = RS:FindFirstChild("Remotes")
-    local sr = rem and rem:FindFirstChild("SkillRemote")
-    if not sr then return end
-    print("[DUMPER] 🔬 Disparando SkillRemote de teste...")
-    pcall(function()
-        sr:FireServer({
-            Began = false, CFrame = CFrame.new(), Aim = Vector3.new(),
-            Camera = CFrame.new(), Type = 1, SkillId = "TESTE",
-        })
-    end)
-    task.wait(0.3)
-    print("[DUMPER] Se não apareceu [CAP/M1] ou [RAW/M1], hook falhou.")
-end))
-
-local dragging, dStart, sStart = false, nil, nil
+local headerDrag, hStart, hPos = false, nil, nil
 header.InputBegan:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dStart = i.Position
-        sStart = main.Position
+        headerDrag = true
+        hStart = i.Position
+        hPos = main.Position
     end
 end)
 UIS.InputChanged:Connect(function(i)
-    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+    if headerDrag and (i.UserInputType == Enum.UserInputType.MouseMovement
     or i.UserInputType == Enum.UserInputType.Touch) then
-        local d = i.Position - dStart
+        local d = i.Position - hStart
         main.Position = UDim2.new(
-            sStart.X.Scale, sStart.X.Offset + d.X,
-            sStart.Y.Scale, sStart.Y.Offset + d.Y
+            hPos.X.Scale, hPos.X.Offset + d.X,
+            hPos.Y.Scale, hPos.Y.Offset + d.Y
         )
     end
 end)
 UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
     or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
+        headerDrag = false
     end
 end)
 
-local _ultimoCount = -1
-local _ultimaCat = nil
-local _ultimoSidebar = -1
+local sessaoLabel = Instance.new("TextLabel")
+sessaoLabel.Size = UDim2.new(1, -20, 0, 16)
+sessaoLabel.Position = UDim2.new(0, 10, 0, 38)
+sessaoLabel.BackgroundTransparency = 1
+sessaoLabel.Text = "Nome da sessão"
+sessaoLabel.TextColor3 = T.dim
+sessaoLabel.Font = Enum.Font.GothamBold
+sessaoLabel.TextSize = 9
+sessaoLabel.TextXAlignment = Enum.TextXAlignment.Left
+sessaoLabel.Parent = main
+
+local inputSessao = Instance.new("TextBox")
+inputSessao.Size = UDim2.new(1, -20, 0, 28)
+inputSessao.Position = UDim2.new(0, 10, 0, 56)
+inputSessao.BackgroundColor3 = T.elev
+inputSessao.Text = "Sessao"
+inputSessao.TextColor3 = T.text
+inputSessao.Font = Enum.Font.GothamMedium
+inputSessao.TextSize = 11
+inputSessao.BorderSizePixel = 0
+inputSessao.ClearTextOnFocus = false
+inputSessao.Parent = main
+Instance.new("UICorner", inputSessao).CornerRadius = UDim.new(0, 6)
+local ipad = Instance.new("UIPadding", inputSessao)
+ipad.PaddingLeft = UDim.new(0, 10)
+
+local catLabel = Instance.new("TextLabel")
+catLabel.Size = UDim2.new(1, -20, 0, 16)
+catLabel.Position = UDim2.new(0, 10, 0, 90)
+catLabel.BackgroundTransparency = 1
+catLabel.Text = "Categoria"
+catLabel.TextColor3 = T.dim
+catLabel.Font = Enum.Font.GothamBold
+catLabel.TextSize = 9
+catLabel.TextXAlignment = Enum.TextXAlignment.Left
+catLabel.Parent = main
+
+local opcoes = {"Dungeon", "Skills", "Drops", "Bosses", "Orbs", "Toolbar", "Rebirth", "Tudo"}
+local catIdx = 1
+
+local catBtn = Instance.new("TextButton")
+catBtn.Size = UDim2.new(1, -20, 0, 28)
+catBtn.Position = UDim2.new(0, 10, 0, 108)
+catBtn.BackgroundColor3 = T.elev
+catBtn.Text = opcoes[catIdx]
+catBtn.TextColor3 = T.text
+catBtn.Font = Enum.Font.GothamMedium
+catBtn.TextSize = 11
+catBtn.BorderSizePixel = 0
+catBtn.AutoButtonColor = false
+catBtn.Parent = main
+Instance.new("UICorner", catBtn).CornerRadius = UDim.new(0, 6)
+
+catBtn.MouseButton1Click:Connect(safeUI(function()
+    catIdx = catIdx + 1
+    if catIdx > #opcoes then catIdx = 1 end
+    catBtn.Text = opcoes[catIdx]
+    State.categoria = opcoes[catIdx]
+end))
+
+local btnStart = Instance.new("TextButton")
+btnStart.Size = UDim2.new(1, -20, 0, 38)
+btnStart.Position = UDim2.new(0, 10, 0, 144)
+btnStart.BackgroundColor3 = T.accent
+btnStart.Text = "▶  INICIAR"
+btnStart.TextColor3 = T.bg
+btnStart.Font = Enum.Font.GothamBold
+btnStart.TextSize = 12
+btnStart.BorderSizePixel = 0
+btnStart.AutoButtonColor = false
+btnStart.Parent = main
+Instance.new("UICorner", btnStart).CornerRadius = UDim.new(0, 6)
+
+local btnSalvar = Instance.new("TextButton")
+btnSalvar.Size = UDim2.new(1, -20, 0, 28)
+btnSalvar.Position = UDim2.new(0, 10, 0, 188)
+btnSalvar.BackgroundColor3 = T.elev
+btnSalvar.Text = "💾  SALVAR DUMP"
+btnSalvar.TextColor3 = T.text
+btnSalvar.Font = Enum.Font.GothamMedium
+btnSalvar.TextSize = 11
+btnSalvar.BorderSizePixel = 0
+btnSalvar.AutoButtonColor = false
+btnSalvar.Parent = main
+Instance.new("UICorner", btnSalvar).CornerRadius = UDim.new(0, 6)
+
+local footTxt = Instance.new("TextLabel")
+footTxt.Size = UDim2.new(1, -20, 0, 14)
+footTxt.Position = UDim2.new(0, 10, 1, -20)
+footTxt.BackgroundTransparency = 1
+footTxt.Text = "0 eventos • 0 remotes"
+footTxt.TextColor3 = T.muted
+footTxt.Font = Enum.Font.GothamMedium
+footTxt.TextSize = 9
+footTxt.TextXAlignment = Enum.TextXAlignment.Left
+footTxt.Parent = main
+
+local function atualizarBtn()
+    if State.capturando then
+        btnStart.BackgroundColor3 = T.danger
+        btnStart.Text = "■  PARAR"
+        dot.BackgroundColor3 = T.danger
+        statusTxt.Text = "REC"
+        statusTxt.TextColor3 = T.danger
+    else
+        btnStart.BackgroundColor3 = T.accent
+        btnStart.Text = "▶  INICIAR"
+        dot.BackgroundColor3 = T.muted
+        statusTxt.Text = "off"
+        statusTxt.TextColor3 = T.dim
+    end
+end
+
+btnStart.MouseButton1Click:Connect(safeUI(function()
+    State.sessao = inputSessao.Text ~= "" and inputSessao.Text or "Sessao"
+    State.capturando = not State.capturando
+    if State.capturando then
+        State.buffer = {}
+        State.total = 0
+        instalarHooks()
+    else
+        removerTodosHooks()
+    end
+    atualizarBtn()
+end))
+
+btnSalvar.MouseButton1Click:Connect(safeUI(function()
+    salvarArquivo()
+end))
+
+btnKill.MouseButton1Click:Connect(safeUI(function()
+    State.capturando = false
+    removerTodosHooks()
+    gui:Destroy()
+end))
 
 task.spawn(function()
     while gui.Parent do
-        task.wait(1.2)
-        footTxt.Text = string.format("%d bruto • %d únicos • %s%s",
-            State.contadorBruto, #State.trfBuf, State.hookMetodo,
-            MODO_RAW and " • RAW" or "")
-
-        if #State.trfBuf == _ultimoCount and State.catAtiva == _ultimaCat then
-            if State.contadorBruto ~= _ultimoSidebar then
-                atualizarSidebar()
-                _ultimoSidebar = State.contadorBruto
-            end
-            continue
-        end
-        _ultimoCount = #State.trfBuf
-        _ultimaCat = State.catAtiva
-
-        if painelCaptura.Visible then
-            local linhas = {}
-            local ini = math.max(1, #State.trfBuf - 12)
-            for i = ini, #State.trfBuf do
-                local t = State.trfBuf[i]
-                local info = CAT_INFO[t.cat] or CAT_INFO.OTHER
-                local suf = t.count > 1 and (" ×"..t.count) or ""
-                table.insert(linhas, string.format("[%s] %s %s — %s%s",
-                    t.primeiro, info.icone, t.cat, t.path:sub(-36), suf))
-            end
-            feedText.Text = #linhas == 0 and "Aguardando..." or table.concat(linhas, "\n")
-            feedScroll.CanvasSize = UDim2.new(0, 0, 0, feedText.TextBounds.Y + 20)
-        end
-
-        if painelLogs.Visible then
-            local linhasL = {}
-            local filtro = State.filtroLogCat
-            local ini2 = math.max(1, #State.trfBuf - 40)
-            for i = ini2, #State.trfBuf do
-                local t = State.trfBuf[i]
-                if filtro == "todos" or t.cat == filtro then
-                    local info = CAT_INFO[t.cat] or CAT_INFO.OTHER
-                    local suf = t.count > 1 and (" [×"..t.count.."]") or ""
-                    table.insert(linhasL, string.format("[%s] %s %s%s  %s\n",
-                        t.primeiro, info.icone, t.cat, suf, t.path))
-                end
-            end
-            logsText.Text = #linhasL == 0 and "Sem entradas." or table.concat(linhasL, "")
-            logsScroll.CanvasSize = UDim2.new(0, 0, 0, logsText.TextBounds.Y + 20)
-        end
-
-        if State.contadorBruto ~= _ultimoSidebar then
-            atualizarSidebar()
-            _ultimoSidebar = State.contadorBruto
-        end
+        task.wait(0.5)
+        footTxt.Text = string.format("%d eventos • %d remotes • %d buffer",
+            State.total, State.remotesEncontrados, #State.buffer)
     end
 end)
 
-atualizarSidebar()
-atualizarConteudo()
+atualizarBtn()
 
-print("[DUMPER v6.6] ✅ Pronto — hook só instala ao capturar")
+print("[DUMPER v7.0] ✅ Pronto — hook individual, sem __namecall")
