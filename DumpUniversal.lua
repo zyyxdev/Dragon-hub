@@ -1,4 +1,4 @@
-print("[DUMPER v6.5] Iniciando...")
+print("[DUMPER v6.6] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -19,7 +19,7 @@ local State = {
     trfBuf = {},
     arquitetural = {},
     unicos = {},
-    nomesCache = {},
+    nomesCache = setmetatable({}, {__mode = "k"}),
     contadorBruto = 0,
     _silencioso = false,
     filtros = {
@@ -34,12 +34,18 @@ local State = {
 
 local _nomecallOriginal = nil
 local _hookFireInst = nil
-local ultimoPath = {}
 local RATE_LIMIT = 0.25
 local MAX_UNICOS = 2000
+local MAX_EVENTOS_SEGUNDO = 200
+local BUFFER_HARD_CAP = MAX_UNICOS + 200
+local BUFFER_TRIM_LOTE = 200
 
 local MODO_RAW = false
 local _ultimoPathArgs = {}
+
+local _horaCache = os.date("%H:%M:%S")
+local _eventosNoSegundo = 0
+local _segundoAtual = os.time()
 
 local function _chaveRateLimit(path, args)
     if not MODO_RAW then return path end
@@ -47,7 +53,8 @@ local function _chaveRateLimit(path, args)
 end
 
 local function getNome(inst)
-    if State.nomesCache[inst] then return State.nomesCache[inst] end
+    local cache = State.nomesCache[inst]
+    if cache then return cache end
     local ok, n = pcall(function() return inst:GetFullName() end)
     n = ok and n or "?"
     State.nomesCache[inst] = n
@@ -153,16 +160,28 @@ local function ser(v, d)
 end
 
 local function addTrafego(cat, path, args)
+    local seg = os.time()
+    if seg ~= _segundoAtual then
+        _segundoAtual = seg
+        _eventosNoSegundo = 0
+    end
+    _eventosNoSegundo = _eventosNoSegundo + 1
+    if _eventosNoSegundo > MAX_EVENTOS_SEGUNDO then return end
+
     State.contadorBruto = State.contadorBruto + 1
     if cat == "EVENT" and (args == "" or args == nil) then return end
 
     if MODO_RAW then
         local entry = {
             cat = cat, path = path, args = args, count = 1,
-            primeiro = os.date("%H:%M:%S"), ultimo = os.date("%H:%M:%S"),
+            primeiro = _horaCache, ultimo = _horaCache,
         }
         table.insert(State.trfBuf, entry)
-        if #State.trfBuf > MAX_UNICOS then table.remove(State.trfBuf, 1) end
+        if #State.trfBuf > BUFFER_HARD_CAP then
+            for i = 1, BUFFER_TRIM_LOTE do
+                table.remove(State.trfBuf, 1)
+            end
+        end
         if not State._silencioso then
             print(string.format("[RAW/%s] %s | %s", cat, path, args))
         end
@@ -170,24 +189,28 @@ local function addTrafego(cat, path, args)
     end
 
     local chave = cat.."|"..path.."|"..args
-    if State.unicos[chave] then
-        State.unicos[chave].count = State.unicos[chave].count + 1
-        State.unicos[chave].ultimo = os.date("%H:%M:%S")
+    local existente = State.unicos[chave]
+    if existente then
+        existente.count = existente.count + 1
+        existente.ultimo = _horaCache
         return
     end
     local entry = {
         cat = cat, path = path, args = args, count = 1,
-        primeiro = os.date("%H:%M:%S"), ultimo = os.date("%H:%M:%S"),
+        primeiro = _horaCache, ultimo = _horaCache,
     }
     State.unicos[chave] = entry
     table.insert(State.trfBuf, entry)
     if not State._silencioso then
         print(string.format("[CAP/%s] %s | %s", cat, path, args))
     end
-    if #State.trfBuf > MAX_UNICOS then
-        local rem = table.remove(State.trfBuf, 1)
-        for k, v in pairs(State.unicos) do
-            if v == rem then State.unicos[k] = nil break end
+    if #State.trfBuf > BUFFER_HARD_CAP then
+        for i = 1, BUFFER_TRIM_LOTE do
+            local rem = table.remove(State.trfBuf, 1)
+            if rem then
+                local ch = rem.cat.."|"..rem.path.."|"..rem.args
+                State.unicos[ch] = nil
+            end
         end
     end
 end
@@ -300,7 +323,23 @@ local function diagnostico()
     log("INFO", "Hook: "..tostring(State.hookAtivo).." ("..State.hookMetodo..")")
 end
 
-local _dungeonPathsEncontrados = {}
+task.spawn(function()
+    while true do
+        task.wait(1)
+        _horaCache = os.date("%H:%M:%S")
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(30)
+        for k in pairs(_ultimoPathArgs) do
+            _ultimoPathArgs[k] = nil
+        end
+    end
+end)
+
+local _dungeonPathsEncontrados = setmetatable({}, {__mode = "k"})
 
 local function _varrerDungeon(inst, path, depth)
     if depth > 4 then return end
@@ -330,7 +369,7 @@ end
 task.spawn(function()
     local conhecidos = {}
     while true do
-        task.wait(4)
+        task.wait(15)
         if State.capturando then
             local wm = WS:FindFirstChild("World Mobs")
             local ps = WS:FindFirstChild("PartStorage")
@@ -411,7 +450,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v6.5 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v6.6 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -615,7 +654,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v6.5"
+titulo.Text = "🐉  DUMPER v6.6"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -1095,7 +1134,7 @@ mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego capturado", T.warn, T
     State.trfBuf = {}
     State.unicos = {}
     State.arquitetural = {}
-    State.nomesCache = {}
+    State.nomesCache = setmetatable({}, {__mode = "k"})
     State.contadorBruto = 0
     log("INFO", "Buffers limpos")
 end)
@@ -1245,7 +1284,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerHook()
     gui:Destroy()
-    print("[DUMPER v6.5] Encerrado")
+    print("[DUMPER v6.6] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1259,6 +1298,12 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     table.insert(info, "Método:           "..State.hookMetodo)
     table.insert(info, "Modo RAW:         "..tostring(MODO_RAW))
     table.insert(info, "Silencioso:       "..tostring(State._silencioso))
+    table.insert(info, "Eventos/s:        ".._eventosNoSegundo)
+    table.insert(info, "RotaPathArgs:     "..(function()
+        local n = 0
+        for _ in pairs(_ultimoPathArgs) do n = n + 1 end
+        return n
+    end)())
     table.insert(info, "PlaceId:          "..game.PlaceId)
     diagText.Text = table.concat(info, "\n")
     diagnostico()
@@ -1372,4 +1417,4 @@ end)
 atualizarSidebar()
 atualizarConteudo()
 
-print("[DUMPER v6.5] ✅ Pronto — hook só instala ao capturar")
+print("[DUMPER v6.6] ✅ Pronto — hook só instala ao capturar")
