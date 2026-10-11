@@ -1,4 +1,4 @@
-print("[DUMPER v7.5] Iniciando...")
+print("[DUMPER v7.6] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -7,17 +7,16 @@ local TweenService = game:GetService("TweenService")
 local HapticService = game:GetService("HapticService")
 local RS = game:GetService("ReplicatedStorage")
 local WS = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
 local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local STATE_FILE = "dumper_v75_state.txt"
-local AUTO_FILE = "dumper_v75_auto.lua"
-local PLACE_FILE = "dumper_v75_mainplace.txt"
+local STATE_FILE = "dumper_v76_state.txt"
+local AUTO_FILE = "dumper_v76_auto.lua"
+local PLACE_FILE = "dumper_v76_mainplace.txt"
 
-local function NC(fn)
-    return fn
-end
+local function NC(fn) return fn end
 
 local CATEGORIAS = {
     Dungeon = {"Dungeon", "Portal", "NextArea", "Wave", "Stage", "Lobby", "Match", "Queue", "Floor", "Boss"},
@@ -25,6 +24,7 @@ local CATEGORIAS = {
     Drops   = {"ClaimItem", "WishService", "ItemDropService", "Wish", "Orb"},
     Toolbar = {"Toolbar", "ToolService", "UpdatePlayerToolbar"},
     Rebirth = {"Rebirth", "Prompt"},
+    Universal = nil,
     Tudo    = nil,
 }
 
@@ -36,6 +36,9 @@ local IGNORAR = {
 }
 
 local MAX_BUFFER = 5000
+local MAX_TRACKER = 3000
+local CFRAME_SAMPLE = 0.15
+local MOVER_LIMITE = 0.5
 
 local State = {
     sessao = "Sessao",
@@ -43,7 +46,9 @@ local State = {
     categoria = "Dungeon",
     hooksSet = {},
     buffer = {},
+    trackerBuffer = {},
     contadorBruto = 0,
+    contadorTracker = 0,
     remotesEncontrados = 0,
     hookMetodo = "__namecall",
     _silencioso = true,
@@ -61,6 +66,24 @@ local State = {
     stealthMode = true,
     placeMain = nil,
     emDungeon = false,
+    trackCFrame = true,
+    trackMover = true,
+    trackSpeed = true,
+    trackVIM = true,
+    trackState = true,
+    ultimoCFrame = nil,
+    ultimaPos = nil,
+    ultimaVel = nil,
+    ultimoSpeed = nil,
+    ultimoJump = nil,
+    charConn = nil,
+    moverConns = {},
+    speedConn = nil,
+    vimHook = nil,
+    vimOriginal = nil,
+    capturaLocal = false,
+    vento = nil,
+    ultimoVento = 0,
 }
 
 local function log(cat, msg)
@@ -134,6 +157,11 @@ local CAT_INFO = {
     REBIRTH   = { icone = "🔄", nome = "Rebirth" },
     LOCK      = { icone = "🔒", nome = "Lock" },
     OTHER     = { icone = "❔", nome = "Outros" },
+    MOVER     = { icone = "🛩", nome = "BodyMover" },
+    CFRAME    = { icone = "📍", nome = "CFrame" },
+    SPEED     = { icone = "💨", nome = "Speed" },
+    VIM       = { icone = "🎮", nome = "VIM" },
+    STATE     = { icone = "⚙", nome = "State" },
 }
 
 local function ser(v, d)
@@ -173,7 +201,7 @@ local function serializarArgs(args, n)
     return table.concat(parts, " | ")
 end
 
-local function captura(remote, metodo, args, n)
+local function capturaRemota(remote, metodo, args, n)
     if not State.capturando then return end
     if #State.buffer >= MAX_BUFFER then return end
     local ok, path = pcall(function() return remote:GetFullName() end)
@@ -187,6 +215,17 @@ local function captura(remote, metodo, args, n)
         cat = cat,
         path = path:gsub("ReplicatedStorage%.", "RS."),
         metodo = metodo,
+        argsSer = argsSer,
+    }
+end
+
+local function capturaLocal(tipo, argsSer)
+    if not State.capturando then return end
+    if not State.capturaLocal then return end
+    if #State.trackerBuffer >= MAX_TRACKER then return end
+    State.contadorTracker = State.contadorTracker + 1
+    State.trackerBuffer[#State.trackerBuffer+1] = {
+        cat = tipo,
         argsSer = argsSer,
     }
 end
@@ -210,7 +249,7 @@ local function instalarNomecall()
                 if metodo == "FireServer" or metodo == "InvokeServer" then
                     local n = select("#", ...)
                     local args = {...}
-                    pcall(captura, self, metodo.."→", args, n)
+                    pcall(capturaRemota, self, metodo.."→", args, n)
                 end
             end
         end
@@ -261,7 +300,7 @@ local function instalarConnectOnce()
             if State.capturando then
                 local n = select("#", ...)
                 local args = {...}
-                pcall(captura, remote, "OnClientEvent←", args, n)
+                pcall(capturaRemota, remote, "OnClientEvent←", args, n)
             end
             return fn(...)
         end
@@ -284,6 +323,178 @@ local function removerConnect()
     State.recvHooked = false
     State.connectHook = nil
     State.connectOriginal = nil
+end
+
+local function limparMoverConns()
+    for _, c in ipairs(State.moverConns) do
+        pcall(function() c:Disconnect() end)
+    end
+    State.moverConns = {}
+end
+
+local function instalarTrackerPersonagem(char)
+    limparMoverConns()
+
+    if not char then char = plr.Character end
+    if not char then return end
+
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+
+    if hum and State.trackSpeed then
+        local function checarVel()
+            if not State.capturando or not State.capturaLocal then return end
+            if State.ultimoSpeed ~= hum.WalkSpeed then
+                capturaLocal("SPEED", string.format("WalkSpeed %s -> %s", tostring(State.ultimoSpeed), tostring(hum.WalkSpeed)))
+                State.ultimoSpeed = hum.WalkSpeed
+            end
+            if State.ultimoJump ~= hum.JumpPower then
+                capturaLocal("SPEED", string.format("JumpPower %s -> %s", tostring(State.ultimoJump), tostring(hum.JumpPower)))
+                State.ultimoJump = hum.JumpPower
+            end
+        end
+        State.ultimoSpeed = hum.WalkSpeed
+        State.ultimoJump = hum.JumpPower
+        local c1 = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(checarVel)
+        local c2 = hum:GetPropertyChangedSignal("JumpPower"):Connect(checarVel)
+        State.moverConns[#State.moverConns+1] = c1
+        State.moverConns[#State.moverConns+1] = c2
+    end
+
+    if hrp and State.trackMover then
+        local function checarMover(child)
+            if not State.capturando or not State.capturaLocal then return end
+            if child:IsA("BodyVelocity") then
+                capturaLocal("MOVER", string.format("BodyVelocity criada | Vel=%s MaxForce=%s P=%s",
+                    ser(child.Velocity), ser(child.MaxForce), tostring(child.P)))
+            elseif child:IsA("BodyGyro") then
+                capturaLocal("MOVER", string.format("BodyGyro criada | P=%s D=%s MaxTorque=%s",
+                    tostring(child.P), tostring(child.D), ser(child.MaxTorque)))
+            elseif child:IsA("BodyPosition") then
+                capturaLocal("MOVER", string.format("BodyPosition criada | Pos=%s P=%s",
+                    ser(child.Position), tostring(child.P)))
+            elseif child:IsA("LinearVelocity") then
+                capturaLocal("MOVER", string.format("LinearVelocity criada | Vel=%s MaxForce=%s",
+                    ser(child.VectorVelocity or child.LineVelocity or Vector3.new()), ser(child.MaxForce)))
+            elseif child:IsA("AlignPosition") then
+                capturaLocal("MOVER", string.format("AlignPosition criada | Pos=%s MaxForce=%s",
+                    ser(child.Position), tostring(child.MaxForce)))
+            elseif child:IsA("AlignOrientation") then
+                capturaLocal("MOVER", "AlignOrientation criada")
+            elseif child:IsA("Attachment") then
+                capturaLocal("MOVER", string.format("Attachment criado | Nome=%s Pos=%s",
+                    child.Name, ser(child.Position)))
+            end
+        end
+
+        for _, child in ipairs(hrp:GetChildren()) do
+            checarMover(child)
+        end
+        local c = hrp.ChildAdded:Connect(checarMover)
+        State.moverConns[#State.moverConns+1] = c
+    end
+end
+
+local function trackerCFrame()
+    if not State.capturando or not State.capturaLocal then return end
+    if not State.trackCFrame then return end
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local agora = tick()
+    if agora - State.ultimoVento < CFRAME_SAMPLE then return end
+    State.ultimoVento = agora
+
+    local pos = hrp.Position
+    local vel = hrp.AssemblyLinearVelocity or hrp.Velocity
+
+    if State.ultimaPos then
+        local delta = (pos - State.ultimaPos).Magnitude
+        if delta > MOVER_LIMITE then
+            local velMag = vel.Magnitude
+            capturaLocal("CFRAME", string.format("Δ=%.1f | Pos=%s | Vel=%s (%.0f)",
+                delta, ser(pos), ser(vel), velMag))
+        end
+    end
+    State.ultimaPos = pos
+    State.ultimaVel = vel
+end
+
+local function instalarVIM()
+    if State.vimHook then return end
+    if not hookfunction then return end
+    local vim = game:GetService("VirtualInputManager")
+    if not vim then return end
+
+    local metodos = {"SendKeyEvent", "SendMouseButtonEvent", "SendMouseWheelEvent", "SendTextInput"}
+    State.vimOriginal = {}
+
+    for _, nome in ipairs(metodos) do
+        local orig = vim[nome]
+        if type(orig) == "function" then
+            State.vimOriginal[nome] = orig
+            local novo = function(self, ...)
+                if State.capturando and State.capturaLocal and State.trackVIM then
+                    local n = select("#", ...)
+                    local args = {...}
+                    local partes = {}
+                    for i = 1, math.min(n, 4) do
+                        partes[#partes+1] = ser(args[i])
+                    end
+                    capturaLocal("VIM", string.format("%s(%s)", nome, table.concat(partes, ", ")))
+                end
+                return orig(self, ...)
+            end
+            pcall(function() hookfunction(orig, novo) end)
+        end
+    end
+    State.vimHook = true
+end
+
+local function removerVIM()
+    if not State.vimHook then return end
+    local vim = game:GetService("VirtualInputManager")
+    if vim and State.vimOriginal then
+        for nome, orig in pairs(State.vimOriginal) do
+            pcall(function() vim[nome] = orig end)
+        end
+    end
+    State.vimHook = false
+    State.vimOriginal = nil
+end
+
+local function instalarTrackerLocal()
+    if State.capturaLocal then return end
+    State.capturaLocal = true
+    State.ultimaPos = nil
+    State.ultimoSpeed = nil
+    State.ultimoJump = nil
+
+    instalarTrackerPersonagem(plr.Character)
+    plr.CharacterAdded:Connect(function(c)
+        task.wait(0.5)
+        instalarTrackerPersonagem(c)
+    end)
+
+    instalarVIM()
+
+    if not State.vento then
+        State.vento = RunService.Heartbeat:Connect(function()
+            pcall(trackerCFrame)
+        end)
+    end
+end
+
+local function removerTrackerLocal()
+    State.capturaLocal = false
+    limparMoverConns()
+    removerVIM()
+    if State.vento then
+        pcall(function() State.vento:Disconnect() end)
+        State.vento = nil
+    end
 end
 
 local function listarRemotes()
@@ -331,21 +542,30 @@ local function instalarHooks()
     end
 
     if State.stealthMode and not estaEmDungeon() then
-        log("INFO", string.format("STEALTH: main place (PlaceId %d). Hooks desligados.", game.PlaceId))
-        log("INFO", "Ativa quando entrar na dungeon (PlaceId diferente).")
+        log("INFO", "STEALTH: main place. Hooks remotos desligados.")
+        log("INFO", "Tracker local segue ativo se Universal.")
+        if State.categoria == "Universal" then
+            instalarTrackerLocal()
+        end
         return instalados
     end
 
     instalarNomecall()
     instalarConnectOnce()
 
-    log("SUCCESS", string.format("Alvos: %d/%d | PlaceId: %d", instalados, #remotes, game.PlaceId))
+    if State.categoria == "Universal" then
+        instalarTrackerLocal()
+    end
+
+    log("SUCCESS", string.format("Alvos: %d/%d | Tracker local: %s | PlaceId: %d",
+        instalados, #remotes, tostring(State.capturaLocal), game.PlaceId))
     return instalados
 end
 
 local function removerHooks()
     removerNomecall()
     removerConnect()
+    removerTrackerLocal()
     State.hooksSet = {}
     State.signalToRemote = setmetatable({}, {__mode = "k"})
 end
@@ -357,24 +577,12 @@ local function checarStealth()
     if emDg ~= State.emDungeon then
         State.emDungeon = emDg
         if emDg then
-            log("SUCCESS", "DUNGEON DETECTADA (PlaceId "..game.PlaceId..") — ativando hooks")
-            instalarHooks()
+            log("SUCCESS", "DUNGEON DETECTADA — ativando hooks")
         else
-            log("INFO", "Voltou pro main place — desativando hooks")
-            removerHooks()
-            instalarHooks()
+            log("INFO", "Main place — desativando hooks")
         end
-    end
-end
-
-local function salvarPlaceMain()
-    if not writefile then return end
-    if State.placeMain then return end
-    if State.capturando then return end
-    if not isfile or not isfile(PLACE_FILE) then
-        State.placeMain = game.PlaceId
-        pcall(writefile, PLACE_FILE, tostring(game.PlaceId))
-        return
+        removerHooks()
+        instalarHooks()
     end
 end
 
@@ -399,7 +607,7 @@ end
 local function salvarEstado()
     if not writefile then return end
     local linhas = {}
-    linhas[#linhas+1] = "v=7.5"
+    linhas[#linhas+1] = "v=7.6"
     linhas[#linhas+1] = "ativo=" .. (State.capturando and "1" or "0")
     linhas[#linhas+1] = "sessao=" .. (State.sessao or "Sessao"):gsub("[\n\r]", "")
     linhas[#linhas+1] = "categoria=" .. (State.categoria or "Tudo")
@@ -411,6 +619,12 @@ local function salvarEstado()
         local argStr = (e.argsSer or ""):gsub("[\n\r\t]", " ")
         linhas[#linhas+1] = table.concat({e.cat or "OTHER", e.path or "", e.metodo or "FireServer→", argStr}, "\t")
     end
+    linhas[#linhas+1] = "---TRACKER---"
+    for i = 1, #State.trackerBuffer do
+        local e = State.trackerBuffer[i]
+        local argStr = (e.argsSer or ""):gsub("[\n\r\t]", " ")
+        linhas[#linhas+1] = table.concat({e.cat or "STATE", argStr}, "\t")
+    end
     pcall(writefile, STATE_FILE, table.concat(linhas, "\n"))
 end
 
@@ -421,17 +635,25 @@ local function carregarEstado()
     if not ok or not conteudo then return false end
     local header = {}
     local buffer = {}
-    local inBuffer = false
+    local tracker = {}
+    local secao = nil
     for linha in conteudo:gmatch("[^\n]+") do
         if linha == "---BUFFER---" then
-            inBuffer = true
-        elseif inBuffer then
+            secao = "buffer"
+        elseif linha == "---TRACKER---" then
+            secao = "tracker"
+        elseif secao == "buffer" then
             local cat, path, metodo, argStr = linha:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
             if cat and path then
                 buffer[#buffer+1] = {
                     cat = cat, path = path, metodo = metodo or "FireServer→",
                     argsSer = argStr or "",
                 }
+            end
+        elseif secao == "tracker" then
+            local cat, argStr = linha:match("^([^\t]*)\t(.*)$")
+            if cat and argStr then
+                tracker[#tracker+1] = { cat = cat, argsSer = argStr }
             end
         else
             local k, v = linha:match("^(%w+)=(.*)$")
@@ -443,6 +665,7 @@ local function carregarEstado()
     State.categoria = header.categoria or State.categoria
     State.contadorBruto = tonumber(header.contador) or 0
     State.buffer = buffer
+    State.trackerBuffer = tracker
     if header.placeMain and header.placeMain ~= "" then
         State.placeMain = tonumber(header.placeMain)
     end
@@ -458,7 +681,7 @@ local function limparEstado()
 end
 
 local function salvarArquivo()
-    if #State.buffer == 0 then
+    if #State.buffer == 0 and #State.trackerBuffer == 0 then
         log("INFO", "Buffer vazio")
         return false
     end
@@ -467,7 +690,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v7.5 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v7.6 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -480,13 +703,14 @@ local function salvarArquivo()
     add("│ Categoria:    "..State.categoria)
     add("│ Hook:         "..State.hookMetodo)
     add("│ Stealth:      "..(State.stealthMode and "ON" or "OFF"))
+    add("│ Tracker:      "..(State.capturaLocal and "ON" or "OFF"))
     add("│ Remotes:      "..State.remotesEncontrados)
-    add("│ Bruto:        "..State.contadorBruto.." chamadas")
-    add("│ Eventos:      "..#State.buffer.." no buffer")
+    add("│ Bruto:        "..State.contadorBruto.." remotos")
+    add("│ Local:        "..State.contadorTracker.." eventos")
     add("└──────────────────────────────────────────────────────")
     add("")
     add("╔══════════════════════════════════════════════════════╗")
-    add("║              📡 TRÁFEGO SEQUENCIAL                   ║")
+    add("║              📡 TRÁFEGO REMOTO                       ║")
     add("║         → cliente envia  |  ← servidor envia         ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
@@ -499,6 +723,21 @@ local function salvarArquivo()
         add(string.format("┃   ▸ %s", e.metodo))
         add(string.format("┃   ↳ %s", e.argsSer))
         add("┃")
+    end
+
+    if #State.trackerBuffer > 0 then
+        add("")
+        add("╔══════════════════════════════════════════════════════╗")
+        add("║              📍 RASTREAMENTO LOCAL                   ║")
+        add("╚══════════════════════════════════════════════════════╝")
+        add("")
+        for i = 1, #State.trackerBuffer do
+            local e = State.trackerBuffer[i]
+            local info = CAT_INFO[e.cat] or CAT_INFO.STATE
+            add(string.format("┃ [%04d] %s %s", i, info.icone, e.cat))
+            add(string.format("┃   ↳ %s", e.argsSer))
+            add("┃")
+        end
     end
 
     add("╔══════════════════════════════════════════════════════╗")
@@ -627,7 +866,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v7.5"
+titulo.Text = "🐉  DUMPER v7.6"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -811,7 +1050,7 @@ local btnStealth = Instance.new("TextButton")
 btnStealth.Size = UDim2.new(1, -24, 0, 32)
 btnStealth.Position = UDim2.new(0, 12, 0, 136)
 btnStealth.BackgroundColor3 = T.elev
-btnStealth.Text = "🥷  Stealth: ON (só hooka na dungeon)"
+btnStealth.Text = "🥷  Stealth: ON"
 btnStealth.TextColor3 = T.success
 btnStealth.Font = Enum.Font.GothamBold
 btnStealth.TextSize = 10
@@ -820,9 +1059,22 @@ btnStealth.AutoButtonColor = false
 btnStealth.Parent = painelCaptura
 Instance.new("UICorner", btnStealth).CornerRadius = UDim.new(0, 8)
 
+local btnTracker = Instance.new("TextButton")
+btnTracker.Size = UDim2.new(1, -24, 0, 30)
+btnTracker.Position = UDim2.new(0, 12, 0, 174)
+btnTracker.BackgroundColor3 = T.elev
+btnTracker.Text = "📍  Tracker local: só em Universal"
+btnTracker.TextColor3 = T.text
+btnTracker.Font = Enum.Font.GothamBold
+btnTracker.TextSize = 10
+btnTracker.BorderSizePixel = 0
+btnTracker.AutoButtonColor = false
+btnTracker.Parent = painelCaptura
+Instance.new("UICorner", btnTracker).CornerRadius = UDim.new(0, 8)
+
 local btnTeleporte = Instance.new("TextButton")
 btnTeleporte.Size = UDim2.new(1, -24, 0, 30)
-btnTeleporte.Position = UDim2.new(0, 12, 0, 174)
+btnTeleporte.Position = UDim2.new(0, 12, 0, 210)
 btnTeleporte.BackgroundColor3 = T.elev
 btnTeleporte.Text = "🔗  Auto-teleporte"
 btnTeleporte.TextColor3 = T.warn
@@ -835,7 +1087,7 @@ Instance.new("UICorner", btnTeleporte).CornerRadius = UDim.new(0, 8)
 
 local btnSilencioso = Instance.new("TextButton")
 btnSilencioso.Size = UDim2.new(1, -24, 0, 30)
-btnSilencioso.Position = UDim2.new(0, 12, 0, 210)
+btnSilencioso.Position = UDim2.new(0, 12, 0, 246)
 btnSilencioso.BackgroundColor3 = T.elev
 btnSilencioso.Text = "🔇  Modo silencioso"
 btnSilencioso.TextColor3 = T.text
@@ -848,7 +1100,7 @@ Instance.new("UICorner", btnSilencioso).CornerRadius = UDim.new(0, 8)
 
 local feedTitulo = Instance.new("TextLabel")
 feedTitulo.Size = UDim2.new(1, -24, 0, 20)
-feedTitulo.Position = UDim2.new(0, 12, 0, 246)
+feedTitulo.Position = UDim2.new(0, 12, 0, 282)
 feedTitulo.BackgroundTransparency = 1
 feedTitulo.Text = "FLUXO RECENTE"
 feedTitulo.TextColor3 = T.textDim
@@ -858,8 +1110,8 @@ feedTitulo.TextXAlignment = Enum.TextXAlignment.Left
 feedTitulo.Parent = painelCaptura
 
 local feedScroll = Instance.new("ScrollingFrame")
-feedScroll.Size = UDim2.new(1, -24, 1, -276)
-feedScroll.Position = UDim2.new(0, 12, 0, 268)
+feedScroll.Size = UDim2.new(1, -24, 1, -312)
+feedScroll.Position = UDim2.new(0, 12, 0, 304)
 feedScroll.BackgroundColor3 = T.bg
 feedScroll.BackgroundTransparency = 0.5
 feedScroll.BorderSizePixel = 0
@@ -958,6 +1210,7 @@ criarSeletorCategoria("Skills")
 criarSeletorCategoria("Drops")
 criarSeletorCategoria("Toolbar")
 criarSeletorCategoria("Rebirth")
+criarSeletorCategoria("Universal")
 criarSeletorCategoria("Tudo")
 
 local painelLogs = Instance.new("Frame")
@@ -1006,8 +1259,11 @@ criarTabLog("todos", "todos")
 criarTabLog("DUNGEON", "dungeon")
 criarTabLog("SKILL", "skill")
 criarTabLog("DROP", "drop")
-criarTabLog("BOSS", "boss")
 criarTabLog("M1", "m1")
+criarTabLog("MOVER", "mover")
+criarTabLog("CFRAME", "cframe")
+criarTabLog("SPEED", "speed")
+criarTabLog("VIM", "vim")
 
 local logsScroll = Instance.new("ScrollingFrame")
 logsScroll.Size = UDim2.new(1, -24, 1, -86)
@@ -1098,11 +1354,8 @@ local function mkBotaoAcao(y, icone, nome, desc, cor, corFeedback, cb)
 end
 
 mkBotaoAcao(12, "🔧", "Reinstalar Hooks", "Aplica categoria atual", T.info, T.info, function()
-    if State.capturando then
-        instalarHooks()
-    else
-        log("INFO", "Inicie captura primeiro")
-    end
+    if State.capturando then instalarHooks()
+    else log("INFO", "Inicie captura primeiro") end
 end)
 
 mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt e limpa estado", T.accent, T.success, function()
@@ -1110,9 +1363,11 @@ mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt e limpa estado", T.accent, T.s
     salvarArquivo()
 end)
 
-mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego + estado", T.warn, T.warn, function()
+mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego + tracker", T.warn, T.warn, function()
     State.buffer = {}
+    State.trackerBuffer = {}
     State.contadorBruto = 0
+    State.contadorTracker = 0
     limparEstado()
     log("INFO", "Buffers limpos")
 end)
@@ -1126,7 +1381,7 @@ end)
 mkBotaoAcao(260, "📍", "Resetar PlaceMain", "Esquece place principal", T.danger, T.danger, function()
     if delfile then pcall(delfile, PLACE_FILE) end
     State.placeMain = game.PlaceId
-    log("INFO", "PlaceMain resetado para "..game.PlaceId)
+    log("INFO", "PlaceMain resetado")
 end)
 
 local painelDiag = Instance.new("Frame")
@@ -1175,7 +1430,7 @@ footer.Parent = main
 local footTxt = Instance.new("TextLabel")
 footTxt.Size = UDim2.new(1, 0, 1, 0)
 footTxt.BackgroundTransparency = 1
-footTxt.Text = "0 bruto • 0 buffer • PlaceId: 0"
+footTxt.Text = "0 remotos • 0 local • PlaceId: 0"
 footTxt.TextColor3 = T.textMuted
 footTxt.Font = Enum.Font.GothamMedium
 footTxt.TextSize = 10
@@ -1185,16 +1440,17 @@ footTxt.Parent = footer
 criarItemSidebar("captura", "📡", "Captura", function()
     if State.resumido then return "▶ resumido" end
     if State.capturando then return "REC • "..State.contadorBruto end
-    return State.contadorBruto > 0 and (State.contadorBruto.." bruto") or "parado"
+    return State.contadorBruto > 0 and (State.contadorBruto.." remoto") or "parado"
 end)
 criarItemSidebar("filtros", "🎛", "Categoria", function()
     return State.categoria
 end)
 criarItemSidebar("logs", "📊", "Logs", function()
-    return #State.buffer.." buffer"
+    return #State.buffer.." remoto / "..#State.trackerBuffer.." local"
 end)
 criarItemSidebar("arquivo", "📁", "Arquivo", function()
-    return #State.buffer > 0 and (#State.buffer.." eventos") or "vazio"
+    local t = #State.buffer + #State.trackerBuffer
+    return t > 0 and (t.." eventos") or "vazio"
 end)
 criarItemSidebar("diag", "🩺", "Diagnóstico", function()
     if State.stealthMode and not State.emDungeon then return "stealth" end
@@ -1235,7 +1491,7 @@ local function atualizarBtnCap()
         statusTxt.TextColor3 = T.textDim
     end
     if State.resumido then
-        resumoLabel.Text = "▶ RETOMADO | "..#State.buffer.." eventos"
+        resumoLabel.Text = "▶ RETOMADO | "..#State.buffer.." remoto / "..#State.trackerBuffer.." local"
     else
         resumoLabel.Text = ""
     end
@@ -1249,7 +1505,9 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
     if State.capturando then
         if not State.resumido then
             State.buffer = {}
+            State.trackerBuffer = {}
             State.contadorBruto = 0
+            State.contadorTracker = 0
         end
         print("[DUMPER] 🔴 CAPTURA INICIADA | PlaceId: "..game.PlaceId)
         instalarHooks()
@@ -1266,20 +1524,35 @@ btnStealth.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
     State.stealthMode = not State.stealthMode
     if State.stealthMode then
-        btnStealth.Text = "🥷  Stealth: ON (só hooka na dungeon)"
+        btnStealth.Text = "🥷  Stealth: ON"
         btnStealth.TextColor3 = T.success
-        if State.capturando then
-            removerHooks()
-            instalarHooks()
-        end
     else
-        btnStealth.Text = "🥷  Stealth: OFF (hooka sempre)"
+        btnStealth.Text = "🥷  Stealth: OFF"
         btnStealth.TextColor3 = T.warn
-        if State.capturando then
-            instalarHooks()
-        end
+    end
+    if State.capturando then instalarHooks() end
+end))
+
+btnTracker.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
+    State.trackCFrame = not State.trackCFrame
+    State.trackMover = State.trackCFrame
+    State.trackSpeed = State.trackCFrame
+    State.trackVIM = State.trackCFrame
+    if State.trackCFrame then
+        btnTracker.Text = "📍  Tracker local: ON"
+        btnTracker.TextColor3 = T.success
+    else
+        btnTracker.Text = "📍  Tracker local: OFF"
+        btnTracker.TextColor3 = T.textMuted
+    end
+    if State.capturando and State.categoria == "Universal" then
+        if State.trackCFrame then instalarTrackerLocal()
+        else removerTrackerLocal() end
     end
 end))
+btnTracker.Text = "📍  Tracker local: ON"
+btnTracker.TextColor3 = T.success
 
 btnTeleporte.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
@@ -1294,25 +1567,20 @@ btnTeleporte.MouseButton1Click:Connect(safeUI(function()
         if ok and type(s) == "string" and #s > 500 then fonte = s end
     end
     if not fonte then
-        warn("[DUMPER] getscript indisponível. Use auto-exec do Delta.")
+        warn("[DUMPER] getscript indisponível")
         btnTeleporte.Text = "⚠  Use auto-exec do Delta"
         btnTeleporte.TextColor3 = T.danger
         return
     end
     local ok = pcall(writefile, AUTO_FILE, fonte)
-    if not ok then
-        warn("[DUMPER] Falha ao salvar fonte")
-        return
-    end
+    if not ok then return end
     local queueFn = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
     if queueFn then
         pcall(queueFn, 'loadfile("'..AUTO_FILE..'")()')
         btnTeleporte.Text = "✅  Auto-teleporte armado"
         btnTeleporte.TextColor3 = T.success
-        log("SUCCESS", "Auto-teleporte armado")
     else
-        warn("[DUMPER] queue_on_teleport indisponível")
-        btnTeleporte.Text = "⚠  Use auto-exec do Delta"
+        btnTeleporte.Text = "⚠  Use auto-exec"
         btnTeleporte.TextColor3 = T.danger
     end
 end))
@@ -1335,7 +1603,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerHooks()
     gui:Destroy()
-    print("[DUMPER v7.5] Encerrado")
+    print("[DUMPER v7.6] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1346,14 +1614,14 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     table.insert(info, "Executor:    "..tostring(identifyexecutor and identifyexecutor() or "?"))
     table.insert(info, "Nomecall:    "..tostring(State.nomecallInstalado))
     table.insert(info, "Stealth:     "..tostring(State.stealthMode))
+    table.insert(info, "Tracker:     "..tostring(State.capturaLocal))
     table.insert(info, "PlaceMain:   "..tostring(State.placeMain))
     table.insert(info, "PlaceAtual:  "..game.PlaceId)
     table.insert(info, "EmDungeon:   "..tostring(State.emDungeon))
     table.insert(info, "Categoria:   "..State.categoria)
     table.insert(info, "Alvos:       "..total)
     table.insert(info, "Bruto:       "..State.contadorBruto)
-    table.insert(info, "Buffer:      "..#State.buffer)
-    table.insert(info, "Resumido:    "..tostring(State.resumido))
+    table.insert(info, "Local:       "..State.contadorTracker)
     diagText.Text = table.concat(info, "\n")
 end))
 
@@ -1384,33 +1652,47 @@ UIS.InputEnded:Connect(function(i)
 end)
 
 local _ultimoCount = -1
+local _ultimoCountLocal = -1
 local _ultimaCat = nil
 local _ultimoSidebar = -1
 
 task.spawn(function()
     while gui.Parent do
         task.wait(1.2)
-        footTxt.Text = string.format("%d bruto • %d buffer • PlaceId: %d",
-            State.contadorBruto, #State.buffer, game.PlaceId)
+        footTxt.Text = string.format("%d remoto • %d local • PlaceId: %d",
+            State.contadorBruto, State.contadorTracker, game.PlaceId)
 
-        if #State.buffer == _ultimoCount and State.catAtiva == _ultimaCat then
+        local mudouRemoto = #State.buffer ~= _ultimoCount
+        local mudouLocal = #State.trackerBuffer ~= _ultimoCountLocal
+
+        if not mudouRemoto and not mudouLocal and State.catAtiva == _ultimaCat then
             if State.contadorBruto ~= _ultimoSidebar then
                 atualizarSidebar()
-                _ultimoSidebar = State.contadorBruto
+                _ultimoSidebar = State.contadorBruto + State.contadorTracker
             end
             continue
         end
         _ultimoCount = #State.buffer
+        _ultimoCountLocal = #State.trackerBuffer
         _ultimaCat = State.catAtiva
 
         if painelCaptura.Visible then
             local linhas = {}
-            local ini = math.max(1, #State.buffer - 12)
-            for i = ini, #State.buffer do
-                local e = State.buffer[i]
-                local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
-                table.insert(linhas, string.format("%s %s — %s %s",
-                    info.icone, e.cat, e.metodo, e.path:sub(-32)))
+            local total = #State.buffer + #State.trackerBuffer
+            local ini = math.max(1, total - 15)
+            for i = ini, total do
+                local e, info
+                if i <= #State.buffer then
+                    e = State.buffer[i]
+                    info = CAT_INFO[e.cat] or CAT_INFO.OTHER
+                    table.insert(linhas, string.format("%s %s — %s",
+                        info.icone, e.cat, e.path:sub(-32)))
+                else
+                    e = State.trackerBuffer[i - #State.buffer]
+                    info = CAT_INFO[e.cat] or CAT_INFO.STATE
+                    table.insert(linhas, string.format("%s %s — %s",
+                        info.icone, e.cat, e.argsSer:sub(1, 40)))
+                end
             end
             feedText.Text = #linhas == 0 and "Aguardando..." or table.concat(linhas, "\n")
             feedScroll.CanvasSize = UDim2.new(0, 0, 0, feedText.TextBounds.Y + 20)
@@ -1419,22 +1701,33 @@ task.spawn(function()
         if painelLogs.Visible then
             local linhasL = {}
             local filtro = State.filtroLogCat
-            local ini2 = math.max(1, #State.buffer - 40)
-            for i = ini2, #State.buffer do
-                local e = State.buffer[i]
-                if filtro == "todos" or e.cat == filtro then
-                    local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
-                    table.insert(linhasL, string.format("%s %s  %s\n",
-                        info.icone, e.metodo, e.path))
+            local total = #State.buffer + #State.trackerBuffer
+            local ini2 = math.max(1, total - 40)
+            for i = ini2, total do
+                local e, info
+                if i <= #State.buffer then
+                    e = State.buffer[i]
+                    info = CAT_INFO[e.cat] or CAT_INFO.OTHER
+                    if filtro == "todos" or e.cat == filtro then
+                        table.insert(linhasL, string.format("%s %s  %s\n",
+                            info.icone, e.metodo, e.path))
+                    end
+                else
+                    e = State.trackerBuffer[i - #State.buffer]
+                    info = CAT_INFO[e.cat] or CAT_INFO.STATE
+                    if filtro == "todos" or e.cat == filtro then
+                        table.insert(linhasL, string.format("%s %s  %s\n",
+                            info.icone, e.cat, e.argsSer))
+                    end
                 end
             end
             logsText.Text = #linhasL == 0 and "Sem entradas." or table.concat(linhasL, "")
             logsScroll.CanvasSize = UDim2.new(0, 0, 0, logsText.TextBounds.Y + 20)
         end
 
-        if State.contadorBruto ~= _ultimoSidebar then
+        if (State.contadorBruto + State.contadorTracker) ~= _ultimoSidebar then
             atualizarSidebar()
-            _ultimoSidebar = State.contadorBruto
+            _ultimoSidebar = State.contadorBruto + State.contadorTracker
         end
     end
 end)
@@ -1442,9 +1735,7 @@ end)
 task.spawn(function()
     while gui.Parent do
         task.wait(10)
-        if State.capturando then
-            salvarEstado()
-        end
+        if State.capturando then salvarEstado() end
     end
 end)
 
@@ -1458,7 +1749,7 @@ end)
 carregarPlaceMain()
 local resumiu = carregarEstado()
 if resumiu then
-    log("SUCCESS", "Estado retomado | "..#State.buffer.." eventos | PlaceId "..game.PlaceId)
+    log("SUCCESS", "Estado retomado | "..#State.buffer.." remoto / "..#State.trackerBuffer.." local")
     instalarHooks()
 end
 
@@ -1471,4 +1762,4 @@ atualizarSidebar()
 atualizarConteudo()
 atualizarBtnCap()
 
-print("[DUMPER v7.5] ✅ Pronto — stealth mode ativo")
+print("[DUMPER v7.6] ✅ Pronto — Universal + tracker local")
