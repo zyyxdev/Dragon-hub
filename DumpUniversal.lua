@@ -1,4 +1,4 @@
-print("[DUMPER v7.3] Iniciando...")
+print("[DUMPER v7.4] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -11,8 +11,8 @@ local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local STATE_FILE = "dumper_v73_state.txt"
-local AUTO_FILE = "dumper_v73_auto.lua"
+local STATE_FILE = "dumper_v74_state.txt"
+local AUTO_FILE = "dumper_v74_auto.lua"
 
 local function NC(fn)
     if newcclosure then
@@ -43,18 +43,24 @@ local MAX_BUFFER = 5000
 local State = {
     sessao = "Sessao",
     capturando = false,
-    categoria = "Dungeon",
-    hooks = setmetatable({}, {__mode = "k"}),
+    categoria = "Tudo",
+    hooksSet = {},
     buffer = {},
     contadorBruto = 0,
     remotesEncontrados = 0,
-    hookMetodo = "individual+recv",
+    hookMetodo = "__namecall",
     _silencioso = true,
     catAtiva = "captura",
     filtroLogCat = "todos",
     nomesCache = setmetatable({}, {__mode = "k"}),
     resumido = false,
-    antiLuraph = true,
+    nomecallInstalado = false,
+    nomecallOriginal = nil,
+    nomecallHook = nil,
+    recvHooked = false,
+    signalToRemote = setmetatable({}, {__mode = "k"}),
+    connectOriginal = nil,
+    connectHook = nil,
 }
 
 local function log(cat, msg)
@@ -158,15 +164,16 @@ local function ser(v, d)
     return "["..t.."] "..tostring(v)
 end
 
-local function serializarArgs(args)
+local function serializarArgs(args, n)
     local parts = {}
-    for i = 1, math.min(#args, 6) do
+    local max = math.min(n or #args, 6)
+    for i = 1, max do
         parts[#parts+1] = ser(args[i])
     end
     return table.concat(parts, " | ")
 end
 
-local function captura(remote, metodo, args)
+local function captura(remote, metodo, args, n)
     if not State.capturando then return end
     if #State.buffer >= MAX_BUFFER then return end
     local ok, path = pcall(function() return remote:GetFullName() end)
@@ -175,7 +182,7 @@ local function captura(remote, metodo, args)
 
     State.contadorBruto = State.contadorBruto + 1
     local cat = classificar(path)
-    local argsSer = serializarArgs(args)
+    local argsSer = serializarArgs(args, n)
     State.buffer[#State.buffer+1] = {
         cat = cat,
         path = path:gsub("ReplicatedStorage%.", "RS."),
@@ -184,101 +191,99 @@ local function captura(remote, metodo, args)
     }
 end
 
-local function instalarHookEnvio(remote)
-    local info = State.hooks[remote] or {}
-    State.hooks[remote] = info
-    if info.envioInstalado then return end
-
-    if remote:IsA("RemoteFunction") then
-        local orig = remote.InvokeServer
-        local wrapper = NC(function(self, ...)
-            local args = {...}
-            pcall(captura, remote, "InvokeServer→", args)
-            return orig(self, ...)
-        end)
-        pcall(function() remote.InvokeServer = wrapper end)
-        info.origEnvio = orig
-        info.wrapperEnvio = wrapper
-    else
-        local orig = remote.FireServer
-        local wrapper = NC(function(self, ...)
-            local args = {...}
-            pcall(captura, remote, "FireServer→", args)
-            return orig(self, ...)
-        end)
-        pcall(function() remote.FireServer = wrapper end)
-        info.origEnvio = orig
-        info.wrapperEnvio = wrapper
+local function instalarNomecall()
+    if State.nomecallInstalado then return end
+    if not (hookmetamethod and getnamecallmethod and getrawmetatable) then
+        log("ERRO", "sem hookmetamethod/getnamecallmethod")
+        return false
     end
-    info.envioInstalado = true
-end
+    local mt = getrawmetatable(game)
+    if not mt then return false end
 
-local function instalarHookRecebimento(remote)
-    local info = State.hooks[remote] or {}
-    State.hooks[remote] = info
-    if info.recvInstalado then return end
-
-    if remote:IsA("RemoteFunction") then
-        local orig = remote.OnClientInvoke
-        local wrapper = NC(function(...)
-            local args = {...}
-            pcall(captura, remote, "OnClientInvoke←", args)
-            if orig then
-                return orig(...)
-            end
-        end)
-        pcall(function() remote.OnClientInvoke = wrapper end)
-        info.origRecv = orig
-        info.wrapperRecv = wrapper
-        info.recvInstalado = true
-    else
-        local ok = pcall(function()
-            local signal = remote.OnClientEvent
-            if not signal then return end
-            local origConnect = signal.Connect
-            local wrapperConnect = NC(function(self, fn)
-                local wrappedFn = NC(function(...)
+    State.nomecallOriginal = mt.__namecall
+    setreadonly(mt, false)
+    State.nomecallHook = NC(function(self, ...)
+        if State.capturando then
+            local alvo = State.hooksSet[self]
+            if alvo then
+                local metodo = getnamecallmethod()
+                if metodo == "FireServer" or metodo == "InvokeServer" then
+                    local n = select("#", ...)
                     local args = {...}
-                    pcall(captura, remote, "OnClientEvent←", args)
-                    return fn(...)
-                end)
-                return origConnect(self, wrappedFn)
-            end)
-            if hookfunction then
-                hookfunction(origConnect, wrapperConnect)
-            elseif remote.GetPropertyChangedSignal then
-                return
-            end
-            info.origRecvConnect = origConnect
-            info.wrapperRecvConnect = wrapperConnect
-            info.recvInstalado = true
-        end)
-        if not ok then
-            info.recvInstalado = false
-        end
-    end
-end
-
-local function instalarHookEm(remote)
-    pcall(instalarHookEnvio, remote)
-    pcall(instalarHookRecebimento, remote)
-end
-
-local function removerTodosHooks()
-    for remote, info in pairs(State.hooks) do
-        pcall(function()
-            if remote:IsA("RemoteFunction") then
-                if info.origEnvio then remote.InvokeServer = info.origEnvio end
-                if info.origRecv ~= nil then remote.OnClientInvoke = info.origRecv end
-            else
-                if info.origEnvio then remote.FireServer = info.origEnvio end
-                if info.origRecvConnect and hookfunction and info.wrapperRecvConnect then
-                    pcall(function() hookfunction(info.wrapperRecvConnect, info.origRecvConnect) end)
+                    pcall(captura, self, metodo.."→", args, n)
                 end
             end
+        end
+        return State.nomecallOriginal(self, ...)
+    end)
+    mt.__namecall = State.nomecallHook
+    setreadonly(mt, true)
+
+    State.nomecallInstalado = true
+    return true
+end
+
+local function removerNomecall()
+    if not State.nomecallInstalado then return end
+    pcall(function()
+        local mt = getrawmetatable(game)
+        if not mt then return end
+        setreadonly(mt, false)
+        mt.__namecall = State.nomecallOriginal
+        setreadonly(mt, true)
+    end)
+    State.nomecallInstalado = false
+    State.nomecallHook = nil
+    State.nomecallOriginal = nil
+end
+
+local function instalarConnectOnce()
+    if State.recvHooked then return end
+    if not hookfunction then return end
+
+    local sample = nil
+    for r in pairs(State.hooksSet) do sample = r break end
+    if not sample then return end
+
+    local ok, signal = pcall(function() return sample.OnClientEvent end)
+    if not ok or not signal then return end
+
+    local origConnect = signal.Connect
+    if not origConnect then return end
+
+    State.connectOriginal = origConnect
+    State.connectHook = NC(function(self, fn)
+        local remote = State.signalToRemote[self]
+        if not remote then
+            return origConnect(self, fn)
+        end
+        local wrapped = NC(function(...)
+            if State.capturando then
+                local n = select("#", ...)
+                local args = {...}
+                pcall(captura, remote, "OnClientEvent←", args, n)
+            end
+            return fn(...)
         end)
-    end
-    State.hooks = setmetatable({}, {__mode = "k"})
+        return origConnect(self, wrapped)
+    end)
+
+    pcall(function()
+        hookfunction(origConnect, State.connectHook)
+        State.recvHooked = true
+    end)
+end
+
+local function removerConnect()
+    if not State.recvHooked then return end
+    pcall(function()
+        if hookfunction and State.connectHook and State.connectOriginal then
+            hookfunction(State.connectHook, State.connectOriginal)
+        end
+    end)
+    State.recvHooked = false
+    State.connectHook = nil
+    State.connectOriginal = nil
 end
 
 local function listarRemotes()
@@ -292,66 +297,52 @@ local function listarRemotes()
 end
 
 local function instalarHooks()
-    removerTodosHooks()
+    State.hooksSet = {}
+    State.signalToRemote = setmetatable({}, {__mode = "k"})
+
     local remotes = listarRemotes()
     State.remotesEncontrados = #remotes
     local lista = CATEGORIAS[State.categoria]
     local instalados = 0
+
     for _, r in ipairs(remotes) do
         local ok, path = pcall(function() return r:GetFullName() end)
-        if ok and path then
-            if not pathIgnorado(path) then
-                local bate = true
-                if lista then
-                    bate = false
-                    for i = 1, #lista do
-                        if path:find(lista[i], 1, true) then bate = true break end
-                    end
+        if ok and path and not pathIgnorado(path) then
+            local bate = true
+            if lista then
+                bate = false
+                for i = 1, #lista do
+                    if path:find(lista[i], 1, true) then bate = true break end
                 end
-                if bate then
-                    instalarHookEm(r)
-                    instalados = instalados + 1
-                end
+            end
+            if bate then
+                State.hooksSet[r] = path
+                instalados = instalados + 1
+                pcall(function()
+                    State.signalToRemote[r.OnClientEvent] = r
+                end)
             end
         end
     end
-    log("SUCCESS", string.format("Hooks: %d/%d | PlaceId: %d", instalados, #remotes, game.PlaceId))
+
+    instalarNomecall()
+    instalarConnectOnce()
+
+    log("SUCCESS", string.format("Alvos: %d/%d | PlaceId: %d", instalados, #remotes, game.PlaceId))
     return instalados
 end
 
-local function verificarEReinstalar()
-    if not State.capturando or not State.antiLuraph then return end
-    local reinstalados = 0
-    for remote, info in pairs(State.hooks) do
-        if info.wrapperEnvio then
-            local ok, atual = pcall(function()
-                if remote:IsA("RemoteFunction") then
-                    return remote.InvokeServer
-                else
-                    return remote.FireServer
-                end
-            end)
-            if ok and atual ~= info.wrapperEnvio then
-                pcall(function()
-                    if remote:IsA("RemoteFunction") then
-                        remote.InvokeServer = info.wrapperEnvio
-                    else
-                        remote.FireServer = info.wrapperEnvio
-                    end
-                end)
-                reinstalados = reinstalados + 1
-            end
-        end
-    end
-    if reinstalados > 0 then
-        log("INFO", "Anti-Luraph: "..reinstalados.." hooks reinstalados")
-    end
+local function removerHooks()
+    removerNomecall()
+    removerConnect()
+    State.hooksSet = {}
+    State.signalToRemote = setmetatable({}, {__mode = "k"})
 end
 
 local function salvarEstado()
     if not writefile then return end
     local linhas = {}
-    linhas[#linhas+1] = "v=7.3"
+    linhas[#linhas+1] = "v=7.4"
     linhas[#linhas+1] = "ativo=" .. (State.capturando and "1" or "0")
     linhas[#linhas+1] = "sessao=" .. (State.sessao or "Sessao"):gsub("[\n\r]", "")
     linhas[#linhas+1] = "categoria=" .. (State.categoria or "Tudo")
@@ -415,7 +406,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v7.3 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v7.4 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -426,7 +417,6 @@ local function salvarArquivo()
     add("│ Sessão:       "..State.sessao)
     add("│ Categoria:    "..State.categoria)
     add("│ Hook:         "..State.hookMetodo)
-    add("│ Anti-Luraph:  "..(State.antiLuraph and "ativo" or "off"))
     add("│ Remotes:      "..State.remotesEncontrados)
     add("│ Bruto:        "..State.contadorBruto.." chamadas")
     add("│ Eventos:      "..#State.buffer.." no buffer")
@@ -574,7 +564,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v7.3"
+titulo.Text = "🐉  DUMPER v7.4"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -767,22 +757,9 @@ btnTeleporte.AutoButtonColor = false
 btnTeleporte.Parent = painelCaptura
 Instance.new("UICorner", btnTeleporte).CornerRadius = UDim.new(0, 8)
 
-local btnAnti = Instance.new("TextButton")
-btnAnti.Size = UDim2.new(1, -24, 0, 30)
-btnAnti.Position = UDim2.new(0, 12, 0, 174)
-btnAnti.BackgroundColor3 = T.elev
-btnAnti.Text = "🛡  Anti-Luraph: ON"
-btnAnti.TextColor3 = T.success
-btnAnti.Font = Enum.Font.GothamBold
-btnAnti.TextSize = 10
-btnAnti.BorderSizePixel = 0
-btnAnti.AutoButtonColor = false
-btnAnti.Parent = painelCaptura
-Instance.new("UICorner", btnAnti).CornerRadius = UDim.new(0, 8)
-
 local btnSilencioso = Instance.new("TextButton")
 btnSilencioso.Size = UDim2.new(1, -24, 0, 30)
-btnSilencioso.Position = UDim2.new(0, 12, 0, 210)
+btnSilencioso.Position = UDim2.new(0, 12, 0, 174)
 btnSilencioso.BackgroundColor3 = T.elev
 btnSilencioso.Text = "🔇  Modo silencioso"
 btnSilencioso.TextColor3 = T.text
@@ -795,7 +772,7 @@ Instance.new("UICorner", btnSilencioso).CornerRadius = UDim.new(0, 8)
 
 local feedTitulo = Instance.new("TextLabel")
 feedTitulo.Size = UDim2.new(1, -24, 0, 20)
-feedTitulo.Position = UDim2.new(0, 12, 0, 246)
+feedTitulo.Position = UDim2.new(0, 12, 0, 210)
 feedTitulo.BackgroundTransparency = 1
 feedTitulo.Text = "FLUXO RECENTE"
 feedTitulo.TextColor3 = T.textDim
@@ -805,8 +782,8 @@ feedTitulo.TextXAlignment = Enum.TextXAlignment.Left
 feedTitulo.Parent = painelCaptura
 
 local feedScroll = Instance.new("ScrollingFrame")
-feedScroll.Size = UDim2.new(1, -24, 1, -276)
-feedScroll.Position = UDim2.new(0, 12, 0, 268)
+feedScroll.Size = UDim2.new(1, -24, 1, -240)
+feedScroll.Position = UDim2.new(0, 12, 0, 232)
 feedScroll.BackgroundColor3 = T.bg
 feedScroll.BackgroundTransparency = 0.5
 feedScroll.BorderSizePixel = 0
@@ -1044,19 +1021,27 @@ local function mkBotaoAcao(y, icone, nome, desc, cor, corFeedback, cb)
     end))
 end
 
-mkBotaoAcao(12, "💾", "Salvar Dump", "Gera .txt e limpa estado", T.accent, T.success, function()
+mkBotaoAcao(12, "🔧", "Reinstalar Hooks", "Aplica categoria atual", T.info, T.info, function()
+    if State.capturando then
+        instalarHooks()
+    else
+        log("INFO", "Inicie captura primeiro")
+    end
+end)
+
+mkBotaoAcao(74, "💾", "Salvar Dump", "Gera .txt e limpa estado", T.accent, T.success, function()
     State.sessao = inputSessao.Text ~= "" and inputSessao.Text or State.sessao
     salvarArquivo()
 end)
 
-mkBotaoAcao(74, "🗑", "Limpar Buffers", "Apaga tráfego + estado", T.warn, T.warn, function()
+mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego + estado", T.warn, T.warn, function()
     State.buffer = {}
     State.contadorBruto = 0
     limparEstado()
     log("INFO", "Buffers limpos")
 end)
 
-mkBotaoAcao(136, "🔴", "Resetar Estado", "Força início fresco", T.danger, T.danger, function()
+mkBotaoAcao(198, "🔴", "Resetar Estado", "Força início fresco", T.danger, T.danger, function()
     limparEstado()
     State.resumido = false
     log("INFO", "Estado resetado")
@@ -1188,7 +1173,7 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
         salvarEstado()
     else
         print("[DUMPER] ⚪ CAPTURA PARADA")
-        removerTodosHooks()
+        removerHooks()
         salvarEstado()
     end
     atualizarBtnCap()
@@ -1230,13 +1215,6 @@ btnTeleporte.MouseButton1Click:Connect(safeUI(function()
     end
 end))
 
-btnAnti.MouseButton1Click:Connect(safeUI(function()
-    haptic("sucesso")
-    State.antiLuraph = not State.antiLuraph
-    btnAnti.Text = State.antiLuraph and "🛡  Anti-Luraph: ON" or "🛡  Anti-Luraph: OFF"
-    btnAnti.TextColor3 = State.antiLuraph and T.success or T.textMuted
-end))
-
 btnSilencioso.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
     State._silencioso = not State._silencioso
@@ -1253,26 +1231,25 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     haptic("erro")
     salvarEstado()
     State.capturando = false
-    removerTodosHooks()
+    removerHooks()
     gui:Destroy()
-    print("[DUMPER v7.3] Encerrado")
+    print("[DUMPER v7.4] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
-    local totalHooks = 0
-    for _ in pairs(State.hooks) do totalHooks = totalHooks + 1 end
+    local total = 0
+    for _ in pairs(State.hooksSet) do total = total + 1 end
     local info = {}
     table.insert(info, "Executor:    "..tostring(identifyexecutor and identifyexecutor() or "?"))
-    table.insert(info, "Hook modo:   individual+recv")
+    table.insert(info, "Nomecall:    "..tostring(State.nomecallInstalado))
+    table.insert(info, "Recv hook:   "..tostring(State.recvHooked))
     table.insert(info, "newcclosure: "..tostring(newcclosure ~= nil))
-    table.insert(info, "hookfunction:"..tostring(hookfunction ~= nil))
     table.insert(info, "getscript:   "..tostring(getscript ~= nil))
-    table.insert(info, "queue_tele:  "..tostring((queue_on_teleport or queueonteleport) ~= nil))
+    table.insert(info, "queue_tele:  "..tostring((queue_on_teleport or queueonteleponte) ~= nil))
     table.insert(info, "writefile:   "..tostring(writefile ~= nil))
-    table.insert(info, "Anti-Luraph: "..tostring(State.antiLuraph))
     table.insert(info, "Categoria:   "..State.categoria)
-    table.insert(info, "Hooks ativos:"..totalHooks)
+    table.insert(info, "Alvos:       "..total)
     table.insert(info, "Remotes:     "..State.remotesEncontrados)
     table.insert(info, "Bruto:       "..State.contadorBruto)
     table.insert(info, "Buffer:      "..#State.buffer)
@@ -1372,15 +1349,6 @@ task.spawn(function()
     end
 end)
 
-task.spawn(function()
-    while gui.Parent do
-        task.wait(3)
-        if State.capturando and State.antiLuraph then
-            pcall(verificarEReinstalar)
-        end
-    end
-end)
-
 local resumiu = carregarEstado()
 if resumiu then
     log("SUCCESS", "Estado retomado | "..#State.buffer.." eventos | PlaceId "..game.PlaceId)
@@ -1391,4 +1359,4 @@ atualizarSidebar()
 atualizarConteudo()
 atualizarBtnCap()
 
-print("[DUMPER v7.3] ✅ Pronto — bidirecional + anti-Luraph")
+print("[DUMPER v7.4] ✅ Pronto — __namecall + hooksSet")
