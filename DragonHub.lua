@@ -390,110 +390,131 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT] PATCH 6: filtro simplificado
-local coletando = false
-local ultimoColetado = 0
-local tentativasItem = {}
+-- [PATCH A+] AutoCollect histerese + cooldown por item + global
+local COLETA_PARAR = 5
+local COLETA_TIMEOUT = 10
+local COLETA_CD_ITEM = 8
+local COLETA_CD_GLOBAL = 1.5
 
-local function extrairInfo(item)
-    local id = tonumber(item.Name:match("ItemDrop_(%d+)")) or 0
-    local nome = item.Name
-    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
-    if sv and sv:IsA("StringValue") then nome = sv.Value end
-    return id, nome
+local _coletaAlvo = nil
+local _coletaInicio = 0
+local _coletaUltimoDrop = nil
+local _coletaUltimaGlobal = 0
+local _coletaIgnorar = setmetatable({}, {__mode = "k"})
+
+local function _dropBase(drop)
+    if not drop or not drop.Parent then return nil end
+    return drop.PrimaryPart or drop:FindFirstChildWhichIsA("BasePart")
 end
 
-local function tentarColetar()
-    if coletando then return end
-    if not Config.AutoCollect then return end
-    if os.clock() - ultimoColetado < (Config.ColetaCooldown or 3) then return end
+local function _resetColeta()
+    _coletaAlvo = nil
+    _coletaInicio = 0
+end
 
-    local c = plr.Character
-    if not c then return end
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local ps = WS:FindFirstChild("PartStorage")
-    if not ps then return end
-
-    local maisProximo, menorDist = nil, math.huge
-    for _, item in ipairs(ps:GetChildren()) do
-        if item.Name:find("ItemDrop_") then
-            local jaTentei = tentativasItem[item]
-            if not (jaTentei and os.clock() - jaTentei < 5) then
-                local base = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
-                if base then
-                    local d = (base.Position - hrp.Position).Magnitude
-                    if d < menorDist then menorDist = d; maisProximo = item end
-                end
-            end
-        end
-    end
-
-    if not maisProximo then return end
-
-    local id, itemName = extrairInfo(maisProximo)
+local function _dropPermitido(itemName)
     local low = itemName:lower()
-
     local ehEsfera = low:find("wish") or low:find("standard") or low:find("premium")
     local ehOrb = low:find("orb")
     local ehScroll = low:find("powerscroll")
     local ehExp = low:find("expmat")
-
-    local permitido = false
-    if ehEsfera and (Config.ColetarLendario or Config.ColetarRaro) then permitido = true end
-    if ehOrb and Config.ColetarRaro then permitido = true end
-    if ehScroll and Config.ColetarEpico then permitido = true end
-    if ehExp and Config.ColetarComum then permitido = true end
-
-    if not permitido then return end
-
-    coletando = true
-    tentativasItem[maisProximo] = os.clock()
-
-    local char = plr.Character
-    if char then
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
-        end
-    end
-
-    local base = maisProximo.PrimaryPart or maisProximo:FindFirstChildWhichIsA("BasePart")
-    if not base then coletando = false; return end
-
-    local tentativas = 0
-    while Config.AutoCollect and coletando and tentativas < 40 do
-        local d = (base.Position - hrp.Position).Magnitude
-        if d < 5 then break end
-        if d > 10 then voarPara(base.Position, Config.FlySpeed)
-        elseif d > 5 then voarPara(base.Position, Config.FlySpeed * 0.3) end
-        task.wait(0.12)
-        tentativas = tentativas + 1
-    end
-
-    if not Config.AutoCollect then coletando = false; return end
-
-    hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
-    task.wait(0.3)
-
-    pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
-    task.wait(0.5)
-    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-
-    task.wait(0.2)
-    local cam = workspace.CurrentCamera
-    if cam then
-        local vp = cam.ViewportSize
-        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
-        task.wait(0.1)
-        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
-    end
-
-    ultimoColetado = os.clock()
-    task.wait(0.3)
-    coletando = false
+    if ehEsfera and (Config.ColetarLendario or Config.ColetarRaro) then return true end
+    if ehOrb and Config.ColetarRaro then return true end
+    if ehScroll and Config.ColetarEpico then return true end
+    if ehExp and Config.ColetarComum then return true end
+    return false
 end
 
+local function tentarColetar()
+    if coletando then return end
+    if not Config.AutoCollect then _resetColeta() return end
+    local agora = os.clock()
+    if agora - _coletaUltimaGlobal < COLETA_CD_GLOBAL then return end
+
+    local c = plr.Character
+    if not c then _resetColeta() return end
+    local hrp = c:FindFirstChild("HumanoidRootPart")
+    if not hrp then _resetColeta() return end
+
+    local ps = WS:FindFirstChild("PartStorage")
+    if not ps then return end
+
+    if _coletaAlvo and (not _coletaAlvo.Parent or _coletaAlvo == _coletaUltimoDrop) then
+        _resetColeta()
+    end
+    if _coletaAlvo and (agora - _coletaInicio > COLETA_TIMEOUT) then
+        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
+        _resetColeta()
+    end
+
+    if not _coletaAlvo then
+        local melhor, melhorD = nil, math.huge
+        for _, item in ipairs(ps:GetChildren()) do
+            if item.Name:find("^ItemDrop_") then
+                local ignoraAte = _coletaIgnorar[item]
+                if not ignoraAte or ignoraAte < agora then
+                    local base = _dropBase(item)
+                    if base then
+                        local d = (base.Position - hrp.Position).Magnitude
+                        if d < melhorD then melhor, melhorD = item, d end
+                    end
+                end
+            end
+        end
+        if not melhor then return end
+        _coletaAlvo = melhor
+        _coletaInicio = agora
+    end
+
+    local base = _dropBase(_coletaAlvo)
+    if not base then _resetColeta() return end
+
+    local id, itemName = extrairInfo(_coletaAlvo)
+    if not _dropPermitido(itemName) then
+        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
+        _resetColeta()
+        return
+    end
+
+    local dist = (base.Position - hrp.Position).Magnitude
+    if dist < COLETA_PARAR then
+        if vooBv then vooBv.Velocity = Vector3.zero end
+        coletando = true
+        _coletaUltimoDrop = _coletaAlvo
+        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
+
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+
+        hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
+        task.wait(0.25)
+
+        pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
+        task.wait(0.4)
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+
+        task.wait(0.15)
+        local cam = workspace.CurrentCamera
+        if cam then
+            local vp = cam.ViewportSize
+            pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
+            task.wait(0.1)
+            pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
+        end
+
+        _coletaUltimaGlobal = os.clock()
+        coletando = false
+        _resetColeta()
+        return
+    end
+
+    if dist > 10 then
+        voarPara(base.Position, Config.FlySpeed)
+    else
+        voarPara(base.Position, Config.FlySpeed * 0.3)
+    end
+end
 -- [ESP GUI]
 local espGui = Instance.new("ScreenGui")
 espGui.Name = "DBH_ESP"
