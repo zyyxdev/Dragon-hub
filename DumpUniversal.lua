@@ -1,4 +1,4 @@
-print("[DUMPER v7.6] Iniciando...")
+print("[DUMPER v7.7] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -12,11 +12,12 @@ local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local STATE_FILE = "dumper_v76_state.txt"
-local AUTO_FILE = "dumper_v76_auto.lua"
-local PLACE_FILE = "dumper_v76_mainplace.txt"
+local STATE_FILE = "dumper_v77_state.txt"
+local AUTO_FILE = "dumper_v77_auto.lua"
+local PLACE_FILE = "dumper_v77_mainplace.txt"
 
-local function NC(fn) return fn end
+local GRACE_RESUME = 8
+local GRACE_TRANSICAO = 5
 
 local CATEGORIAS = {
     Dungeon = {"Dungeon", "Portal", "NextArea", "Wave", "Stage", "Lobby", "Match", "Queue", "Floor", "Boss"},
@@ -24,9 +25,9 @@ local CATEGORIAS = {
     Drops   = {"ClaimItem", "WishService", "ItemDropService", "Wish", "Orb"},
     Toolbar = {"Toolbar", "ToolService", "UpdatePlayerToolbar"},
     Rebirth = {"Rebirth", "Prompt"},
-    Universal = nil,
-    Tudo    = nil,
 }
+
+local ORDEM_CATS = {"Dungeon", "Skills", "Drops", "Toolbar", "Rebirth"}
 
 local IGNORAR = {
     Ping = true, DataChanged = true, PlayAnimation = true, PlayEffect = true,
@@ -43,7 +44,9 @@ local MOVER_LIMITE = 0.5
 local State = {
     sessao = "Sessao",
     capturando = false,
-    categoria = "Dungeon",
+    categorias = {Dungeon = true, Skills = false, Drops = false, Toolbar = false, Rebirth = false},
+    universal = false,
+    todos = false,
     hooksSet = {},
     buffer = {},
     trackerBuffer = {},
@@ -66,20 +69,18 @@ local State = {
     stealthMode = true,
     placeMain = nil,
     emDungeon = false,
+    gracePeriod = true,
+    installToken = nil,
     trackCFrame = true,
     trackMover = true,
     trackSpeed = true,
     trackVIM = true,
     trackState = true,
-    ultimoCFrame = nil,
     ultimaPos = nil,
-    ultimaVel = nil,
     ultimoSpeed = nil,
     ultimoJump = nil,
-    charConn = nil,
     moverConns = {},
-    speedConn = nil,
-    vimHook = nil,
+    vimHook = false,
     vimOriginal = nil,
     capturaLocal = false,
     vento = nil,
@@ -199,6 +200,30 @@ local function serializarArgs(args, n)
         parts[#parts+1] = ser(args[i])
     end
     return table.concat(parts, " | ")
+end
+
+local function getListaAtiva()
+    if State.universal or State.todos then return nil end
+    local merged = {}
+    for _, nome in ipairs(ORDEM_CATS) do
+        if State.categorias[nome] then
+            local lista = CATEGORIAS[nome]
+            if lista then
+                for _, p in ipairs(lista) do
+                    merged[#merged+1] = p
+                end
+            end
+        end
+    end
+    return merged
+end
+
+local function categoriaVazia()
+    if State.universal or State.todos then return false end
+    for _, v in pairs(State.categorias) do
+        if v then return false end
+    end
+    return true
 end
 
 local function capturaRemota(remote, metodo, args, n)
@@ -381,9 +406,6 @@ local function instalarTrackerPersonagem(char)
                     ser(child.Position), tostring(child.MaxForce)))
             elseif child:IsA("AlignOrientation") then
                 capturaLocal("MOVER", "AlignOrientation criada")
-            elseif child:IsA("Attachment") then
-                capturaLocal("MOVER", string.format("Attachment criado | Nome=%s Pos=%s",
-                    child.Name, ser(child.Position)))
             end
         end
 
@@ -419,12 +441,12 @@ local function trackerCFrame()
         end
     end
     State.ultimaPos = pos
-    State.ultimaVel = vel
 end
 
 local function instalarVIM()
     if State.vimHook then return end
     if not hookfunction then return end
+    if State.gracePeriod then return end
     local vim = game:GetService("VirtualInputManager")
     if not vim then return end
 
@@ -436,7 +458,7 @@ local function instalarVIM()
         if type(orig) == "function" then
             State.vimOriginal[nome] = orig
             local novo = function(self, ...)
-                if State.capturando and State.capturaLocal and State.trackVIM then
+                if State.capturando and State.capturaLocal and State.trackVIM and not State.gracePeriod then
                     local n = select("#", ...)
                     local args = {...}
                     local partes = {}
@@ -475,10 +497,16 @@ local function instalarTrackerLocal()
     instalarTrackerPersonagem(plr.Character)
     plr.CharacterAdded:Connect(function(c)
         task.wait(0.5)
-        instalarTrackerPersonagem(c)
+        if State.capturaLocal then
+            instalarTrackerPersonagem(c)
+        end
     end)
 
-    instalarVIM()
+    task.delay(GRACE_TRANSICAO, function()
+        if State.capturaLocal then
+            pcall(instalarVIM)
+        end
+    end)
 
     if not State.vento then
         State.vento = RunService.Heartbeat:Connect(function()
@@ -512,26 +540,39 @@ local function estaEmDungeon()
     return game.PlaceId ~= State.placeMain
 end
 
+local function pathBateLista(path, lista)
+    if lista == nil then return true end
+    if #lista == 0 then return false end
+    for i = 1, #lista do
+        if path:find(lista[i], 1, true) then return true end
+    end
+    return false
+end
+
 local function instalarHooks()
+    if State.gracePeriod then
+        log("INFO", "Grace period ativo — hooks serão instalados em breve")
+        return 0
+    end
+
     State.hooksSet = {}
     State.signalToRemote = setmetatable({}, {__mode = "k"})
 
     local remotes = listarRemotes()
     State.remotesEncontrados = #remotes
-    local lista = CATEGORIAS[State.categoria]
+    local lista = getListaAtiva()
+    local vazia = categoriaVazia()
     local instalados = 0
+
+    if vazia then
+        log("INFO", "Nenhuma categoria selecionada — sem hooks")
+        return 0
+    end
 
     for _, r in ipairs(remotes) do
         local ok, path = pcall(function() return r:GetFullName() end)
         if ok and path and not pathIgnorado(path) then
-            local bate = true
-            if lista then
-                bate = false
-                for i = 1, #lista do
-                    if path:find(lista[i], 1, true) then bate = true break end
-                end
-            end
-            if bate then
+            if pathBateLista(path, lista) then
                 State.hooksSet[r] = path
                 instalados = instalados + 1
                 pcall(function()
@@ -543,8 +584,7 @@ local function instalarHooks()
 
     if State.stealthMode and not estaEmDungeon() then
         log("INFO", "STEALTH: main place. Hooks remotos desligados.")
-        log("INFO", "Tracker local segue ativo se Universal.")
-        if State.categoria == "Universal" then
+        if State.universal then
             instalarTrackerLocal()
         end
         return instalados
@@ -553,11 +593,11 @@ local function instalarHooks()
     instalarNomecall()
     instalarConnectOnce()
 
-    if State.categoria == "Universal" then
+    if State.universal then
         instalarTrackerLocal()
     end
 
-    log("SUCCESS", string.format("Alvos: %d/%d | Tracker local: %s | PlaceId: %d",
+    log("SUCCESS", string.format("Alvos: %d/%d | Tracker: %s | PlaceId: %d",
         instalados, #remotes, tostring(State.capturaLocal), game.PlaceId))
     return instalados
 end
@@ -570,6 +610,23 @@ local function removerHooks()
     State.signalToRemote = setmetatable({}, {__mode = "k"})
 end
 
+local function agendarInstalacao()
+    if State.installToken then
+        pcall(function() task.cancel(State.installToken) end)
+        State.installToken = nil
+    end
+    local delay = State.resumido and GRACE_RESUME or GRACE_TRANSICAO
+    State.gracePeriod = true
+    log("INFO", string.format("Grace period %ds", delay))
+    State.installToken = task.delay(delay, function()
+        State.installToken = nil
+        State.gracePeriod = false
+        if State.capturando then
+            pcall(instalarHooks)
+        end
+    end)
+end
+
 local function checarStealth()
     if not State.capturando then return end
     if not State.stealthMode then return end
@@ -577,12 +634,12 @@ local function checarStealth()
     if emDg ~= State.emDungeon then
         State.emDungeon = emDg
         if emDg then
-            log("SUCCESS", "DUNGEON DETECTADA — ativando hooks")
+            log("SUCCESS", "DUNGEON DETECTADA — agendando hooks")
         else
             log("INFO", "Main place — desativando hooks")
         end
         removerHooks()
-        instalarHooks()
+        agendarInstalacao()
     end
 end
 
@@ -607,11 +664,16 @@ end
 local function salvarEstado()
     if not writefile then return end
     local linhas = {}
-    linhas[#linhas+1] = "v=7.6"
+    linhas[#linhas+1] = "v=7.7"
     linhas[#linhas+1] = "ativo=" .. (State.capturando and "1" or "0")
     linhas[#linhas+1] = "sessao=" .. (State.sessao or "Sessao"):gsub("[\n\r]", "")
-    linhas[#linhas+1] = "categoria=" .. (State.categoria or "Tudo")
+    for _, nome in ipairs(ORDEM_CATS) do
+        linhas[#linhas+1] = "cat_"..nome.."="..(State.categorias[nome] and "1" or "0")
+    end
+    linhas[#linhas+1] = "universal=" .. (State.universal and "1" or "0")
+    linhas[#linhas+1] = "todos=" .. (State.todos and "1" or "0")
     linhas[#linhas+1] = "contador=" .. tostring(State.contadorBruto or 0)
+    linhas[#linhas+1] = "contadorLocal=" .. tostring(State.contadorTracker or 0)
     linhas[#linhas+1] = "placeMain=" .. tostring(State.placeMain or "")
     linhas[#linhas+1] = "---BUFFER---"
     for i = 1, #State.buffer do
@@ -662,8 +724,14 @@ local function carregarEstado()
     end
     if header.ativo ~= "1" then return false end
     State.sessao = header.sessao or State.sessao
-    State.categoria = header.categoria or State.categoria
+    for _, nome in ipairs(ORDEM_CATS) do
+        local v = header["cat_"..nome]
+        if v then State.categorias[nome] = (v == "1") end
+    end
+    if header.universal then State.universal = (header.universal == "1") end
+    if header.todos then State.todos = (header.todos == "1") end
     State.contadorBruto = tonumber(header.contador) or 0
+    State.contadorTracker = tonumber(header.contadorLocal) or 0
     State.buffer = buffer
     State.trackerBuffer = tracker
     if header.placeMain and header.placeMain ~= "" then
@@ -690,7 +758,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v7.6 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v7.7 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -700,7 +768,13 @@ local function salvarArquivo()
     add("│ JobId:        "..(game.JobId ~= "" and game.JobId or "privado"))
     add("│ Data:         "..os.date("%Y-%m-%d %H:%M:%S"))
     add("│ Sessão:       "..State.sessao)
-    add("│ Categoria:    "..State.categoria)
+    local catsAtivas = {}
+    for _, nome in ipairs(ORDEM_CATS) do
+        if State.categorias[nome] then catsAtivas[#catsAtivas+1] = nome end
+    end
+    add("│ Categorias:   "..(#catsAtivas > 0 and table.concat(catsAtivas, ", ") or "nenhuma"))
+    add("│ Universal:    "..(State.universal and "ON" or "OFF"))
+    add("│ Todos:        "..(State.todos and "ON" or "OFF"))
     add("│ Hook:         "..State.hookMetodo)
     add("│ Stealth:      "..(State.stealthMode and "ON" or "OFF"))
     add("│ Tracker:      "..(State.capturaLocal and "ON" or "OFF"))
@@ -711,7 +785,6 @@ local function salvarArquivo()
     add("")
     add("╔══════════════════════════════════════════════════════╗")
     add("║              📡 TRÁFEGO REMOTO                       ║")
-    add("║         → cliente envia  |  ← servidor envia         ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
 
@@ -866,7 +939,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v7.6"
+titulo.Text = "🐉  DUMPER v7.7"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -1063,8 +1136,8 @@ local btnTracker = Instance.new("TextButton")
 btnTracker.Size = UDim2.new(1, -24, 0, 30)
 btnTracker.Position = UDim2.new(0, 12, 0, 174)
 btnTracker.BackgroundColor3 = T.elev
-btnTracker.Text = "📍  Tracker local: só em Universal"
-btnTracker.TextColor3 = T.text
+btnTracker.Text = "📍  Tracker local: ON"
+btnTracker.TextColor3 = T.success
 btnTracker.Font = Enum.Font.GothamBold
 btnTracker.TextSize = 10
 btnTracker.BorderSizePixel = 0
@@ -1158,11 +1231,28 @@ local flList = Instance.new("UIListLayout", filtrosScroll)
 flList.Padding = UDim.new(0, 4)
 
 local catBtns = {}
+local todosBtn = nil
+local universalBtn = nil
 
-local function criarSeletorCategoria(nome)
+local function renderizarCats()
+    for nome, ref in pairs(catBtns) do
+        local ativo
+        if nome == "Universal" then
+            ativo = State.universal
+        elseif nome == "Todos" then
+            ativo = State.todos
+        else
+            ativo = State.categorias[nome]
+        end
+        ref.btn.BackgroundColor3 = ativo and T.elevHover or T.elev
+        ref.label.TextColor3 = ativo and T.accent or T.text
+        ref.dot.BackgroundColor3 = ativo and T.accent or T.textMuted
+    end
+end
+
+local function criarBotaoCat(nome, icone)
     local f = Instance.new("TextButton")
     f.Size = UDim2.new(1, 0, 0, 44)
-    f.BackgroundColor3 = (State.categoria == nome) and T.elevHover or T.elev
     f.BackgroundTransparency = 0.3
     f.Text = ""
     f.AutoButtonColor = false
@@ -1170,12 +1260,19 @@ local function criarSeletorCategoria(nome)
     f.Parent = filtrosScroll
     Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
 
+    local ic = Instance.new("TextLabel")
+    ic.Size = UDim2.new(0, 24, 0, 24)
+    ic.Position = UDim2.new(0, 10, 0.5, -12)
+    ic.BackgroundTransparency = 1
+    ic.Text = icone
+    ic.TextSize = 15
+    ic.Parent = f
+
     local nm = Instance.new("TextLabel")
     nm.Size = UDim2.new(1, -40, 1, 0)
-    nm.Position = UDim2.new(0, 16, 0, 0)
+    nm.Position = UDim2.new(0, 40, 0, 0)
     nm.BackgroundTransparency = 1
     nm.Text = nome
-    nm.TextColor3 = (State.categoria == nome) and T.accent or T.text
     nm.TextSize = 12
     nm.Font = Enum.Font.GothamBold
     nm.TextXAlignment = Enum.TextXAlignment.Left
@@ -1184,7 +1281,6 @@ local function criarSeletorCategoria(nome)
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0, 10, 0, 10)
     dot.Position = UDim2.new(1, -22, 0.5, -5)
-    dot.BackgroundColor3 = (State.categoria == nome) and T.accent or T.textMuted
     dot.BorderSizePixel = 0
     dot.Parent = f
     Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
@@ -1193,25 +1289,40 @@ local function criarSeletorCategoria(nome)
 
     f.MouseButton1Click:Connect(safeUI(function()
         haptic("sucesso")
-        State.categoria = nome
-        for c, ref in pairs(catBtns) do
-            local ativo = (c == nome)
-            ref.btn.BackgroundColor3 = ativo and T.elevHover or T.elev
-            ref.label.TextColor3 = ativo and T.accent or T.text
-            ref.dot.BackgroundColor3 = ativo and T.accent or T.textMuted
+        if nome == "Todos" then
+            State.todos = not State.todos
+            if State.todos then
+                State.universal = false
+                for _, c in ipairs(ORDEM_CATS) do State.categorias[c] = false end
+            end
+        elseif nome == "Universal" then
+            State.universal = not State.universal
+            if State.universal then
+                State.todos = false
+                for _, c in ipairs(ORDEM_CATS) do State.categorias[c] = false end
+            end
+        else
+            State.categorias[nome] = not State.categorias[nome]
+            if State.categorias[nome] then
+                State.todos = false
+                State.universal = false
+            end
         end
+        renderizarCats()
         if State.capturando then instalarHooks() end
         if atualizarSidebar then atualizarSidebar() end
     end))
 end
 
-criarSeletorCategoria("Dungeon")
-criarSeletorCategoria("Skills")
-criarSeletorCategoria("Drops")
-criarSeletorCategoria("Toolbar")
-criarSeletorCategoria("Rebirth")
-criarSeletorCategoria("Universal")
-criarSeletorCategoria("Tudo")
+criarBotaoCat("Dungeon", "🎮")
+criarBotaoCat("Skills", "⚔")
+criarBotaoCat("Drops", "💰")
+criarBotaoCat("Toolbar", "🎒")
+criarBotaoCat("Rebirth", "🔄")
+criarBotaoCat("Universal", "🌐")
+criarBotaoCat("Todos", "✅")
+
+renderizarCats()
 
 local painelLogs = Instance.new("Frame")
 painelLogs.Size = UDim2.new(1, 0, 1, 0)
@@ -1353,7 +1464,7 @@ local function mkBotaoAcao(y, icone, nome, desc, cor, corFeedback, cb)
     end))
 end
 
-mkBotaoAcao(12, "🔧", "Reinstalar Hooks", "Aplica categoria atual", T.info, T.info, function()
+mkBotaoAcao(12, "🔧", "Reinstalar Hooks", "Aplica categorias atuais", T.info, T.info, function()
     if State.capturando then instalarHooks()
     else log("INFO", "Inicie captura primeiro") end
 end)
@@ -1438,12 +1549,17 @@ footTxt.TextXAlignment = Enum.TextXAlignment.Left
 footTxt.Parent = footer
 
 criarItemSidebar("captura", "📡", "Captura", function()
+    if State.gracePeriod then return "⏳ grace" end
     if State.resumido then return "▶ resumido" end
     if State.capturando then return "REC • "..State.contadorBruto end
     return State.contadorBruto > 0 and (State.contadorBruto.." remoto") or "parado"
 end)
-criarItemSidebar("filtros", "🎛", "Categoria", function()
-    return State.categoria
+criarItemSidebar("filtros", "🎛", "Categorias", function()
+    if State.universal then return "🌐 Universal" end
+    if State.todos then return "✅ Todos" end
+    local n = 0
+    for _, v in pairs(State.categorias) do if v then n = n + 1 end end
+    return n.." ativa(s)"
 end)
 criarItemSidebar("logs", "📊", "Logs", function()
     return #State.buffer.." remoto / "..#State.trackerBuffer.." local"
@@ -1453,6 +1569,7 @@ criarItemSidebar("arquivo", "📁", "Arquivo", function()
     return t > 0 and (t.." eventos") or "vazio"
 end)
 criarItemSidebar("diag", "🩺", "Diagnóstico", function()
+    if State.gracePeriod then return "grace" end
     if State.stealthMode and not State.emDungeon then return "stealth" end
     return State.capturando and "hook on" or "hook off"
 end)
@@ -1481,7 +1598,7 @@ local function atualizarBtnCap()
         btnCap.BackgroundColor3 = T.danger
         btnCap.Text = "■  PARAR CAPTURA"
         statusDot.BackgroundColor3 = T.danger
-        statusTxt.Text = "gravando"
+        statusTxt.Text = State.gracePeriod and "grace" or "gravando"
         statusTxt.TextColor3 = T.danger
     else
         btnCap.BackgroundColor3 = T.accent
@@ -1510,10 +1627,15 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
             State.contadorTracker = 0
         end
         print("[DUMPER] 🔴 CAPTURA INICIADA | PlaceId: "..game.PlaceId)
-        instalarHooks()
+        agendarInstalacao()
         salvarEstado()
     else
         print("[DUMPER] ⚪ CAPTURA PARADA")
+        if State.installToken then
+            pcall(function() task.cancel(State.installToken) end)
+            State.installToken = nil
+        end
+        State.gracePeriod = false
         removerHooks()
         salvarEstado()
     end
@@ -1542,17 +1664,13 @@ btnTracker.MouseButton1Click:Connect(safeUI(function()
     if State.trackCFrame then
         btnTracker.Text = "📍  Tracker local: ON"
         btnTracker.TextColor3 = T.success
+        if State.capturando and State.universal then instalarTrackerLocal() end
     else
         btnTracker.Text = "📍  Tracker local: OFF"
         btnTracker.TextColor3 = T.textMuted
-    end
-    if State.capturando and State.categoria == "Universal" then
-        if State.trackCFrame then instalarTrackerLocal()
-        else removerTrackerLocal() end
+        if State.capturando then removerTrackerLocal() end
     end
 end))
-btnTracker.Text = "📍  Tracker local: ON"
-btnTracker.TextColor3 = T.success
 
 btnTeleporte.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
@@ -1568,7 +1686,7 @@ btnTeleporte.MouseButton1Click:Connect(safeUI(function()
     end
     if not fonte then
         warn("[DUMPER] getscript indisponível")
-        btnTeleporte.Text = "⚠  Use auto-exec do Delta"
+        btnTeleporte.Text = "⚠  Use auto-exec"
         btnTeleporte.TextColor3 = T.danger
         return
     end
@@ -1601,9 +1719,14 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     haptic("erro")
     salvarEstado()
     State.capturando = false
+    if State.installToken then
+        pcall(function() task.cancel(State.installToken) end)
+        State.installToken = nil
+    end
+    State.gracePeriod = false
     removerHooks()
     gui:Destroy()
-    print("[DUMPER v7.6] Encerrado")
+    print("[DUMPER v7.7] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1613,12 +1736,19 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     local info = {}
     table.insert(info, "Executor:    "..tostring(identifyexecutor and identifyexecutor() or "?"))
     table.insert(info, "Nomecall:    "..tostring(State.nomecallInstalado))
+    table.insert(info, "Grace:       "..tostring(State.gracePeriod))
     table.insert(info, "Stealth:     "..tostring(State.stealthMode))
+    table.insert(info, "Universal:   "..tostring(State.universal))
+    table.insert(info, "Todos:       "..tostring(State.todos))
+    local ativ = {}
+    for _, c in ipairs(ORDEM_CATS) do
+        if State.categorias[c] then ativ[#ativ+1] = c end
+    end
+    table.insert(info, "Categorias:  "..(#ativ > 0 and table.concat(ativ, ",") or "0"))
     table.insert(info, "Tracker:     "..tostring(State.capturaLocal))
     table.insert(info, "PlaceMain:   "..tostring(State.placeMain))
     table.insert(info, "PlaceAtual:  "..game.PlaceId)
     table.insert(info, "EmDungeon:   "..tostring(State.emDungeon))
-    table.insert(info, "Categoria:   "..State.categoria)
     table.insert(info, "Alvos:       "..total)
     table.insert(info, "Bruto:       "..State.contadorBruto)
     table.insert(info, "Local:       "..State.contadorTracker)
@@ -1655,18 +1785,24 @@ local _ultimoCount = -1
 local _ultimoCountLocal = -1
 local _ultimaCat = nil
 local _ultimoSidebar = -1
+local _ultimoGrace = nil
 
 task.spawn(function()
     while gui.Parent do
         task.wait(1.2)
-        footTxt.Text = string.format("%d remoto • %d local • PlaceId: %d",
-            State.contadorBruto, State.contadorTracker, game.PlaceId)
+        footTxt.Text = string.format("%d remoto • %d local • %d ms",
+            State.contadorBruto, State.contadorTracker, math.floor(tick() * 1000) % 1000)
+
+        if State.gracePeriod ~= _ultimoGrace then
+            _ultimoGrace = State.gracePeriod
+            atualizarBtnCap()
+        end
 
         local mudouRemoto = #State.buffer ~= _ultimoCount
         local mudouLocal = #State.trackerBuffer ~= _ultimoCountLocal
 
         if not mudouRemoto and not mudouLocal and State.catAtiva == _ultimaCat then
-            if State.contadorBruto ~= _ultimoSidebar then
+            if (State.contadorBruto + State.contadorTracker) ~= _ultimoSidebar then
                 atualizarSidebar()
                 _ultimoSidebar = State.contadorBruto + State.contadorTracker
             end
@@ -1681,15 +1817,14 @@ task.spawn(function()
             local total = #State.buffer + #State.trackerBuffer
             local ini = math.max(1, total - 15)
             for i = ini, total do
-                local e, info
                 if i <= #State.buffer then
-                    e = State.buffer[i]
-                    info = CAT_INFO[e.cat] or CAT_INFO.OTHER
+                    local e = State.buffer[i]
+                    local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
                     table.insert(linhas, string.format("%s %s — %s",
                         info.icone, e.cat, e.path:sub(-32)))
                 else
-                    e = State.trackerBuffer[i - #State.buffer]
-                    info = CAT_INFO[e.cat] or CAT_INFO.STATE
+                    local e = State.trackerBuffer[i - #State.buffer]
+                    local info = CAT_INFO[e.cat] or CAT_INFO.STATE
                     table.insert(linhas, string.format("%s %s — %s",
                         info.icone, e.cat, e.argsSer:sub(1, 40)))
                 end
@@ -1704,17 +1839,16 @@ task.spawn(function()
             local total = #State.buffer + #State.trackerBuffer
             local ini2 = math.max(1, total - 40)
             for i = ini2, total do
-                local e, info
                 if i <= #State.buffer then
-                    e = State.buffer[i]
-                    info = CAT_INFO[e.cat] or CAT_INFO.OTHER
+                    local e = State.buffer[i]
+                    local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
                     if filtro == "todos" or e.cat == filtro then
                         table.insert(linhasL, string.format("%s %s  %s\n",
                             info.icone, e.metodo, e.path))
                     end
                 else
-                    e = State.trackerBuffer[i - #State.buffer]
-                    info = CAT_INFO[e.cat] or CAT_INFO.STATE
+                    local e = State.trackerBuffer[i - #State.buffer]
+                    local info = CAT_INFO[e.cat] or CAT_INFO.STATE
                     if filtro == "todos" or e.cat == filtro then
                         table.insert(linhasL, string.format("%s %s  %s\n",
                             info.icone, e.cat, e.argsSer))
@@ -1735,14 +1869,16 @@ end)
 task.spawn(function()
     while gui.Parent do
         task.wait(10)
-        if State.capturando then salvarEstado() end
+        if State.capturando and not State.gracePeriod then salvarEstado() end
     end
 end)
 
 task.spawn(function()
     while gui.Parent do
         task.wait(2)
-        pcall(checarStealth)
+        if not State.gracePeriod then
+            pcall(checarStealth)
+        end
     end
 end)
 
@@ -1750,7 +1886,13 @@ carregarPlaceMain()
 local resumiu = carregarEstado()
 if resumiu then
     log("SUCCESS", "Estado retomado | "..#State.buffer.." remoto / "..#State.trackerBuffer.." local")
-    instalarHooks()
+    renderizarCats()
+    agendarInstalacao()
+else
+    State.gracePeriod = true
+    task.delay(GRACE_TRANSICAO, function()
+        State.gracePeriod = false
+    end)
 end
 
 if not State.placeMain then
@@ -1762,4 +1904,4 @@ atualizarSidebar()
 atualizarConteudo()
 atualizarBtnCap()
 
-print("[DUMPER v7.6] ✅ Pronto — Universal + tracker local")
+print("[DUMPER v7.7] ✅ Pronto — multi-seleção + grace period")
