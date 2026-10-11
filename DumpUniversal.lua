@@ -1,4 +1,4 @@
-print("[DUMPER v7.2] Iniciando...")
+print("[DUMPER v7.3] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -11,8 +11,16 @@ local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local STATE_FILE = "dumper_v72_state.txt"
-local AUTO_FILE = "dumper_v72_auto.lua"
+local STATE_FILE = "dumper_v73_state.txt"
+local AUTO_FILE = "dumper_v73_auto.lua"
+
+local function NC(fn)
+    if newcclosure then
+        local ok, c = pcall(newcclosure, fn)
+        if ok and c then return c end
+    end
+    return fn
+end
 
 local CATEGORIAS = {
     Dungeon = {"Dungeon", "Portal", "NextArea", "Wave", "Stage", "Lobby", "Match", "Queue", "Floor", "Boss"},
@@ -36,16 +44,17 @@ local State = {
     sessao = "Sessao",
     capturando = false,
     categoria = "Dungeon",
-    hooks = {},
+    hooks = setmetatable({}, {__mode = "k"}),
     buffer = {},
     contadorBruto = 0,
     remotesEncontrados = 0,
-    hookMetodo = "individual",
+    hookMetodo = "individual+recv",
     _silencioso = true,
     catAtiva = "captura",
     filtroLogCat = "todos",
     nomesCache = setmetatable({}, {__mode = "k"}),
     resumido = false,
+    antiLuraph = true,
 }
 
 local function log(cat, msg)
@@ -175,42 +184,101 @@ local function captura(remote, metodo, args)
     }
 end
 
-local function instalarHookEm(remote)
-    if State.hooks[remote] then return end
-    local ok = pcall(function()
-        if remote:IsA("RemoteFunction") then
-            local orig = remote.InvokeServer
-            local wrapper = function(self, ...)
-                local args = {...}
-                pcall(captura, remote, "InvokeServer", args)
-                return orig(self, ...)
+local function instalarHookEnvio(remote)
+    local info = State.hooks[remote] or {}
+    State.hooks[remote] = info
+    if info.envioInstalado then return end
+
+    if remote:IsA("RemoteFunction") then
+        local orig = remote.InvokeServer
+        local wrapper = NC(function(self, ...)
+            local args = {...}
+            pcall(captura, remote, "InvokeServer→", args)
+            return orig(self, ...)
+        end)
+        pcall(function() remote.InvokeServer = wrapper end)
+        info.origEnvio = orig
+        info.wrapperEnvio = wrapper
+    else
+        local orig = remote.FireServer
+        local wrapper = NC(function(self, ...)
+            local args = {...}
+            pcall(captura, remote, "FireServer→", args)
+            return orig(self, ...)
+        end)
+        pcall(function() remote.FireServer = wrapper end)
+        info.origEnvio = orig
+        info.wrapperEnvio = wrapper
+    end
+    info.envioInstalado = true
+end
+
+local function instalarHookRecebimento(remote)
+    local info = State.hooks[remote] or {}
+    State.hooks[remote] = info
+    if info.recvInstalado then return end
+
+    if remote:IsA("RemoteFunction") then
+        local orig = remote.OnClientInvoke
+        local wrapper = NC(function(...)
+            local args = {...}
+            pcall(captura, remote, "OnClientInvoke←", args)
+            if orig then
+                return orig(...)
             end
-            remote.InvokeServer = wrapper
-            State.hooks[remote] = {orig = orig, wrapper = wrapper}
-        else
-            local orig = remote.FireServer
-            local wrapper = function(self, ...)
-                local args = {...}
-                pcall(captura, remote, "FireServer", args)
-                return orig(self, ...)
+        end)
+        pcall(function() remote.OnClientInvoke = wrapper end)
+        info.origRecv = orig
+        info.wrapperRecv = wrapper
+        info.recvInstalado = true
+    else
+        local ok = pcall(function()
+            local signal = remote.OnClientEvent
+            if not signal then return end
+            local origConnect = signal.Connect
+            local wrapperConnect = NC(function(self, fn)
+                local wrappedFn = NC(function(...)
+                    local args = {...}
+                    pcall(captura, remote, "OnClientEvent←", args)
+                    return fn(...)
+                end)
+                return origConnect(self, wrappedFn)
+            end)
+            if hookfunction then
+                hookfunction(origConnect, wrapperConnect)
+            elseif remote.GetPropertyChangedSignal then
+                return
             end
-            remote.FireServer = wrapper
-            State.hooks[remote] = {orig = orig, wrapper = wrapper}
+            info.origRecvConnect = origConnect
+            info.wrapperRecvConnect = wrapperConnect
+            info.recvInstalado = true
+        end)
+        if not ok then
+            info.recvInstalado = false
         end
-    end)
+    end
+end
+
+local function instalarHookEm(remote)
+    pcall(instalarHookEnvio, remote)
+    pcall(instalarHookRecebimento, remote)
 end
 
 local function removerTodosHooks()
     for remote, info in pairs(State.hooks) do
         pcall(function()
             if remote:IsA("RemoteFunction") then
-                remote.InvokeServer = info.orig
+                if info.origEnvio then remote.InvokeServer = info.origEnvio end
+                if info.origRecv ~= nil then remote.OnClientInvoke = info.origRecv end
             else
-                remote.FireServer = info.orig
+                if info.origEnvio then remote.FireServer = info.origEnvio end
+                if info.origRecvConnect and hookfunction and info.wrapperRecvConnect then
+                    pcall(function() hookfunction(info.wrapperRecvConnect, info.origRecvConnect) end)
+                end
             end
         end)
     end
-    State.hooks = {}
+    State.hooks = setmetatable({}, {__mode = "k"})
 end
 
 local function listarRemotes()
@@ -251,10 +319,39 @@ local function instalarHooks()
     return instalados
 end
 
+local function verificarEReinstalar()
+    if not State.capturando or not State.antiLuraph then return end
+    local reinstalados = 0
+    for remote, info in pairs(State.hooks) do
+        if info.wrapperEnvio then
+            local ok, atual = pcall(function()
+                if remote:IsA("RemoteFunction") then
+                    return remote.InvokeServer
+                else
+                    return remote.FireServer
+                end
+            end)
+            if ok and atual ~= info.wrapperEnvio then
+                pcall(function()
+                    if remote:IsA("RemoteFunction") then
+                        remote.InvokeServer = info.wrapperEnvio
+                    else
+                        remote.FireServer = info.wrapperEnvio
+                    end
+                end)
+                reinstalados = reinstalados + 1
+            end
+        end
+    end
+    if reinstalados > 0 then
+        log("INFO", "Anti-Luraph: "..reinstalados.." hooks reinstalados")
+    end
+end
+
 local function salvarEstado()
     if not writefile then return end
     local linhas = {}
-    linhas[#linhas+1] = "v=7.2"
+    linhas[#linhas+1] = "v=7.3"
     linhas[#linhas+1] = "ativo=" .. (State.capturando and "1" or "0")
     linhas[#linhas+1] = "sessao=" .. (State.sessao or "Sessao"):gsub("[\n\r]", "")
     linhas[#linhas+1] = "categoria=" .. (State.categoria or "Tudo")
@@ -263,7 +360,7 @@ local function salvarEstado()
     for i = 1, #State.buffer do
         local e = State.buffer[i]
         local argStr = (e.argsSer or ""):gsub("[\n\r\t]", " ")
-        linhas[#linhas+1] = table.concat({e.cat or "OTHER", e.path or "", e.metodo or "FireServer", argStr}, "\t")
+        linhas[#linhas+1] = table.concat({e.cat or "OTHER", e.path or "", e.metodo or "FireServer→", argStr}, "\t")
     end
     pcall(writefile, STATE_FILE, table.concat(linhas, "\n"))
 end
@@ -283,7 +380,7 @@ local function carregarEstado()
             local cat, path, metodo, argStr = linha:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
             if cat and path then
                 buffer[#buffer+1] = {
-                    cat = cat, path = path, metodo = metodo or "FireServer",
+                    cat = cat, path = path, metodo = metodo or "FireServer→",
                     argsSer = argStr or "",
                 }
             end
@@ -318,7 +415,7 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v7.2 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v7.3 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -329,6 +426,7 @@ local function salvarArquivo()
     add("│ Sessão:       "..State.sessao)
     add("│ Categoria:    "..State.categoria)
     add("│ Hook:         "..State.hookMetodo)
+    add("│ Anti-Luraph:  "..(State.antiLuraph and "ativo" or "off"))
     add("│ Remotes:      "..State.remotesEncontrados)
     add("│ Bruto:        "..State.contadorBruto.." chamadas")
     add("│ Eventos:      "..#State.buffer.." no buffer")
@@ -336,6 +434,7 @@ local function salvarArquivo()
     add("")
     add("╔══════════════════════════════════════════════════════╗")
     add("║              📡 TRÁFEGO SEQUENCIAL                   ║")
+    add("║         → cliente envia  |  ← servidor envia         ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
 
@@ -343,7 +442,8 @@ local function salvarArquivo()
         local e = State.buffer[i]
         local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
         add(string.format("┃ [%04d] %s %s", i, info.icone, e.cat))
-        add(string.format("┃   ▸ %s -> %s", e.path, e.metodo))
+        add(string.format("┃   ▸ %s", e.path))
+        add(string.format("┃   ▸ %s", e.metodo))
         add(string.format("┃   ↳ %s", e.argsSer))
         add("┃")
     end
@@ -474,7 +574,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v7.2"
+titulo.Text = "🐉  DUMPER v7.3"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -667,9 +767,22 @@ btnTeleporte.AutoButtonColor = false
 btnTeleporte.Parent = painelCaptura
 Instance.new("UICorner", btnTeleporte).CornerRadius = UDim.new(0, 8)
 
+local btnAnti = Instance.new("TextButton")
+btnAnti.Size = UDim2.new(1, -24, 0, 30)
+btnAnti.Position = UDim2.new(0, 12, 0, 174)
+btnAnti.BackgroundColor3 = T.elev
+btnAnti.Text = "🛡  Anti-Luraph: ON"
+btnAnti.TextColor3 = T.success
+btnAnti.Font = Enum.Font.GothamBold
+btnAnti.TextSize = 10
+btnAnti.BorderSizePixel = 0
+btnAnti.AutoButtonColor = false
+btnAnti.Parent = painelCaptura
+Instance.new("UICorner", btnAnti).CornerRadius = UDim.new(0, 8)
+
 local btnSilencioso = Instance.new("TextButton")
 btnSilencioso.Size = UDim2.new(1, -24, 0, 30)
-btnSilencioso.Position = UDim2.new(0, 12, 0, 174)
+btnSilencioso.Position = UDim2.new(0, 12, 0, 210)
 btnSilencioso.BackgroundColor3 = T.elev
 btnSilencioso.Text = "🔇  Modo silencioso"
 btnSilencioso.TextColor3 = T.text
@@ -682,7 +795,7 @@ Instance.new("UICorner", btnSilencioso).CornerRadius = UDim.new(0, 8)
 
 local feedTitulo = Instance.new("TextLabel")
 feedTitulo.Size = UDim2.new(1, -24, 0, 20)
-feedTitulo.Position = UDim2.new(0, 12, 0, 210)
+feedTitulo.Position = UDim2.new(0, 12, 0, 246)
 feedTitulo.BackgroundTransparency = 1
 feedTitulo.Text = "FLUXO RECENTE"
 feedTitulo.TextColor3 = T.textDim
@@ -692,8 +805,8 @@ feedTitulo.TextXAlignment = Enum.TextXAlignment.Left
 feedTitulo.Parent = painelCaptura
 
 local feedScroll = Instance.new("ScrollingFrame")
-feedScroll.Size = UDim2.new(1, -24, 1, -240)
-feedScroll.Position = UDim2.new(0, 12, 0, 232)
+feedScroll.Size = UDim2.new(1, -24, 1, -276)
+feedScroll.Position = UDim2.new(0, 12, 0, 268)
 feedScroll.BackgroundColor3 = T.bg
 feedScroll.BackgroundTransparency = 0.5
 feedScroll.BorderSizePixel = 0
@@ -1054,7 +1167,7 @@ local function atualizarBtnCap()
         statusTxt.TextColor3 = T.textDim
     end
     if State.resumido then
-        resumoLabel.Text = "▶ SESSÃO RETOMADA | "..#State.buffer.." eventos carregados"
+        resumoLabel.Text = "▶ RETOMADO | "..#State.buffer.." eventos"
     else
         resumoLabel.Text = ""
     end
@@ -1094,7 +1207,7 @@ btnTeleporte.MouseButton1Click:Connect(safeUI(function()
         if ok and type(s) == "string" and #s > 500 then fonte = s end
     end
     if not fonte then
-        warn("[DUMPER] getscript indisponível. Use o auto-exec do Delta.")
+        warn("[DUMPER] getscript indisponível. Use auto-exec do Delta.")
         btnTeleporte.Text = "⚠  Use auto-exec do Delta"
         btnTeleporte.TextColor3 = T.danger
         return
@@ -1117,6 +1230,13 @@ btnTeleporte.MouseButton1Click:Connect(safeUI(function()
     end
 end))
 
+btnAnti.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
+    State.antiLuraph = not State.antiLuraph
+    btnAnti.Text = State.antiLuraph and "🛡  Anti-Luraph: ON" or "🛡  Anti-Luraph: OFF"
+    btnAnti.TextColor3 = State.antiLuraph and T.success or T.textMuted
+end))
+
 btnSilencioso.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
     State._silencioso = not State._silencioso
@@ -1135,7 +1255,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerTodosHooks()
     gui:Destroy()
-    print("[DUMPER v7.2] Encerrado")
+    print("[DUMPER v7.3] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1144,10 +1264,13 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     for _ in pairs(State.hooks) do totalHooks = totalHooks + 1 end
     local info = {}
     table.insert(info, "Executor:    "..tostring(identifyexecutor and identifyexecutor() or "?"))
-    table.insert(info, "Hook modo:   individual (sem __namecall)")
+    table.insert(info, "Hook modo:   individual+recv")
+    table.insert(info, "newcclosure: "..tostring(newcclosure ~= nil))
+    table.insert(info, "hookfunction:"..tostring(hookfunction ~= nil))
     table.insert(info, "getscript:   "..tostring(getscript ~= nil))
     table.insert(info, "queue_tele:  "..tostring((queue_on_teleport or queueonteleport) ~= nil))
     table.insert(info, "writefile:   "..tostring(writefile ~= nil))
+    table.insert(info, "Anti-Luraph: "..tostring(State.antiLuraph))
     table.insert(info, "Categoria:   "..State.categoria)
     table.insert(info, "Hooks ativos:"..totalHooks)
     table.insert(info, "Remotes:     "..State.remotesEncontrados)
@@ -1210,8 +1333,8 @@ task.spawn(function()
             for i = ini, #State.buffer do
                 local e = State.buffer[i]
                 local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
-                table.insert(linhas, string.format("%s %s — %s",
-                    info.icone, e.cat, e.path:sub(-36)))
+                table.insert(linhas, string.format("%s %s — %s %s",
+                    info.icone, e.cat, e.metodo, e.path:sub(-32)))
             end
             feedText.Text = #linhas == 0 and "Aguardando..." or table.concat(linhas, "\n")
             feedScroll.CanvasSize = UDim2.new(0, 0, 0, feedText.TextBounds.Y + 20)
@@ -1226,7 +1349,7 @@ task.spawn(function()
                 if filtro == "todos" or e.cat == filtro then
                     local info = CAT_INFO[e.cat] or CAT_INFO.OTHER
                     table.insert(linhasL, string.format("%s %s  %s\n",
-                        info.icone, e.cat, e.path))
+                        info.icone, e.metodo, e.path))
                 end
             end
             logsText.Text = #linhasL == 0 and "Sem entradas." or table.concat(linhasL, "")
@@ -1249,6 +1372,15 @@ task.spawn(function()
     end
 end)
 
+task.spawn(function()
+    while gui.Parent do
+        task.wait(3)
+        if State.capturando and State.antiLuraph then
+            pcall(verificarEReinstalar)
+        end
+    end
+end)
+
 local resumiu = carregarEstado()
 if resumiu then
     log("SUCCESS", "Estado retomado | "..#State.buffer.." eventos | PlaceId "..game.PlaceId)
@@ -1259,4 +1391,4 @@ atualizarSidebar()
 atualizarConteudo()
 atualizarBtnCap()
 
-print("[DUMPER v7.2] ✅ Pronto — auto-teleporte + persistência")
+print("[DUMPER v7.3] ✅ Pronto — bidirecional + anti-Luraph")
