@@ -1881,13 +1881,28 @@ task.spawn(function()
         end
     end
 end)
-
 carregarPlaceMain()
+
 local resumiu = carregarEstado()
 if resumiu then
-    log("SUCCESS", "Estado retomado | "..#State.buffer.." remoto / "..#State.trackerBuffer.." local")
-    renderizarCats()
-    agendarInstalacao()
+    if estaEmDungeon() then
+        log("SUCCESS", "Teleporte detectado — retomando | "..#State.buffer.." remoto / "..#State.trackerBuffer.." local")
+        renderizarCats()
+        agendarInstalacao()
+    else
+        log("INFO", "Estado de sessão anterior detectado no main place. Limpando — clique INICIAR.")
+        limparEstado()
+        State.capturando = false
+        State.buffer = {}
+        State.trackerBuffer = {}
+        State.contadorBruto = 0
+        State.contadorTracker = 0
+        State.resumido = false
+        State.gracePeriod = true
+        task.delay(GRACE_TRANSICAO, function()
+            State.gracePeriod = false
+        end)
+    end
 else
     State.gracePeriod = true
     task.delay(GRACE_TRANSICAO, function()
