@@ -1,4 +1,4 @@
-print("[DUMPER v7.7] Iniciando...")
+print("[DUMPER v7.8] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -12,9 +12,9 @@ local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local STATE_FILE = "dumper_v77_state.txt"
-local AUTO_FILE = "dumper_v77_auto.lua"
-local PLACE_FILE = "dumper_v77_mainplace.txt"
+local STATE_FILE = "dumper_v78_state.txt"
+local AUTO_FILE = "dumper_v78_auto.lua"
+local PLACE_FILE = "dumper_v78_mainplace.txt"
 
 local GRACE_RESUME = 8
 local GRACE_TRANSICAO = 5
@@ -36,7 +36,7 @@ local IGNORAR = {
     changeAnimationClient = true, GameAnalytics = true, Postie = true,
 }
 
-local MAX_BUFFER = 5000
+local MAX_BUFFER = 2000
 local MAX_TRACKER = 3000
 local CFRAME_SAMPLE = 0.15
 local MOVER_LIMITE = 0.5
@@ -86,6 +86,12 @@ local State = {
     vento = nil,
     ultimoVento = 0,
 }
+
+local _assinaturasM1 = {}
+
+local function _resetM1Dedup()
+    _assinaturasM1 = {}
+end
 
 local function log(cat, msg)
     print(string.format("[DUMPER/%s] %s", cat, msg))
@@ -226,12 +232,44 @@ local function categoriaVazia()
     return true
 end
 
+local function _assinarM1(path, args, n)
+    if not path:find("SkillRemote") then return nil end
+    if n < 1 then return nil end
+    local t = args[1]
+    if type(t) ~= "table" then return nil end
+    local sid = tostring(t.SkillId or "?")
+    local beg = tostring(t.Began or "?")
+    return path.."|"..sid.."|"..beg
+end
+
 local function capturaRemota(remote, metodo, args, n)
     if not State.capturando then return end
     if #State.buffer >= MAX_BUFFER then return end
     local ok, path = pcall(function() return remote:GetFullName() end)
     if not ok or not path then return end
     if pathIgnorado(path) then return end
+
+    local assinatura = _assinarM1(path, args, n)
+    if assinatura then
+        local entry = _assinaturasM1[assinatura]
+        if entry then
+            entry.hits = entry.hits + 1
+            return
+        end
+        local novo = { hits = 1 }
+        _assinaturasM1[assinatura] = novo
+        State.contadorBruto = State.contadorBruto + 1
+        local bufRef = {
+            cat = "M1",
+            path = path:gsub("ReplicatedStorage%.", "RS."),
+            metodo = metodo,
+            argsSer = serializarArgs(args, n),
+            _m1 = novo,
+        }
+        novo.bufRef = bufRef
+        State.buffer[#State.buffer+1] = bufRef
+        return
+    end
 
     State.contadorBruto = State.contadorBruto + 1
     local cat = classificar(path)
@@ -584,7 +622,7 @@ local function instalarHooks()
 
     if State.stealthMode and not estaEmDungeon() then
         log("INFO", "STEALTH: main place. Hooks remotos desligados.")
-        if State.universal then
+        if State.universal or State.todos then
             instalarTrackerLocal()
         end
         return instalados
@@ -593,7 +631,7 @@ local function instalarHooks()
     instalarNomecall()
     instalarConnectOnce()
 
-    if State.universal then
+    if State.universal or State.todos then
         instalarTrackerLocal()
     end
 
@@ -664,7 +702,7 @@ end
 local function salvarEstado()
     if not writefile then return end
     local linhas = {}
-    linhas[#linhas+1] = "v=7.7"
+    linhas[#linhas+1] = "v=7.8"
     linhas[#linhas+1] = "ativo=" .. (State.capturando and "1" or "0")
     linhas[#linhas+1] = "sessao=" .. (State.sessao or "Sessao"):gsub("[\n\r]", "")
     for _, nome in ipairs(ORDEM_CATS) do
@@ -754,11 +792,17 @@ local function salvarArquivo()
         return false
     end
 
+    for _, entry in pairs(_assinaturasM1) do
+        if entry.bufRef and entry.hits > 1 then
+            entry.bufRef.argsSer = entry.bufRef.argsSer .. " [x" .. entry.hits .. "]"
+        end
+    end
+
     local L = {}
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v7.7 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v7.8 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
@@ -781,6 +825,7 @@ local function salvarArquivo()
     add("│ Remotes:      "..State.remotesEncontrados)
     add("│ Bruto:        "..State.contadorBruto.." remotos")
     add("│ Local:        "..State.contadorTracker.." eventos")
+    add("│ Nota M1:      eventos M1 deduplicados por SkillId|Began")
     add("└──────────────────────────────────────────────────────")
     add("")
     add("╔══════════════════════════════════════════════════════╗")
@@ -823,11 +868,13 @@ local function salvarArquivo()
     if ok then
         log("SUCCESS", "Salvo: "..nome)
         limparEstado()
+        _resetM1Dedup()
         return true
     end
     pcall(function() setclipboard(conteudo) end)
     log("SUCCESS", "Clipboard")
     limparEstado()
+    _resetM1Dedup()
     return true
 end
 
@@ -939,7 +986,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v7.7"
+titulo.Text = "🐉  DUMPER v7.8"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -1231,8 +1278,6 @@ local flList = Instance.new("UIListLayout", filtrosScroll)
 flList.Padding = UDim.new(0, 4)
 
 local catBtns = {}
-local todosBtn = nil
-local universalBtn = nil
 
 local function renderizarCats()
     for nome, ref in pairs(catBtns) do
@@ -1309,7 +1354,7 @@ local function criarBotaoCat(nome, icone)
             end
         end
         renderizarCats()
-        if State.capturando then instalarHooks() end
+        if State.capturando and not State.gracePeriod then instalarHooks() end
         if atualizarSidebar then atualizarSidebar() end
     end))
 end
@@ -1479,6 +1524,7 @@ mkBotaoAcao(136, "🗑", "Limpar Buffers", "Apaga tráfego + tracker", T.warn, T
     State.trackerBuffer = {}
     State.contadorBruto = 0
     State.contadorTracker = 0
+    _resetM1Dedup()
     limparEstado()
     log("INFO", "Buffers limpos")
 end)
@@ -1625,6 +1671,7 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
             State.trackerBuffer = {}
             State.contadorBruto = 0
             State.contadorTracker = 0
+            _resetM1Dedup()
         end
         print("[DUMPER] 🔴 CAPTURA INICIADA | PlaceId: "..game.PlaceId)
         agendarInstalacao()
@@ -1664,7 +1711,7 @@ btnTracker.MouseButton1Click:Connect(safeUI(function()
     if State.trackCFrame then
         btnTracker.Text = "📍  Tracker local: ON"
         btnTracker.TextColor3 = T.success
-        if State.capturando and State.universal then instalarTrackerLocal() end
+        if State.capturando and (State.universal or State.todos) then instalarTrackerLocal() end
     else
         btnTracker.Text = "📍  Tracker local: OFF"
         btnTracker.TextColor3 = T.textMuted
@@ -1726,7 +1773,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.gracePeriod = false
     removerHooks()
     gui:Destroy()
-    print("[DUMPER v7.7] Encerrado")
+    print("[DUMPER v7.8] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1752,6 +1799,9 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     table.insert(info, "Alvos:       "..total)
     table.insert(info, "Bruto:       "..State.contadorBruto)
     table.insert(info, "Local:       "..State.contadorTracker)
+    local m1 = 0
+    for _ in pairs(_assinaturasM1) do m1 = m1 + 1 end
+    table.insert(info, "Assin M1:    "..m1)
     diagText.Text = table.concat(info, "\n")
 end))
 
@@ -1790,8 +1840,8 @@ local _ultimoGrace = nil
 task.spawn(function()
     while gui.Parent do
         task.wait(1.2)
-        footTxt.Text = string.format("%d remoto • %d local • %d ms",
-            State.contadorBruto, State.contadorTracker, math.floor(tick() * 1000) % 1000)
+        footTxt.Text = string.format("%d remoto • %d local • PlaceId: %d",
+            State.contadorBruto, State.contadorTracker, game.PlaceId)
 
         if State.gracePeriod ~= _ultimoGrace then
             _ultimoGrace = State.gracePeriod
@@ -1881,6 +1931,7 @@ task.spawn(function()
         end
     end
 end)
+
 carregarPlaceMain()
 
 local resumiu = carregarEstado()
@@ -1890,7 +1941,7 @@ if resumiu then
         renderizarCats()
         agendarInstalacao()
     else
-        log("INFO", "Estado de sessão anterior detectado no main place. Limpando — clique INICIAR.")
+        log("INFO", "Estado anterior detectado no main place. Limpando — clique INICIAR.")
         limparEstado()
         State.capturando = false
         State.buffer = {}
@@ -1898,6 +1949,7 @@ if resumiu then
         State.contadorBruto = 0
         State.contadorTracker = 0
         State.resumido = false
+        _resetM1Dedup()
         State.gracePeriod = true
         task.delay(GRACE_TRANSICAO, function()
             State.gracePeriod = false
@@ -1919,4 +1971,4 @@ atualizarSidebar()
 atualizarConteudo()
 atualizarBtnCap()
 
-print("[DUMPER v7.7] ✅ Pronto — multi-seleção + grace period")
+print("[DUMPER v7.8] ✅ Pronto — anti-spam M1 + tracker auto-universal")
