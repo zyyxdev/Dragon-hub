@@ -1,4 +1,4 @@
-print("[DUMPER v7.4] Iniciando...")
+print("[DUMPER v7.5] Iniciando...")
 
 local Players = game:GetService("Players")
 local CoreGui = game:GetService("CoreGui")
@@ -11,14 +11,11 @@ local plr = Players.LocalPlayer
 
 local targetParent = (gethui and gethui()) or CoreGui
 
-local STATE_FILE = "dumper_v74_state.txt"
-local AUTO_FILE = "dumper_v74_auto.lua"
+local STATE_FILE = "dumper_v75_state.txt"
+local AUTO_FILE = "dumper_v75_auto.lua"
+local PLACE_FILE = "dumper_v75_mainplace.txt"
 
 local function NC(fn)
-    if newcclosure then
-        local ok, c = pcall(newcclosure, fn)
-        if ok and c then return c end
-    end
     return fn
 end
 
@@ -43,7 +40,7 @@ local MAX_BUFFER = 5000
 local State = {
     sessao = "Sessao",
     capturando = false,
-    categoria = "Tudo",
+    categoria = "Dungeon",
     hooksSet = {},
     buffer = {},
     contadorBruto = 0,
@@ -61,6 +58,9 @@ local State = {
     signalToRemote = setmetatable({}, {__mode = "k"}),
     connectOriginal = nil,
     connectHook = nil,
+    stealthMode = true,
+    placeMain = nil,
+    emDungeon = false,
 }
 
 local function log(cat, msg)
@@ -202,7 +202,7 @@ local function instalarNomecall()
 
     State.nomecallOriginal = mt.__namecall
     setreadonly(mt, false)
-    State.nomecallHook = NC(function(self, ...)
+    State.nomecallHook = function(self, ...)
         if State.capturando then
             local alvo = State.hooksSet[self]
             if alvo then
@@ -215,7 +215,7 @@ local function instalarNomecall()
             end
         end
         return State.nomecallOriginal(self, ...)
-    end)
+    end
     mt.__namecall = State.nomecallHook
     setreadonly(mt, true)
 
@@ -252,21 +252,21 @@ local function instalarConnectOnce()
     if not origConnect then return end
 
     State.connectOriginal = origConnect
-    State.connectHook = NC(function(self, fn)
+    State.connectHook = function(self, fn)
         local remote = State.signalToRemote[self]
         if not remote then
             return origConnect(self, fn)
         end
-        local wrapped = NC(function(...)
+        local wrapped = function(...)
             if State.capturando then
                 local n = select("#", ...)
                 local args = {...}
                 pcall(captura, remote, "OnClientEvent←", args, n)
             end
             return fn(...)
-        end)
+        end
         return origConnect(self, wrapped)
-    end)
+    end
 
     pcall(function()
         hookfunction(origConnect, State.connectHook)
@@ -294,6 +294,11 @@ local function listarRemotes()
         end
     end
     return out
+end
+
+local function estaEmDungeon()
+    if not State.placeMain then return false end
+    return game.PlaceId ~= State.placeMain
 end
 
 local function instalarHooks()
@@ -325,6 +330,12 @@ local function instalarHooks()
         end
     end
 
+    if State.stealthMode and not estaEmDungeon() then
+        log("INFO", string.format("STEALTH: main place (PlaceId %d). Hooks desligados.", game.PlaceId))
+        log("INFO", "Ativa quando entrar na dungeon (PlaceId diferente).")
+        return instalados
+    end
+
     instalarNomecall()
     instalarConnectOnce()
 
@@ -339,14 +350,61 @@ local function removerHooks()
     State.signalToRemote = setmetatable({}, {__mode = "k"})
 end
 
+local function checarStealth()
+    if not State.capturando then return end
+    if not State.stealthMode then return end
+    local emDg = estaEmDungeon()
+    if emDg ~= State.emDungeon then
+        State.emDungeon = emDg
+        if emDg then
+            log("SUCCESS", "DUNGEON DETECTADA (PlaceId "..game.PlaceId..") — ativando hooks")
+            instalarHooks()
+        else
+            log("INFO", "Voltou pro main place — desativando hooks")
+            removerHooks()
+            instalarHooks()
+        end
+    end
+end
+
+local function salvarPlaceMain()
+    if not writefile then return end
+    if State.placeMain then return end
+    if State.capturando then return end
+    if not isfile or not isfile(PLACE_FILE) then
+        State.placeMain = game.PlaceId
+        pcall(writefile, PLACE_FILE, tostring(game.PlaceId))
+        return
+    end
+end
+
+local function carregarPlaceMain()
+    if not readfile or not isfile then
+        State.placeMain = game.PlaceId
+        return
+    end
+    if not isfile(PLACE_FILE) then
+        State.placeMain = game.PlaceId
+        pcall(writefile, PLACE_FILE, tostring(game.PlaceId))
+        return
+    end
+    local ok, conteudo = pcall(readfile, PLACE_FILE)
+    if ok and conteudo then
+        State.placeMain = tonumber(conteudo)
+    else
+        State.placeMain = game.PlaceId
+    end
+end
+
 local function salvarEstado()
     if not writefile then return end
     local linhas = {}
-    linhas[#linhas+1] = "v=7.4"
+    linhas[#linhas+1] = "v=7.5"
     linhas[#linhas+1] = "ativo=" .. (State.capturando and "1" or "0")
     linhas[#linhas+1] = "sessao=" .. (State.sessao or "Sessao"):gsub("[\n\r]", "")
     linhas[#linhas+1] = "categoria=" .. (State.categoria or "Tudo")
     linhas[#linhas+1] = "contador=" .. tostring(State.contadorBruto or 0)
+    linhas[#linhas+1] = "placeMain=" .. tostring(State.placeMain or "")
     linhas[#linhas+1] = "---BUFFER---"
     for i = 1, #State.buffer do
         local e = State.buffer[i]
@@ -385,6 +443,9 @@ local function carregarEstado()
     State.categoria = header.categoria or State.categoria
     State.contadorBruto = tonumber(header.contador) or 0
     State.buffer = buffer
+    if header.placeMain and header.placeMain ~= "" then
+        State.placeMain = tonumber(header.placeMain)
+    end
     State.capturando = true
     State.resumido = true
     return true
@@ -406,17 +467,19 @@ local function salvarArquivo()
     local function add(s) table.insert(L, s or "") end
 
     add("╔══════════════════════════════════════════════════════╗")
-    add("║        🐉 DUMPER v7.4 — RELATÓRIO DE SESSÃO          ║")
+    add("║        🐉 DUMPER v7.5 — RELATÓRIO DE SESSÃO          ║")
     add("╚══════════════════════════════════════════════════════╝")
     add("")
     add("┌─ 📋 METADATA ────────────────────────────────────────")
     add("│ Player:       "..plr.Name)
     add("│ PlaceId:      "..game.PlaceId)
+    add("│ PlaceMain:    "..tostring(State.placeMain))
     add("│ JobId:        "..(game.JobId ~= "" and game.JobId or "privado"))
     add("│ Data:         "..os.date("%Y-%m-%d %H:%M:%S"))
     add("│ Sessão:       "..State.sessao)
     add("│ Categoria:    "..State.categoria)
     add("│ Hook:         "..State.hookMetodo)
+    add("│ Stealth:      "..(State.stealthMode and "ON" or "OFF"))
     add("│ Remotes:      "..State.remotesEncontrados)
     add("│ Bruto:        "..State.contadorBruto.." chamadas")
     add("│ Eventos:      "..#State.buffer.." no buffer")
@@ -564,7 +627,7 @@ local titulo = Instance.new("TextLabel")
 titulo.Size = UDim2.new(1, -140, 1, 0)
 titulo.Position = UDim2.new(0, 18, 0, 0)
 titulo.BackgroundTransparency = 1
-titulo.Text = "🐉  DUMPER v7.4"
+titulo.Text = "🐉  DUMPER v7.5"
 titulo.TextColor3 = T.accent
 titulo.Font = Enum.Font.GothamBold
 titulo.TextSize = 14
@@ -744,11 +807,24 @@ resumoLabel.TextSize = 10
 resumoLabel.TextXAlignment = Enum.TextXAlignment.Left
 resumoLabel.Parent = painelCaptura
 
+local btnStealth = Instance.new("TextButton")
+btnStealth.Size = UDim2.new(1, -24, 0, 32)
+btnStealth.Position = UDim2.new(0, 12, 0, 136)
+btnStealth.BackgroundColor3 = T.elev
+btnStealth.Text = "🥷  Stealth: ON (só hooka na dungeon)"
+btnStealth.TextColor3 = T.success
+btnStealth.Font = Enum.Font.GothamBold
+btnStealth.TextSize = 10
+btnStealth.BorderSizePixel = 0
+btnStealth.AutoButtonColor = false
+btnStealth.Parent = painelCaptura
+Instance.new("UICorner", btnStealth).CornerRadius = UDim.new(0, 8)
+
 local btnTeleporte = Instance.new("TextButton")
-btnTeleporte.Size = UDim2.new(1, -24, 0, 32)
-btnTeleporte.Position = UDim2.new(0, 12, 0, 136)
+btnTeleporte.Size = UDim2.new(1, -24, 0, 30)
+btnTeleporte.Position = UDim2.new(0, 12, 0, 174)
 btnTeleporte.BackgroundColor3 = T.elev
-btnTeleporte.Text = "🔗  Armazenar script p/ auto-teleporte"
+btnTeleporte.Text = "🔗  Auto-teleporte"
 btnTeleporte.TextColor3 = T.warn
 btnTeleporte.Font = Enum.Font.GothamBold
 btnTeleporte.TextSize = 10
@@ -759,7 +835,7 @@ Instance.new("UICorner", btnTeleporte).CornerRadius = UDim.new(0, 8)
 
 local btnSilencioso = Instance.new("TextButton")
 btnSilencioso.Size = UDim2.new(1, -24, 0, 30)
-btnSilencioso.Position = UDim2.new(0, 12, 0, 174)
+btnSilencioso.Position = UDim2.new(0, 12, 0, 210)
 btnSilencioso.BackgroundColor3 = T.elev
 btnSilencioso.Text = "🔇  Modo silencioso"
 btnSilencioso.TextColor3 = T.text
@@ -772,7 +848,7 @@ Instance.new("UICorner", btnSilencioso).CornerRadius = UDim.new(0, 8)
 
 local feedTitulo = Instance.new("TextLabel")
 feedTitulo.Size = UDim2.new(1, -24, 0, 20)
-feedTitulo.Position = UDim2.new(0, 12, 0, 210)
+feedTitulo.Position = UDim2.new(0, 12, 0, 246)
 feedTitulo.BackgroundTransparency = 1
 feedTitulo.Text = "FLUXO RECENTE"
 feedTitulo.TextColor3 = T.textDim
@@ -782,8 +858,8 @@ feedTitulo.TextXAlignment = Enum.TextXAlignment.Left
 feedTitulo.Parent = painelCaptura
 
 local feedScroll = Instance.new("ScrollingFrame")
-feedScroll.Size = UDim2.new(1, -24, 1, -240)
-feedScroll.Position = UDim2.new(0, 12, 0, 232)
+feedScroll.Size = UDim2.new(1, -24, 1, -276)
+feedScroll.Position = UDim2.new(0, 12, 0, 268)
 feedScroll.BackgroundColor3 = T.bg
 feedScroll.BackgroundTransparency = 0.5
 feedScroll.BorderSizePixel = 0
@@ -1047,6 +1123,12 @@ mkBotaoAcao(198, "🔴", "Resetar Estado", "Força início fresco", T.danger, T.
     log("INFO", "Estado resetado")
 end)
 
+mkBotaoAcao(260, "📍", "Resetar PlaceMain", "Esquece place principal", T.danger, T.danger, function()
+    if delfile then pcall(delfile, PLACE_FILE) end
+    State.placeMain = game.PlaceId
+    log("INFO", "PlaceMain resetado para "..game.PlaceId)
+end)
+
 local painelDiag = Instance.new("Frame")
 painelDiag.Size = UDim2.new(1, 0, 1, 0)
 painelDiag.BackgroundTransparency = 1
@@ -1115,6 +1197,7 @@ criarItemSidebar("arquivo", "📁", "Arquivo", function()
     return #State.buffer > 0 and (#State.buffer.." eventos") or "vazio"
 end)
 criarItemSidebar("diag", "🩺", "Diagnóstico", function()
+    if State.stealthMode and not State.emDungeon then return "stealth" end
     return State.capturando and "hook on" or "hook off"
 end)
 
@@ -1179,6 +1262,25 @@ btnCap.MouseButton1Click:Connect(safeUI(function()
     atualizarBtnCap()
 end))
 
+btnStealth.MouseButton1Click:Connect(safeUI(function()
+    haptic("sucesso")
+    State.stealthMode = not State.stealthMode
+    if State.stealthMode then
+        btnStealth.Text = "🥷  Stealth: ON (só hooka na dungeon)"
+        btnStealth.TextColor3 = T.success
+        if State.capturando then
+            removerHooks()
+            instalarHooks()
+        end
+    else
+        btnStealth.Text = "🥷  Stealth: OFF (hooka sempre)"
+        btnStealth.TextColor3 = T.warn
+        if State.capturando then
+            instalarHooks()
+        end
+    end
+end))
+
 btnTeleporte.MouseButton1Click:Connect(safeUI(function()
     haptic("sucesso")
     salvarEstado()
@@ -1233,7 +1335,7 @@ btnKill.MouseButton1Click:Connect(safeUI(function()
     State.capturando = false
     removerHooks()
     gui:Destroy()
-    print("[DUMPER v7.4] Encerrado")
+    print("[DUMPER v7.5] Encerrado")
 end))
 
 btnDiag.MouseButton1Click:Connect(safeUI(function()
@@ -1243,18 +1345,15 @@ btnDiag.MouseButton1Click:Connect(safeUI(function()
     local info = {}
     table.insert(info, "Executor:    "..tostring(identifyexecutor and identifyexecutor() or "?"))
     table.insert(info, "Nomecall:    "..tostring(State.nomecallInstalado))
-    table.insert(info, "Recv hook:   "..tostring(State.recvHooked))
-    table.insert(info, "newcclosure: "..tostring(newcclosure ~= nil))
-    table.insert(info, "getscript:   "..tostring(getscript ~= nil))
-    table.insert(info, "queue_tele:  "..tostring((queue_on_teleport or queueonteleponte) ~= nil))
-    table.insert(info, "writefile:   "..tostring(writefile ~= nil))
+    table.insert(info, "Stealth:     "..tostring(State.stealthMode))
+    table.insert(info, "PlaceMain:   "..tostring(State.placeMain))
+    table.insert(info, "PlaceAtual:  "..game.PlaceId)
+    table.insert(info, "EmDungeon:   "..tostring(State.emDungeon))
     table.insert(info, "Categoria:   "..State.categoria)
     table.insert(info, "Alvos:       "..total)
-    table.insert(info, "Remotes:     "..State.remotesEncontrados)
     table.insert(info, "Bruto:       "..State.contadorBruto)
     table.insert(info, "Buffer:      "..#State.buffer)
     table.insert(info, "Resumido:    "..tostring(State.resumido))
-    table.insert(info, "PlaceId:     "..game.PlaceId)
     diagText.Text = table.concat(info, "\n")
 end))
 
@@ -1349,14 +1448,27 @@ task.spawn(function()
     end
 end)
 
+task.spawn(function()
+    while gui.Parent do
+        task.wait(2)
+        pcall(checarStealth)
+    end
+end)
+
+carregarPlaceMain()
 local resumiu = carregarEstado()
 if resumiu then
     log("SUCCESS", "Estado retomado | "..#State.buffer.." eventos | PlaceId "..game.PlaceId)
     instalarHooks()
 end
 
+if not State.placeMain then
+    State.placeMain = game.PlaceId
+    pcall(writefile, PLACE_FILE, tostring(game.PlaceId))
+end
+
 atualizarSidebar()
 atualizarConteudo()
 atualizarBtnCap()
 
-print("[DUMPER v7.4] ✅ Pronto — __namecall + hooksSet")
+print("[DUMPER v7.5] ✅ Pronto — stealth mode ativo")
