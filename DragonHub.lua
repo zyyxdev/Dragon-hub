@@ -77,19 +77,6 @@ local function resolveRemote(service, kind, ...)
     end
 end
 
--- works em RE e RF sem o script ter que saber qual é qual
-local function callRemote(r, ...)
-    if not r then return end
-    local args = table.pack(...)
-    safe(function()
-        if r:IsA("RemoteFunction") then
-            r:InvokeServer(table.unpack(args, 1, args.n))
-        else
-            r:FireServer(table.unpack(args, 1, args.n))
-        end
-    end)
-end
-
 local ExecuteSkill         = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill")
 local ExecuteSkill_Special = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill_Special")
 local RequestRebirth       = resolveRemote("PlayerLevelService", "RF", "RequestRebirth")
@@ -171,7 +158,6 @@ local COMBOS = {
 }
 
 local comboIdx = 1
-local baseIdx = 1
 local slotAtual = 1
 
 local BossTimers = {
@@ -1878,8 +1864,8 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.3"
-local lblVersao = criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
+local HUB_VERSAO = "6.4"
+criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
 
