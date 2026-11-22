@@ -1856,6 +1856,499 @@ local function dungeonHookDump()
     _dungeonBuf = {}
 end
 
+-- [DUNGEON] estado, lobby e andares
+local DRL_CreateLobby = resolveRemote("DungeonLobbyService", "RF", "CreateLobby")
+local DRL_ToggleReady = resolveRemote("DungeonLobbyService", "RF", "ToggleReady")
+local DRL_StartDungeon = resolveRemote("DungeonLobbyService", "RF", "StartDungeon")
+local DRL_ChangeDungeon = resolveRemote("DungeonLobbyService", "RF", "ChangeDungeon")
+local DRL_ExitLobby = resolveRemote("DungeonLobbyService", "RF", "ExitLobby")
+local DRL_JoinLobby = resolveRemote("DungeonLobbyService", "RF", "JoinLobby")
+local DRS_ReturnToWorld = resolveRemote("DungeonService", "RF", "ReturnToWorld")
+local DRS_PlayAgain = resolveRemote("DungeonService", "RF", "TogglePlayAgain")
+
+local function dlog(...)
+    print("[DBH][DUN]", ...)
+end
+
+local function guiRaizes()
+    local roots = {}
+    local pg = plr:FindFirstChild("PlayerGui")
+    if pg then roots[#roots + 1] = pg end
+    if CoreGui then roots[#roots + 1] = CoreGui end
+    return roots
+end
+
+local function guiVisivel(obj)
+    local p = obj
+    for _ = 1, 12 do
+        if not p or p == game then break end
+        if p:IsA("GuiObject") and not p.Visible then return false end
+        p = p.Parent
+    end
+    return true
+end
+
+local function acharBotoes(padroes, exigirVisivel)
+    local achados = {}
+    for _, raiz in ipairs(guiRaizes()) do
+        for _, obj in ipairs(raiz:GetDescendants()) do
+            if obj:IsA("TextButton") and not obj:IsDescendantOf(gui) then
+                local t = tostring(obj.Text or ""):lower()
+                if t ~= "" then
+                    local bate = false
+                    for _, pad in ipairs(padroes) do
+                        if t:find(pad, 1, true) then bate = true break end
+                    end
+                    if bate then
+                        if not exigirVisivel or guiVisivel(obj) then
+                            local ap = obj.AbsolutePosition
+                            local as = obj.AbsoluteSize
+                            if as.X > 8 and as.Y > 8 and ap.X > -4000 and ap.Y > -4000 then
+                                achados[#achados + 1] = obj
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return achados
+end
+
+local function clicarObjeto(obj)
+    if not obj or not obj.Parent then return false end
+    local ap = obj.AbsolutePosition
+    local as = obj.AbsoluteSize
+    local x = math.floor(ap.X + as.X * 0.5)
+    local y = math.floor(ap.Y + as.Y * 0.5)
+    pcall(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
+    task.wait(0.07)
+    pcall(function() VIM:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
+    return true
+end
+
+local function clicarPadrao(padroes)
+    local lista = acharBotoes(padroes, true)
+    if #lista == 0 then return false end
+    table.sort(lista, function(a, b)
+        return a.AbsolutePosition.Y < b.AbsolutePosition.Y
+    end)
+    return clicarObjeto(lista[1])
+end
+
+local _promptCache, _promptT = {}, 0
+local function atualizarPrompts()
+    if os.clock() - _promptT < 2.5 then return _promptCache end
+    _promptT = os.clock()
+    local lista = {}
+    local fila = { { WS, 0 } }
+    local visitados = 0
+    while #fila > 0 and visitados < 6000 do
+        local item = table.remove(fila)
+        local obj, prof = item[1], item[2]
+        visitados = visitados + 1
+        if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
+            lista[#lista + 1] = obj
+        end
+        if prof < 4 then
+            for _, c in ipairs(obj:GetChildren()) do fila[#fila + 1] = { c, prof + 1 } end
+        end
+    end
+    _promptCache = lista
+    return lista
+end
+
+local function nomeDoPrompt(pr)
+    local alvo = pr.Parent
+    if pr:IsA("ProximityPrompt") then
+        local txt = tostring(pr.ActionText or "") .. " " .. tostring(pr.ObjectText or "")
+        if txt:gsub("%s", "") ~= "" then return txt end
+    end
+    return tostring(alvo and alvo.Name or "")
+end
+
+local function acharPrompt(padroes)
+    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local melhor, melhorD = nil, math.huge
+    for _, pr in ipairs(atualizarPrompts()) do
+        local alvo = pr.Parent
+        local base = alvo and (alvo:IsA("BasePart") and alvo or (alvo.PrimaryPart or alvo:FindFirstChildWhichIsA("BasePart")))
+        if base then
+            local nome = nomeDoPrompt(pr):lower()
+            local bate = false
+            for _, pad in ipairs(padroes) do
+                if nome:find(pad, 1, true) then bate = true break end
+            end
+            if bate then
+                local d = (base.Position - hrp.Position).Magnitude
+                if d < melhorD then melhor, melhorD = pr, d end
+            end
+        end
+    end
+    return melhor, melhorD
+end
+
+local function usarPrompt(pr)
+    if not pr or not pr.Parent then return false end
+    local ok = pcall(function() fireproximityprompt(pr) end)
+    if ok then return true end
+    if PromptRemote then
+        local alvo = pr.Parent
+        safe(function() PromptRemote:FireServer(alvo, alvo and alvo.Name or "") end)
+    end
+    return false
+end
+
+local _estado, _estadoT = "fora", 0
+local function estadoDungeon()
+    if os.clock() - _estadoT < 1.2 then return _estado end
+    _estadoT = os.clock()
+    local st = "fora"
+
+    if #acharBotoes({ "ready", "pronto", "start dungeon", "iniciar dungeon", "create lobby", "criar lobby" }, true) > 0 then
+        st = "lobby"
+    else
+        local dentro = false
+        for _, c in ipairs(WS:GetChildren()) do
+            if tostring(c.Name):lower():find("dungeon", 1, true) then dentro = true break end
+            if c:IsA("Folder") or c:IsA("Model") then
+                for _, cc in ipairs(c:GetChildren()) do
+                    if tostring(cc.Name):lower():find("dungeon", 1, true) then dentro = true break end
+                end
+                if dentro then break end
+            end
+        end
+        if dentro then st = "dentro" end
+    end
+
+    _estado = st
+    DUN.dentro = (st == "dentro")
+    return st
+end
+
+local LADDER = {
+    { nome = "abrir teleporter", pads = { "dungeon", "teleporter", "portal" }, espera = 1.4 },
+    { nome = "selecionar dungeon", pads = { "select", "selecionar", "enter", "entrar", "join" }, espera = 1.0 },
+    { nome = "criar lobby", pads = { "create", "criar", "solo" }, espera = 1.4 },
+    { nome = "ready", pads = { "ready", "pronto" }, espera = 1.0 },
+    { nome = "start", pads = { "start", "iniciar", "begin", "come" }, espera = 2.0 },
+}
+
+local function remoteDaEtapa(idx)
+    if idx == 3 then
+        if DRL_CreateLobby then safe(function() DRL_CreateLobby:InvokeServer() end) return true end
+        if DRL_ChangeDungeon then safe(function() DRL_ChangeDungeon:InvokeServer() end) return true end
+    elseif idx == 4 then
+        if DRL_ToggleReady then safe(function() DRL_ToggleReady:InvokeServer() end) return true end
+    elseif idx == 5 then
+        if DRL_StartDungeon then safe(function() DRL_StartDungeon:InvokeServer() end) return true end
+    end
+    return false
+end
+
+local _ultimoMobVivo, _mobCheckT = 0, 0
+local function mobsVivos()
+    if os.clock() - _mobCheckT < 0.5 then return _ultimoMobVivo end
+    _mobCheckT = os.clock()
+    local n = 0
+    for _, m in ipairs(mobs) do
+        if m and m.Parent and m:FindFirstChildOfClass("Humanoid") and m.Humanoid.Health > 0 then
+            n = n + 1
+        end
+    end
+    _ultimoMobVivo = n
+    return n
+end
+
+local function irProximoAndar()
+    local pr, d = acharPrompt({ "next", "proximo", "próximo", "continue", "continuar", "exit", "saida", "saída", "portal", "enter", "entrar", "floor", "andar" })
+    if not pr then return false end
+    local alvo = pr.Parent
+    local base = alvo and (alvo:IsA("BasePart") and alvo or (alvo.PrimaryPart or alvo:FindFirstChildWhichIsA("BasePart")))
+    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if base and hrp then
+        if d and d > 12 then
+            voarPara(base.Position + Vector3.new(0, 4, 0), Config.FlySpeed)
+            return true
+        end
+        if vooBv then vooBv.Velocity = Vector3.zero end
+        usarPrompt(pr)
+        task.wait(0.4)
+        return true
+    end
+    return false
+end
+
+local function ligarConjunto()
+    if not Config.DunTudoJunto then return end
+    Config.__salvo = Config.__salvo or {}
+    for _, k in ipairs({ "FarmAtivo", "AutoRegen", "AutoTransform", "AutoTecnica", "AutoCollect" }) do
+        Config.__salvo[k] = Config[k]
+    end
+    Config.FarmAtivo = true
+    Config.AutoRegen = true
+    Config.AutoTransform = true
+    Config.AutoTecnica = true
+    Config.AutoCollect = Config.DunColetar ~= false
+end
+
+local function restaurarConjunto()
+    local salvo = Config.__salvo
+    if not salvo then return end
+    for k, v in pairs(salvo) do Config[k] = v end
+    Config.__salvo = nil
+end
+
+local function rodarDungeon()
+    local agora = os.clock()
+
+    if os.clock() - (DUN.tFase or 0) < (DUN.espera or 0.8) then return end
+
+    local est = estadoDungeon()
+
+    if est == "dentro" then
+        DUN.fase = "dentro"
+        if mobsVivos() == 0 then
+            DUN.semMob = (DUN.semMob or agora)
+            if agora - DUN.semMob > 3 then
+                irProximoAndar()
+                if clicarPadrao({ "play again", "jogar novamente", "return", "voltar", "exit", "sair" }) then
+                    DUN.espera = 2
+                end
+                DUN.semMob = agora
+            end
+        else
+            DUN.semMob = agora
+        end
+        return
+    end
+
+    DUN.fase = "lobby"
+    local etapa = LADDER[DUN.etapa]
+    if not etapa then DUN.etapa = 1 return end
+
+    if clicarPadrao(etapa.pads) then
+        dlog("clique etapa " .. DUN.etapa .. " (" .. etapa.nome .. ")")
+        DUN.espera = etapa.espera
+        DUN.tFase = agora
+        DUN.etapa = DUN.etapa + 1
+        DUN.falhas = 0
+        return
+    end
+
+    if DUN.etapa == 1 and DUN.falhas >= 1 then
+        local pr = acharPrompt({ "dungeon", "portal", "teleporter", "teleport", "entrar", "enter" })
+        if pr then
+            usarPrompt(pr)
+            dlog("prompt fisico disparado")
+            DUN.espera = 1.6
+            DUN.tFase = agora
+            return
+        end
+    end
+
+    DUN.falhas = (DUN.falhas or 0) + 1
+    if DUN.falhas >= 3 then
+        dlog("etapa " .. DUN.etapa .. " sem botao, tentando remote")
+        remoteDaEtapa(DUN.etapa)
+        DUN.etapa = DUN.etapa + 1
+        DUN.falhas = 0
+        DUN.espera = 1.5
+        DUN.tFase = agora
+    end
+end
+
+DUN.voltarMundo = function()
+    clicarPadrao({ "return", "voltar", "exit", "sair", "world", "mundo" })
+    task.wait(0.4)
+    if DRS_ReturnToWorld then safe(function() DRS_ReturnToWorld:InvokeServer() end) end
+    if DRL_ExitLobby then safe(function() DRL_ExitLobby:InvokeServer() end) end
+    _estadoT = 0
+end
+
+DUN.diagnostico = function()
+    local est = estadoDungeon()
+    dlog("estado=" .. est .. " fase=" .. tostring(DUN.fase) .. " etapa=" .. tostring(DUN.etapa))
+    local btns = {}
+    for _, raiz in ipairs(guiRaizes()) do
+        for _, obj in ipairs(raiz:GetDescendants()) do
+            if obj:IsA("TextButton") and not obj:IsDescendantOf(gui) and guiVisivel(obj) then
+                local t = tostring(obj.Text or "")
+                if t ~= "" and #btns < 24 then
+                    btns[#btns + 1] = string.format("%q @%d,%d", t, math.floor(obj.AbsolutePosition.X), math.floor(obj.AbsolutePosition.Y))
+                end
+            end
+        end
+    end
+    if #btns == 0 then dlog("nenhum botao visivel fora do hub") else dlog("botoes: " .. table.concat(btns, " | ")) end
+    local prs = {}
+    for _, pr in ipairs(atualizarPrompts()) do
+        if #prs < 16 then prs[#prs + 1] = nomeDoPrompt(pr) end
+    end
+    if #prs == 0 then dlog("nenhum prompt no mapa") else dlog("prompts: " .. table.concat(prs, " | ")) end
+    local pastas = {}
+    for _, c in ipairs(WS:GetChildren()) do
+        if #pastas < 20 then pastas[#pastas + 1] = c.Name end
+    end
+    dlog("workspace: " .. table.concat(pastas, ", "))
+    dlog("mobs vivos=" .. tostring(mobsVivos()))
+end
+
+task.spawn(function()
+    while Ativo do
+        task.wait(0.35)
+        if Config.AutoDungeon then
+            if not DUN.ativo then
+                DUN.ativo = true
+                DUN.etapa = 1
+                DUN.falhas = 0
+                DUN.tFase = 0
+                ligarConjunto()
+                dlog("auto dungeon ligado")
+            end
+            pcall(rodarDungeon)
+        elseif DUN.ativo then
+            DUN.ativo = false
+            DUN.fase = "ocioso"
+            restaurarConjunto()
+            dlog("auto dungeon desligado")
+        end
+    end
+end)
+
+-- [SURVIVAL] orbita, desvio e fuga
+local SURV = {
+    ang = 0,
+    dir = 1,
+    tAnt = 0,
+    trocaDir = 0,
+    desvioAte = 0,
+    desvioDir = Vector3.zero,
+    hpAnt = nil,
+    ultimoHit = 0,
+}
+
+local PROJ, _projT = {}, 0
+
+local function observarProjeteis(hrp)
+    if os.clock() - _projT < 0.16 then return nil end
+    _projT = os.clock()
+    local ameaca, ameacaD = nil, math.huge
+    local vistos = {}
+    local fila = { { WS, 0 } }
+    local visitados = 0
+    while #fila > 0 and visitados < 4000 do
+        local item = table.remove(fila)
+        local obj, prof = item[1], item[2]
+        visitados = visitados + 1
+        if obj:IsA("BasePart") and not obj.Anchored then
+            local pos = obj.Position
+            local ant = PROJ[obj]
+            if ant then
+                local vel = (pos - ant) / 0.16
+                local spd = vel.Magnitude
+                local d = (pos - hrp.Position).Magnitude
+                if spd > 25 and d < 80 and d > 2 then
+                    local paraMim = (hrp.Position - pos).Unit
+                    if vel.Unit:Dot(paraMim) > 0.55 and d < ameacaD then
+                        ameacaD = d
+                        ameaca = { pos = pos, vel = vel }
+                    end
+                end
+            end
+            PROJ[obj] = pos
+            vistos[obj] = true
+        end
+        if prof < 2 then
+            for _, c in ipairs(obj:GetChildren()) do fila[#fila + 1] = { c, prof + 1 } end
+        end
+    end
+    for k in pairs(PROJ) do
+        if not vistos[k] then PROJ[k] = nil end
+    end
+    return ameaca
+end
+
+function SURV.vaiOrbitar(alvo)
+    if not Config.DodgeAtivo then return false end
+    local cat = getCategoria(alvo)
+    return cat == "boss" or (DUN.dentro and cat ~= nil)
+end
+
+function SURV.tick(alvo, hrp)
+    if not alvo or not alvo.Parent or not hrp then return false end
+    local agora = os.clock()
+    local char = plr.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local mpos = alvo.HumanoidRootPart.Position
+
+    if hum then
+        local hp = hum.Health
+        if SURV.hpAnt and hp < SURV.hpAnt - 0.5 then
+            SURV.ultimoHit = agora
+            SURV.desvioAte = agora + 0.5
+            local fora = hrp.Position - mpos
+            fora = Vector3.new(fora.X, 0, fora.Z)
+            if fora.Magnitude < 1 then fora = Vector3.new(1, 0, 0) end
+            fora = fora.Unit
+            local lado = Vector3.new(-fora.Z, 0, fora.X)
+            if math.random() < 0.5 then lado = -lado end
+            SURV.desvioDir = (lado * 0.8 + fora * 0.6).Unit
+        end
+        SURV.hpAnt = hp
+
+        local ratio = (hum.MaxHealth > 0) and (hp / hum.MaxHealth) or 1
+        local limite = (Config.DunHpFuga or 35) / 100
+        if ratio < limite and not emRegen and Config.AutoRegen then
+            iniciarRegen()
+            return true
+        end
+    end
+
+    local ameaca = observarProjeteis(hrp)
+    if ameaca then
+        local perp = ameaca.vel.Unit:Cross(Vector3.yAxis)
+        if perp.Magnitude < 0.1 then perp = Vector3.xAxis end
+        perp = perp.Unit
+        if perp:Dot(hrp.Position - ameaca.pos) < 0 then perp = -perp end
+        SURV.desvioDir = (perp + Vector3.new(0, 0.25, 0)).Unit
+        SURV.desvioAte = agora + 0.35
+    end
+
+    if agora < SURV.desvioAte then
+        voarPara(hrp.Position + SURV.desvioDir * 34, math.max(Config.FlySpeed, 220))
+        return true
+    end
+
+    local dt = math.clamp(agora - (SURV.tAnt or agora), 0, 0.25)
+    SURV.tAnt = agora
+    if agora - SURV.trocaDir > 3 then
+        SURV.trocaDir = agora
+        if math.random() < 0.35 then SURV.dir = -SURV.dir end
+    end
+    SURV.ang = SURV.ang + 0.9 * SURV.dir * dt
+
+    local raio = Config.DunRaio or 18
+    local alt = Config.DunAltura or 14
+    if hum and hum.MaxHealth > 0 and hum.Health / hum.MaxHealth < 0.5 then
+        raio = raio + 8
+        alt = alt + 4
+    end
+    if agora - SURV.ultimoHit < 2 then
+        raio = raio + 6
+    end
+
+    local destino = mpos + Vector3.new(math.cos(SURV.ang) * raio, alt, math.sin(SURV.ang) * raio)
+    local d = (destino - hrp.Position).Magnitude
+    if d > 2 then
+        voarPara(destino, math.min(Config.FlySpeed, 50 + d * 3))
+    elseif vooBv then
+        vooBv.Velocity = Vector3.zero
+    end
+    return true
+end
+
 -- [PATCH KILL] cleanup completo
 matarTudo = function()
     Ativo = false
@@ -1903,6 +2396,52 @@ matarTudo = function()
     print("[DBH] kill switch executado")
 end
 
+-- [ABA DUNGEON]
+local dunTab = criarAba("dungeon", "🏰 Dungeon")
+criarSecao(dunTab, "Auto Dungeon")
+criarToggle(dunTab, "Auto Dungeon (lobby → andares → fim)", false, function(v)
+    Config.AutoDungeon = v
+end)
+local dunStatus = criarLabel(dunTab, "ocioso", 46)
+criarToggle(dunTab, "Ligar tudo junto (farm, regen, transform, técnica, collect)", true, function(v)
+    Config.DunTudoJunto = v
+end)
+criarToggle(dunTab, "Coletar os drops do dungeon", true, function(v)
+    Config.DunColetar = v
+end)
+criarSecao(dunTab, "Sobrevivência")
+criarToggle(dunTab, "Esquiva automática (órbita + desvio)", true, function(v)
+    Config.DodgeAtivo = v
+end)
+criarSlider(dunTab, "Raio da órbita", 8, 40, 18, 1, function(v) Config.DunRaio = v end)
+criarSlider(dunTab, "Altura de voo", 0, 60, 14, 2, function(v) Config.DunAltura = v end)
+criarSlider(dunTab, "Fugir com HP abaixo de (%)", 10, 70, 35, 5, function(v) Config.DunHpFuga = v end)
+criarToggle(dunTab, "Regen subindo (sair do alcance)", true, function(v)
+    Config.DunRegenSubir = v
+end)
+criarSecao(dunTab, "Ações")
+criarBotao(dunTab, "▶ Entrar no dungeon agora", function()
+    Config.AutoDungeon = true
+    DUN.etapa = 1
+    DUN.falhas = 0
+    DUN.tFase = 0
+end)
+criarBotao(dunTab, "⏹ Parar e voltar ao mundo", function()
+    Config.AutoDungeon = false
+    DUN.voltarMundo()
+end)
+criarBotao(dunTab, "🔎 Diagnóstico (console)", function()
+    DUN.diagnostico()
+end)
+task.spawn(function()
+    while Ativo do
+        task.wait(0.5)
+        dunStatus.Text = string.format("fase: %s   dentro: %s\netapa: %d   falhas: %d   mobs: %d",
+            tostring(DUN.fase), tostring(DUN.dentro and "sim" or "não"),
+            tonumber(DUN.etapa) or 0, tonumber(DUN.falhas) or 0, tonumber(mobsVivos()) or 0)
+    end
+end)
+
 -- [ABA CONFIG]
 local configTab = criarAba("config", "⚙ Config")
 criarSecao(configTab, "Movimento")
@@ -1940,7 +2479,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.7"
+local HUB_VERSAO = "7.0"
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
@@ -2114,7 +2653,9 @@ task.spawn(function()
                     local dist = (mpos - hrp.Position).Magnitude
                     local zonaConforto = Config.AttackRange + 4
 
-                    if dist > zonaConforto then
+                    if SURV.vaiOrbitar(alvo) and SURV.tick(alvo, hrp) then
+                        if dist <= Config.AttackRange + 40 then atacar(alvo) end
+                    elseif dist > zonaConforto then
                         voarPara(mpos, Config.FlySpeed)
                         if getCategoria(alvo) == "boss" and dist > 100 then
                             local hrpAtual = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
