@@ -762,42 +762,45 @@ if not hooked then
     pintarHook()
 end
 
-local arrastaOk = false
-pcall(function()
-    local det = Instance.new("UIDragDetector")
-    det.Name = "ZYYX_DRAG"
-    det.DragStyle = Enum.UIDragDetectorDragStyle.TranslatePlane
-    det.ResponseStyle = Enum.UIDragDetectorResponseStyle.Custom
-    det.Parent = bar
-    arrastaOk = true
-end)
+local drag, dStart, sStart = false, nil, nil
+local arrastavel = true
 
-if not arrastaOk then
-    local drag, dStart, sStart = false, nil, nil
-    bar.InputBegan:Connect(function(i)
-        if i.Target == btnX then return end
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-            or i.UserInputType == Enum.UserInputType.Touch then
-            drag = true
-            dStart = i.Position
-            sStart = root.Position
-        end
-    end)
-    GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
-        if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
-            or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - dStart
-            root.Position = UDim2.new(sStart.X.Scale, sStart.X.Offset + d.X,
-                sStart.Y.Scale, sStart.Y.Offset + d.Y)
-        end
-    end)
-    GUI_CONNS[#GUI_CONNS + 1] = UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1
-            or i.UserInputType == Enum.UserInputType.Touch then
-            drag = false
-        end
-    end)
+local function pegarAlca(inst)
+    for _ = 1, 3 do
+        if not inst then return nil end
+        if inst:IsA("TextButton") then return nil end
+        if inst == root then return root end
+        inst = inst.Parent
+    end
+    return nil
 end
+
+root.InputBegan:Connect(function(i)
+    if not arrastavel then return end
+    if i.UserInputType ~= Enum.UserInputType.MouseButton1
+        and i.UserInputType ~= Enum.UserInputType.Touch then return end
+    if not pegarAlca(i.Target) then return end
+    drag = true
+    dStart = i.Position
+    sStart = root.Position
+end)
+GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
+    if not drag then return end
+    if i.UserInputType ~= Enum.UserInputType.MouseMovement
+        and i.UserInputType ~= Enum.UserInputType.Touch then return end
+    local d = i.Position - dStart
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    local nx = math.clamp(sStart.X.Offset + d.X, 0, math.max(0, vp.X - root.AbsoluteSize.X))
+    local ny = math.clamp(sStart.Y.Offset + d.Y, 0, math.max(0, vp.Y - root.AbsoluteSize.Y))
+    root.Position = UDim2.new(0, nx, 0, ny)
+end)
+GUI_CONNS[#GUI_CONNS + 1] = UIS.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
+        drag = false
+    end
+end)
 
 task.spawn(function()
     local t = 0
