@@ -1,4 +1,4 @@
-local VERSION = "10.0"
+local VERSION = "10.1"
 
 if getgenv and getgenv().__ZYYX_DUMP10 then
     pcall(function() getgenv().__ZYYX_DUMP10.stop() end)
@@ -12,10 +12,14 @@ local UIS = game:GetService("UserInputService")
 local plr = Players.LocalPlayer
 
 local CFG = {
-    maxDepth = 16,
     rawMax = 8000,
     rateLimit = 0.02,
-    snapshotEvery = 5,
+    evtRate = 0.25,
+    slice = 120,
+    wsDepth = 8,
+    rsDepth = 12,
+    maxNodes = 9000,
+    snapshotEvery = 6,
 }
 
 local TS = os.date("%Y%m%d_%H%M%S")
@@ -31,6 +35,7 @@ local S = {
     raw = {},
     appended = 0,
     events = {},
+    evtLast = {},
     arch = {},
     services = {},
     network = 0,
@@ -39,8 +44,11 @@ local S = {
     lastCall = {},
     place = PLACE,
     started = os.date("%Y-%m-%d %H:%M:%S"),
-    switched = 0,
 }
+
+local SCAN = { active = false, nodes = 0, remotes = 0 }
+local CONNS = {}
+local hookOriginal = nil
 
 local function probe(f)
     local ok, v = pcall(f)
@@ -79,15 +87,12 @@ local function ser(v, d)
     if d > 3 then return "..." end
     local t = typeof(v)
     if t == "Instance" then
-        local ok, p = pcall(function() return v:GetFullName() end)
-        return "I(" .. (ok and p or v.Name) .. ")"
+        return "I(" .. (v.Name or "?") .. ")"
     elseif t == "Vector3" then
         return ("V3(%d,%d,%d)"):format(v.X, v.Y, v.Z)
     elseif t == "CFrame" then
         local p = v.Position
         return ("CF(%d,%d,%d)"):format(p.X, p.Y, p.Z)
-    elseif t == "Color3" then
-        return ("C3(%d,%d,%d)"):format(v.R * 255, v.G * 255, v.B * 255)
     elseif t == "table" then
         local out, i = {}, 0
         for k, x in pairs(v) do
@@ -170,7 +175,6 @@ local function registrar(path, method, args, n)
         sample = sample, first = os.clock(), last = os.clock() }
     S.uniq = S.uniq + 1
     pushRaw(("%06d %s→ %s %s"):format(S.total, method, path, sample))
-    pcall(print, ("[D10] %s %s %s"):format(method, path, sh))
 end
 
 local function isRemote(inst)
@@ -179,74 +183,36 @@ local function isRemote(inst)
 end
 
 local CONTAINER = {
-    Folder = true, Model = true, ScreenGui = true, SurfaceGui = true,
-    BillboardGui = true, PlayerGui = true, Player = true, Backpack = true,
-    Configuration = true, ReplicatedStorage = true, Workspace = true,
-    ReplicatedFirst = true, StarterGui = true, StarterPlayer = true,
-    StarterPlayerScripts = true, StarterCharacterScripts = true,
-    DataModel = true, Actor = true, WorldRoot = true,
+    Folder = true,
+    PlayerGui = true,
+    Player = true,
+    Backpack = true,
+    Configuration = true,
+    Model = true,
+    ScreenGui = true,
 }
 
-local function walk(root, depth)
-    if depth > CFG.maxDepth or not root then return end
-    local ok, kids = pcall(function() return root:GetChildren() end)
-    if not ok then return end
-    for _, ch in ipairs(kids) do
-        if isRemote(ch) then
-            local okp, path = pcall(function() return ch:GetFullName() end)
-            if okp then
-                S.arch[#S.arch + 1] = ("[%s] %s"):format(ch.ClassName, path)
-            end
-        elseif CONTAINER[ch.ClassName] then
-            walk(ch, depth + 1)
-        end
+local MUDO = { "Postie", "GameAnalytics", "ZAP_", "Skypack", "Ping" }
+
+local function deveConectar(path)
+    for _, m in ipairs(MUDO) do
+        if path:find(m, 1, true) then return false end
     end
+    return true
 end
 
-local function scanNetwork()
-    S.services = {}
-    S.network = 0
-    local net = RS:FindFirstChild("Network")
-    if not net then return 0 end
-    for _, svc in ipairs(net:GetChildren()) do
-        local entry = { RE = {}, RF = {} }
-        local count = 0
-        for _, tipo in ipairs({ "RE", "RF" }) do
-            local g = svc:FindFirstChild(tipo)
-            if g then
-                for _, r in ipairs(g:GetChildren()) do
-                    if isRemote(r) then
-                        entry[tipo][r.Name] = r:GetFullName()
-                        count = count + 1
-                    end
-                end
-            end
-        end
-        if count > 0 then
-            S.services[svc.Name] = entry
-            S.network = S.network + 1
-        end
-    end
-    return S.network
-end
-
-local function scanArch()
-    S.arch = {}
-    walk(RS, 0)
-    walk(WS, 0)
-    walk(RF, 0)
-    pcall(function() walk(plr, 0) end)
-end
-
-local function connectRemote(inst)
+local function connectRemote(inst, path)
     if S.events[inst] then return end
-    if not isRemote(inst) then return end
     S.events[inst] = true
-    local path = inst:GetFullName()
+    if not deveConectar(path) then return end
     if inst:IsA("RemoteEvent") or inst:IsA("UnreliableRemoteEvent") then
         pcall(function()
-            inst.OnClientEvent:Connect(function(...)
+            CONNS[#CONNS + 1] = inst.OnClientEvent:Connect(function(...)
                 if not S.active then return end
+                local agora = os.clock()
+                local last = S.evtLast[path]
+                if last and agora - last < CFG.evtRate then return end
+                S.evtLast[path] = agora
                 local n = select("#", ...)
                 local args = {}
                 for i = 1, n do args[i] = select(i, ...) end
@@ -266,11 +232,79 @@ local function connectRemote(inst)
     end
 end
 
-local function hookRemotes()
-    for _, d in ipairs(RS:GetDescendants()) do connectRemote(d) end
-    for _, d in ipairs(WS:GetDescendants()) do connectRemote(d) end
-    pcall(function() RS.DescendantAdded:Connect(connectRemote) end)
-    pcall(function() WS.DescendantAdded:Connect(connectRemote) end)
+local function scanNetwork()
+    S.services = {}
+    S.network = 0
+    local net = RS:FindFirstChild("Network")
+    if not net then return 0 end
+    for _, svc in ipairs(net:GetChildren()) do
+        local entry = { RE = {}, RF = {} }
+        local count = 0
+        for _, tipo in ipairs({ "RE", "RF" }) do
+            local g = svc:FindFirstChild(tipo)
+            if g then
+                for _, r in ipairs(g:GetChildren()) do
+                    if isRemote(r) then
+                        entry[tipo][r.Name] = "ReplicatedStorage.Network."
+                            .. svc.Name .. "." .. tipo .. "." .. r.Name
+                        count = count + 1
+                    end
+                end
+            end
+        end
+        if count > 0 then
+            S.services[svc.Name] = entry
+            S.network = S.network + 1
+        end
+    end
+    return S.network
+end
+
+local function scanAsync(onDone)
+    if SCAN.active then return false end
+    SCAN.active = true
+    SCAN.nodes = 0
+    SCAN.remotes = 0
+    S.arch = {}
+
+    local queue = {
+        { RS, 0, "ReplicatedStorage", CFG.rsDepth },
+        { RF, 0, "ReplicatedFirst", 4 },
+        { plr, 0, plr.Name, 4 },
+        { WS, 0, "Workspace", CFG.wsDepth },
+    }
+    local head = 1
+
+    task.spawn(function()
+        while head <= #queue do
+            local item = queue[head]
+            head = head + 1
+            local inst, depth, path, maxd = item[1], item[2], item[3], item[4]
+
+            if depth <= maxd and SCAN.nodes < CFG.maxNodes then
+                local ok, kids = pcall(inst.GetChildren, inst)
+                if ok then
+                    for _, ch in ipairs(kids) do
+                        SCAN.nodes = SCAN.nodes + 1
+                        local cls = ch.ClassName
+                        local cpath = path .. "." .. ch.Name
+                        if isRemote(ch) then
+                            SCAN.remotes = SCAN.remotes + 1
+                            S.arch[#S.arch + 1] = ("[%s] %s"):format(cls, cpath)
+                            connectRemote(ch, cpath)
+                        elseif CONTAINER[cls] then
+                            queue[#queue + 1] = { ch, depth + 1, cpath, maxd }
+                        end
+                    end
+                end
+            end
+
+            if head % CFG.slice == 0 then task.wait() end
+        end
+        SCAN.active = false
+        if onDone then pcall(onDone) end
+    end)
+    return true
 end
 
 local function hookNamecall()
@@ -305,15 +339,13 @@ local function snapshot()
     if not char then return end
     local out = {}
     local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        out[#out + 1] = ("hp=%.0f/%.0f"):format(hum.Health, hum.MaxHealth)
-    end
+    if hum then out[#out + 1] = ("hp=%.0f/%.0f"):format(hum.Health, hum.MaxHealth) end
     local status = char:FindFirstChild("Status")
     if status then
         for _, v in ipairs(status:GetChildren()) do
             if v:IsA("ValueBase") then
                 if typeof(v.Value) == "number" then
-                    out[#out + 1] = ("%s=%.2f"):format(v.Name, v.Value)
+                    out[#out + 1] = ("%s=%.1f"):format(v.Name, v.Value)
                 else
                     out[#out + 1] = v.Name .. "=" .. tostring(v.Value)
                 end
@@ -330,19 +362,20 @@ local function snapshot()
     end
     if #out > 0 then
         S.snap[#S.snap + 1] = table.concat(out, " ")
-        if #S.snap > 400 then table.remove(S.snap, 1) end
+        if #S.snap > 300 then table.remove(S.snap, 1) end
     end
 end
 
 local FILTRO_DROP = { "drop", "orb", "star", "dragonball", "sphere", "chest", "bau", "baú", "boss" }
+
 local function watchWorkspace()
     pcall(function()
         WS.ChildAdded:Connect(function(it)
-            local low = it.Name:lower()
+            local low = string.lower(it.Name)
             for _, f in ipairs(FILTRO_DROP) do
-                if low:find(f, 1, true) then
-                    S.drops[#S.drops + 1] = ("%s | %s | %s"):format(
-                        it.Name, it.ClassName, it:GetFullName())
+                if string.find(low, f, 1, true) then
+                    S.drops[#S.drops + 1] = ("%s | %s"):format(it.Name, it.ClassName)
+                    if #S.drops > 400 then table.remove(S.drops, 1) end
                     break
                 end
             end
@@ -375,7 +408,7 @@ local function buildReport()
     for k, v in pairs(ENV) do L[#L + 1] = ("  %-16s %s"):format(k, tostring(v)) end
 
     L[#L + 1] = ""
-    L[#L + 1] = ("[NETWORK] servicos=%d remotes_mapeados=%d"):format(S.network, #S.arch)
+    L[#L + 1] = ("[NETWORK] servicos=%d remotes=%d"):format(S.network, #S.arch)
     for svc, entry in pairs(S.services) do
         local re, rf = 0, 0
         for _ in pairs(entry.RE) do re = re + 1 end
@@ -421,16 +454,15 @@ local function save(quiet)
         pcall(writefile, FILE, txt)
         pcall(writefile, MAPF, buildMap())
         S.appended = #S.raw
-    end    if ENV.setclipboard then pcall(setclipboard, txt) end
+    end
+    if ENV.setclipboard then pcall(setclipboard, txt) end
     if not quiet then
-        pcall(print, ("[D10] salvo %s (%d unicos / %d chamadas)"):format(FILE, S.uniq, S.total))
+        pcall(print, ("[D10] salvo %s (%d sig / %d chamadas)"):format(FILE, S.uniq, S.total))
     end
     return FILE
 end
 
 scanNetwork()
-scanArch()
-hookRemotes()
 local hooked = hookNamecall()
 watchWorkspace()
 
@@ -446,7 +478,7 @@ gui.DisplayOrder = 99
 gui.Parent = guiParent
 
 local root = Instance.new("Frame")
-root.Size = UDim2.new(0, 272, 0, 120)
+root.Size = UDim2.new(0, 272, 0, 126)
 root.Position = UDim2.new(0, 14, 0, 14)
 root.BackgroundColor3 = Color3.fromRGB(9, 9, 11)
 root.BackgroundTransparency = 0.08
@@ -478,7 +510,7 @@ title.Text = ("ZYYX DUMPER v%s"):format(VERSION)
 title.Parent = bar
 
 local info = Instance.new("TextLabel")
-info.Size = UDim2.new(1, -16, 0, 52)
+info.Size = UDim2.new(1, -16, 0, 58)
 info.Position = UDim2.new(0, 8, 0, 26)
 info.BackgroundTransparency = 1
 info.Font = Enum.Font.Code
@@ -492,7 +524,7 @@ info.Parent = root
 local function mk(x, w, txt, cor, cb)
     local b = Instance.new("TextButton")
     b.Size = UDim2.new(0, w, 0, 24)
-    b.Position = UDim2.new(0, x, 0, 86)
+    b.Position = UDim2.new(0, x, 0, 92)
     b.BackgroundColor3 = cor
     b.Text = txt
     b.TextColor3 = Color3.new(1, 1, 1)
@@ -505,18 +537,18 @@ local function mk(x, w, txt, cor, cb)
     return b
 end
 
-local btnRec
-btnRec = mk(8, 82, "PAUSAR", Color3.fromRGB(150, 60, 40), function()
+local btnRec = mk(8, 82, "PAUSAR", Color3.fromRGB(150, 60, 40), function()
     S.active = not S.active
     btnRec.Text = S.active and "PAUSAR" or "GRAVAR"
     btnRec.BackgroundColor3 = S.active and Color3.fromRGB(150, 60, 40)
         or Color3.fromRGB(40, 140, 80)
 end)
-mk(96, 78, "SALVAR", Color3.fromRGB(200, 120, 20), function() save(false) end)
-mk(180, 84, "RESCAN", Color3.fromRGB(40, 90, 190), function()
+local btnScan = mk(96, 78, "SCAN", Color3.fromRGB(40, 90, 190), function()
+    if SCAN.active then return end
     scanNetwork()
-    scanArch()
+    scanAsync()
 end)
+mk(180, 84, "SALVAR", Color3.fromRGB(200, 120, 20), function() save(false) end)
 
 local drag, dStart, sStart = false, nil, nil
 bar.InputBegan:Connect(function(i)
@@ -545,23 +577,24 @@ end)
 task.spawn(function()
     local t = 0
     while gui.Parent do
-        info.Text = ("%s  place:%s\nservicos:%d  sig:%d  calls:%d\nhook:%s  file:%s"):format(
+        local scanTxt = SCAN.active
+            and ("varrendo %d nos / %d remotes"):format(SCAN.nodes, SCAN.remotes)
+            or ("scan ok: %d remotes"):format(#S.arch)
+        info.Text = ("%s  place:%s\n%s\nservicos:%d  sig:%d  calls:%d"):format(
             S.active and "GRAVANDO" or "PAUSADO", S.place,
-            S.network, S.uniq, S.total,
-            hooked and "on" or "off",
-            canFile and FILE or "clipboard")
+            scanTxt, S.network, S.uniq, S.total)
+        btnScan.Text = SCAN.active and "..." or "SCAN"
         task.wait(0.4)
         t = t + 0.4
         if S.active and t >= CFG.snapshotEvery then
             t = 0
             pcall(snapshot)
         end
-        if tostring(game.PlaceId) ~= S.place then
-            S.place = tostring(game.PlaceId)
-            S.switched = S.switched + 1
+        local pid = tostring(game.PlaceId)
+        if pid ~= S.place then
+            S.place = pid
             pcall(scanNetwork)
-            pcall(scanArch)
-            pcall(function() writefile(FILE, buildReport() .. "\n\n[TELEPORTE] place=" .. S.place) end)
+            pcall(scanAsync)
         end
     end
 end)
@@ -588,15 +621,15 @@ UIS.InputBegan:Connect(function(inp, gp)
         save(false)
     elseif inp.KeyCode == Enum.KeyCode.F10 then
         scanNetwork()
-        scanArch()
+        scanAsync()
     end
 end)
 
 getgenv = getgenv or function() return _G end
 getgenv().__ZYYX_DUMP10 = {
     state = S,
+    scan = SCAN,
     save = save,
-    scan = function() scanNetwork(); scanArch() end,
     report = buildReport,
     map = buildMap,
     file = FILE,
@@ -609,6 +642,10 @@ getgenv().__ZYYX_DUMP10 = {
     end,
 }
 
-print(("[D10] v%s pronto | servicos=%d remotes=%d hook=%s"):format(
-    VERSION, S.network, #S.arch, hooked and "on" or "off"))
-print("[D10] RightShift grava/pausa | F9 salva | F10 rescan | getgenv().__ZYYX_DUMP10.stop()")
+print(("[D10] v%s pronto | servicos=%d hook=%s"):format(
+    VERSION, S.network, hooked and "on" or "off"))
+
+task.spawn(function()
+    task.wait(1)
+    if not SCAN.active and #S.arch == 0 then scanAsync() end
+end)
