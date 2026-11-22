@@ -1856,15 +1856,15 @@ local function dungeonHookDump()
     _dungeonBuf = {}
 end
 
--- [DUNGEON] estado, lobby e andares
-local DRL_CreateLobby = resolveRemote("DungeonLobbyService", "RF", "CreateLobby")
-local DRL_ToggleReady = resolveRemote("DungeonLobbyService", "RF", "ToggleReady")
-local DRL_StartDungeon = resolveRemote("DungeonLobbyService", "RF", "StartDungeon")
-local DRL_ChangeDungeon = resolveRemote("DungeonLobbyService", "RF", "ChangeDungeon")
-local DRL_ExitLobby = resolveRemote("DungeonLobbyService", "RF", "ExitLobby")
-local DRL_JoinLobby = resolveRemote("DungeonLobbyService", "RF", "JoinLobby")
-local DRS_ReturnToWorld = resolveRemote("DungeonService", "RF", "ReturnToWorld")
-local DRS_PlayAgain = resolveRemote("DungeonService", "RF", "TogglePlayAgain")
+-- [DUNGEON] raid Unstable Grouds: menu -> buff -> ponto fixo -> E -> restart
+local PAD_ROTA = {
+    { nome = "abrir menu",    pads = { "dungeon", "raid", "portal" },                 espera = 1.5 },
+    { nome = "escolher raid", pads = { "unstable", "grouds", "grounds" },             espera = 1.2 },
+    { nome = "modo normal",   pads = { "normal" },                                    espera = 1.0 },
+    { nome = "play",          pads = { "play", "start", "iniciar", "enter", "join" }, espera = 2.6 },
+}
+local PAD_RESTART = { "restart", "play again", "retry", "again", "novamente" }
+local PAD_SAIR = { "return to world", "voltar ao mundo", "leave", "sair", "exit" }
 
 local function dlog(...)
     print("[DBH][DUN]", ...)
@@ -1900,13 +1900,11 @@ local function acharBotoes(padroes, exigirVisivel)
                     for _, pad in ipairs(padroes) do
                         if t:find(pad, 1, true) then bate = true break end
                     end
-                    if bate then
-                        if not exigirVisivel or guiVisivel(obj) then
-                            local ap = obj.AbsolutePosition
-                            local as = obj.AbsoluteSize
-                            if as.X > 8 and as.Y > 8 and ap.X > -4000 and ap.Y > -4000 then
-                                achados[#achados + 1] = obj
-                            end
+                    if bate and (not exigirVisivel or guiVisivel(obj)) then
+                        local ap = obj.AbsolutePosition
+                        local as = obj.AbsoluteSize
+                        if as.X > 8 and as.Y > 8 and ap.X > -4000 and ap.Y > -4000 then
+                            achados[#achados + 1] = obj
                         end
                     end
                 end
@@ -1915,6 +1913,8 @@ local function acharBotoes(padroes, exigirVisivel)
     end
     return achados
 end
+
+local _cliqueT, _cliqueAlvo, _cliqueAlvoT = 0, nil, 0
 
 local function clicarObjeto(obj)
     if not obj or not obj.Parent then return false end
@@ -1928,134 +1928,24 @@ local function clicarObjeto(obj)
     return true
 end
 
+local function clicarSeguro(obj)
+    local agora = os.clock()
+    if agora - _cliqueT < 0.8 then return false end
+    if obj == _cliqueAlvo and agora - _cliqueAlvoT < 3.5 then return false end
+    _cliqueT = agora
+    _cliqueAlvo = obj
+    _cliqueAlvoT = agora
+    return clicarObjeto(obj)
+end
+
 local function clicarPadrao(padroes)
     local lista = acharBotoes(padroes, true)
     if #lista == 0 then return false end
     table.sort(lista, function(a, b)
         return a.AbsolutePosition.Y < b.AbsolutePosition.Y
     end)
-    return clicarObjeto(lista[1])
-end
-
-local _promptCache, _promptT = {}, 0
-local function atualizarPrompts()
-    if os.clock() - _promptT < 2.5 then return _promptCache end
-    _promptT = os.clock()
-    local lista = {}
-    local fila = { { WS, 0 } }
-    local visitados = 0
-    while #fila > 0 and visitados < 6000 do
-        local item = table.remove(fila)
-        local obj, prof = item[1], item[2]
-        visitados = visitados + 1
-        if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
-            lista[#lista + 1] = obj
-        end
-        if prof < 4 then
-            for _, c in ipairs(obj:GetChildren()) do fila[#fila + 1] = { c, prof + 1 } end
-        end
-    end
-    _promptCache = lista
-    return lista
-end
-
-local function nomeDoPrompt(pr)
-    local alvo = pr.Parent
-    if pr:IsA("ProximityPrompt") then
-        local txt = tostring(pr.ActionText or "") .. " " .. tostring(pr.ObjectText or "")
-        if txt:gsub("%s", "") ~= "" then return txt end
-    end
-    return tostring(alvo and alvo.Name or "")
-end
-
-local function acharPrompt(padroes)
-    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
-    local melhor, melhorD = nil, math.huge
-    for _, pr in ipairs(atualizarPrompts()) do
-        local alvo = pr.Parent
-        local base = alvo and (alvo:IsA("BasePart") and alvo or (alvo.PrimaryPart or alvo:FindFirstChildWhichIsA("BasePart")))
-        if base then
-            local nome = nomeDoPrompt(pr):lower()
-            local bate = false
-            for _, pad in ipairs(padroes) do
-                if nome:find(pad, 1, true) then bate = true break end
-            end
-            if bate then
-                local d = (base.Position - hrp.Position).Magnitude
-                if d < melhorD then melhor, melhorD = pr, d end
-            end
-        end
-    end
-    return melhor, melhorD
-end
-
-local function usarPrompt(pr)
-    if not pr or not pr.Parent then return false end
-    local ok = pcall(function() fireproximityprompt(pr) end)
-    if ok then return true end
-    if PromptRemote then
-        local alvo = pr.Parent
-        safe(function() PromptRemote:FireServer(alvo, alvo and alvo.Name or "") end)
-    end
-    return false
-end
-
-local _estado, _estadoT = "fora", 0
-local function estadoDungeon()
-    if os.clock() - _estadoT < 1.2 then return _estado end
-    _estadoT = os.clock()
-    local st = "fora"
-
-    if #acharBotoes({ "ready", "pronto", "start dungeon", "iniciar dungeon", "create lobby", "criar lobby" }, true) > 0 then
-        st = "lobby"
-    else
-        local pastaDungeon = false
-        for _, c in ipairs(WS:GetChildren()) do
-            if tostring(c.Name):lower():find("dungeon", 1, true) then pastaDungeon = true break end
-            if c:IsA("Folder") or c:IsA("Model") then
-                for _, cc in ipairs(c:GetChildren()) do
-                    if tostring(cc.Name):lower():find("dungeon", 1, true) then pastaDungeon = true break end
-                end
-                if pastaDungeon then break end
-            end
-        end
-        if pastaDungeon then
-            local mobDungeon = false
-            for _, m in ipairs(mobs) do
-                local pai = m and m.Parent
-                if pai then
-                    if tostring(pai.Name):lower():find("dungeon", 1, true) then mobDungeon = true break end
-                    local avo = pai.Parent
-                    if avo and tostring(avo.Name):lower():find("dungeon", 1, true) then mobDungeon = true break end
-                end
-            end
-            local botaoFim = #acharBotoes({ "play again", "jogar novamente", "return to world", "voltar ao mundo" }, true) > 0
-            if mobDungeon or botaoFim then st = "dentro" end
-        end
-    end
-
-    _estado = st
-    DUN.dentro = (st == "dentro")
-    return st
-end
-
-local LADDER = {
-    { nome = "abrir teleporter", pads = { "dungeon", "teleporter", "portal" }, espera = 1.4 },
-    { nome = "selecionar dungeon", pads = { "select", "selecionar", "enter", "entrar", "join" }, espera = 1.0 },
-    { nome = "criar lobby", pads = { "create", "criar", "solo" }, espera = 1.4 },
-    { nome = "ready", pads = { "ready", "pronto" }, espera = 1.0 },
-    { nome = "start", pads = { "start", "iniciar", "begin", "come" }, espera = 2.0 },
-}
-
-local function remoteDaEtapa(idx)
-    if idx == 3 then
-        if DRL_CreateLobby then safe(function() DRL_CreateLobby:InvokeServer() end) return true end
-        if DRL_ChangeDungeon then safe(function() DRL_ChangeDungeon:InvokeServer() end) return true end
-    elseif idx == 4 then
-        if DRL_ToggleReady then safe(function() DRL_ToggleReady:InvokeServer() end) return true end
-    elseif idx == 5 then
-        if DRL_StartDungeon then safe(function() DRL_StartDungeon:InvokeServer() end) return true end
+    for _, b in ipairs(lista) do
+        if clicarSeguro(b) then return true end
     end
     return false
 end
@@ -2074,35 +1964,51 @@ local function mobsVivos()
     return n
 end
 
-local function irProximoAndar()
-    local pr, d = acharPrompt({ "next", "proximo", "próximo", "continue", "continuar", "exit", "saida", "saída", "portal", "enter", "entrar", "floor", "andar" })
-    if not pr then return false end
-    local alvo = pr.Parent
-    local base = alvo and (alvo:IsA("BasePart") and alvo or (alvo.PrimaryPart or alvo:FindFirstChildWhichIsA("BasePart")))
-    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-    if base and hrp then
-        if d and d > 12 then
-            voarPara(base.Position + Vector3.new(0, 4, 0), Config.FlySpeed)
-            return true
+local function bossPerto()
+    for _, m in ipairs(mobs) do
+        if m and m.Parent and m:FindFirstChildOfClass("Humanoid") and m.Humanoid.Health > 0 then
+            local nome = tostring(m.Name):lower()
+            if nome:find("atom", 1, true) or getCategoria(m) == "boss" then return true end
         end
-        if vooBv then vooBv.Velocity = Vector3.zero end
-        usarPrompt(pr)
-        task.wait(0.4)
-        return true
     end
     return false
+end
+
+local _estado, _estadoT = "fora", 0
+function estadoDungeon()
+    if os.clock() - _estadoT < 1.2 then return _estado end
+    _estadoT = os.clock()
+    local st = "fora"
+    if mobsVivos() > 0 or bossPerto() then st = "dentro" end
+    _estado = st
+    DUN.dentro = (st == "dentro")
+    return st
+end
+
+local FASE = { atual = "ocioso", t = 0 }
+local MENU_IDX = 1
+local TENT_E = 0
+local CICLOS_VAZIOS = 0
+
+local function irPara(fase, espera)
+    FASE.atual = fase
+    FASE.t = os.clock()
+    DUN.espera = espera or 1.0
+    DUN.fase = fase
+    dlog("fase -> " .. fase)
 end
 
 local function ligarConjunto()
     if not Config.DunTudoJunto then return end
     Config.__salvo = Config.__salvo or {}
-    for _, k in ipairs({ "FarmAtivo", "AutoRegen", "AutoTransform", "AutoTecnica", "AutoCollect" }) do
+    for _, k in ipairs({ "FarmAtivo", "AutoRegen", "AutoTransform", "AutoTecnica", "AutoFusion", "AutoCollect" }) do
         Config.__salvo[k] = Config[k]
     end
     Config.FarmAtivo = true
     Config.AutoRegen = true
     Config.AutoTransform = true
     Config.AutoTecnica = true
+    Config.AutoFusion = true
     Config.AutoCollect = Config.DunColetar ~= false
 end
 
@@ -2113,116 +2019,173 @@ local function restaurarConjunto()
     Config.__salvo = nil
 end
 
+local function pontoConfigurado()
+    return Config.DunPos ~= nil and Config.DunPosSet == true
+end
+
+local function irAtePonto(hrp)
+    if not pontoConfigurado() then
+        dlog("posição do E não configurada — usa o botão 📍 no menu")
+        Config.AutoDungeon = false
+        irPara("ocioso", 1.0)
+        return false
+    end
+    local d = (Config.DunPos - hrp.Position).Magnitude
+    if d > 6 then
+        voarPara(Config.DunPos, Config.FlySpeed)
+        return false
+    end
+    if vooBv then vooBv.Velocity = Vector3.zero end
+    return true
+end
+
+local function semMobHa(agora, seg)
+    DUN.semMob = DUN.semMob or agora
+    return agora - DUN.semMob > seg
+end
+
 local function rodarDungeon()
     local agora = os.clock()
+    if agora - FASE.t < (DUN.espera or 1.0) then return end
 
-    if os.clock() - (DUN.tFase or 0) < (DUN.espera or 0.8) then return end
+    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
-    local est = estadoDungeon()
+    local fase = FASE.atual
 
-    if est == "dentro" then
-        DUN.fase = "dentro"
-        if mobsVivos() == 0 then
-            DUN.semMob = (DUN.semMob or agora)
-            if agora - DUN.semMob > 3 then
-                irProximoAndar()
-                if clicarPadrao({ "play again", "jogar novamente", "return", "voltar", "exit", "sair" }) then
-                    DUN.espera = 2
-                end
-                DUN.semMob = agora
-            end
-        else
-            DUN.semMob = agora
-        end
+    if fase == "ocioso" then
+        MENU_IDX = 1
+        CICLOS_VAZIOS = 0
+        irPara("menu", 0.6)
         return
     end
 
-    DUN.fase = "lobby"
-    local etapa = LADDER[DUN.etapa]
-    if not etapa then DUN.etapa = 1 return end
-
-    if clicarPadrao(etapa.pads) then
-        dlog("clique etapa " .. DUN.etapa .. " (" .. etapa.nome .. ")")
-        DUN.espera = etapa.espera
-        DUN.tFase = agora
-        DUN.etapa = DUN.etapa + 1
-        DUN.falhas = 0
-        return
-    end
-
-    if DUN.etapa == 1 and DUN.falhas >= 1 then
-        local pr = acharPrompt({ "dungeon", "portal", "teleporter", "teleport", "entrar", "enter" })
-        if pr then
-            usarPrompt(pr)
-            dlog("prompt fisico disparado")
-            DUN.espera = 1.6
-            DUN.tFase = agora
+    if fase == "menu" then
+        local etapa = PAD_ROTA[MENU_IDX]
+        if not etapa then
+            irPara("buff", 2.2)
             return
         end
+        if clicarPadrao(etapa.pads) then
+            dlog("clique: " .. etapa.nome)
+            MENU_IDX = MENU_IDX + 1
+            DUN.falhas = 0
+            irPara("menu", etapa.espera)
+        else
+            DUN.falhas = (DUN.falhas or 0) + 1
+            if DUN.falhas >= 6 then
+                DUN.falhas = 0
+                dlog("menu travado em: " .. etapa.nome)
+                irPara("buff", 1.0)
+            else
+                irPara("menu", 1.0)
+            end
+        end
+        return
     end
 
-    DUN.falhas = (DUN.falhas or 0) + 1
-    if DUN.falhas >= 3 then
-        dlog("etapa " .. DUN.etapa .. " sem botao, tentando remote")
-        remoteDaEtapa(DUN.etapa)
-        DUN.etapa = DUN.etapa + 1
-        DUN.falhas = 0
-        DUN.espera = 1.5
-        DUN.tFase = agora
+    if fase == "buff" then
+        if not formaAtiva() then teclaPorNome(Config.TransformTecla or "Y") end
+        task.wait(0.35)
+        if not tecnicaAtiva() then teclaPorNome(Config.TecnicaTecla or "M") end
+        task.wait(0.35)
+        if not fusionAtiva() then teclaPorNome(Config.FusionTecla or "F") end
+        task.wait(0.6)
+        TENT_E = 0
+        irPara("voar", 0.4)
+        return
     end
+
+    if fase == "voar" then
+        if not irAtePonto(hrp) then return end
+        tecla(Enum.KeyCode.E, 0.12)
+        TENT_E = TENT_E + 1
+        dlog("E #" .. TENT_E)
+        if TENT_E >= 4 then
+            DUN.semMob = agora
+            irPara("dentro", 2.5)
+        else
+            irPara("voar", 1.5)
+        end
+        return
+    end
+
+    if fase == "dentro" then
+        if mobsVivos() > 0 or bossPerto() then
+            DUN.semMob = agora
+            CICLOS_VAZIOS = 0
+            return
+        end
+        if semMobHa(agora, 5) then
+            if clicarPadrao(PAD_RESTART) then
+                dlog("restart clicado")
+                MENU_IDX = 4
+                TENT_E = 0
+                irPara("buff", 3.0)
+            elseif clicarPadrao(PAD_SAIR) then
+                dlog("saída clicada")
+                irPara("ocioso", 1.5)
+            else
+                CICLOS_VAZIOS = CICLOS_VAZIOS + 1
+                if CICLOS_VAZIOS >= 4 then
+                    CICLOS_VAZIOS = 0
+                    dlog("nada dentro nem botao de restart — refazendo rota")
+                    irPara("ocioso", 1.0)
+                else
+                    irPara("dentro", 1.5)
+                end
+            end
+        end
+        return
+    end
+
+    irPara("ocioso", 1.0)
 end
 
 DUN.voltarMundo = function()
-    clicarPadrao({ "return", "voltar", "exit", "sair", "world", "mundo" })
-    task.wait(0.4)
-    if DRS_ReturnToWorld then safe(function() DRS_ReturnToWorld:InvokeServer() end) end
-    if DRL_ExitLobby then safe(function() DRL_ExitLobby:InvokeServer() end) end
-    _estadoT = 0
+    clicarPadrao(PAD_SAIR)
+    FASE.atual = "ocioso"
+    DUN.fase = "ocioso"
 end
 
 DUN.diagnostico = function()
-    local est = estadoDungeon()
-    dlog("estado=" .. est .. " fase=" .. tostring(DUN.fase) .. " etapa=" .. tostring(DUN.etapa))
+    dlog("fase=" .. tostring(FASE.atual) .. " estado=" .. tostring(estadoDungeon()) .. " menuIdx=" .. tostring(MENU_IDX))
+    dlog("ponto E: set=" .. tostring(pontoConfigurado()) .. " pos=" .. tostring(Config.DunPos))
     local btns = {}
     for _, raiz in ipairs(guiRaizes()) do
         for _, obj in ipairs(raiz:GetDescendants()) do
+            if #btns >= 24 then break end
             if obj:IsA("TextButton") and not obj:IsDescendantOf(gui) and guiVisivel(obj) then
                 local t = tostring(obj.Text or "")
-                if t ~= "" and #btns < 24 then
+                if t ~= "" then
                     btns[#btns + 1] = string.format("%q @%d,%d", t, math.floor(obj.AbsolutePosition.X), math.floor(obj.AbsolutePosition.Y))
                 end
             end
         end
     end
     if #btns == 0 then dlog("nenhum botao visivel fora do hub") else dlog("botoes: " .. table.concat(btns, " | ")) end
-    local prs = {}
-    for _, pr in ipairs(atualizarPrompts()) do
-        if #prs < 16 then prs[#prs + 1] = nomeDoPrompt(pr) end
-    end
-    if #prs == 0 then dlog("nenhum prompt no mapa") else dlog("prompts: " .. table.concat(prs, " | ")) end
-    local pastas = {}
-    for _, c in ipairs(WS:GetChildren()) do
-        if #pastas < 20 then pastas[#pastas + 1] = c.Name end
-    end
-    dlog("workspace: " .. table.concat(pastas, ", "))
     dlog("mobs vivos=" .. tostring(mobsVivos()))
 end
 
 task.spawn(function()
     while Ativo do
-        task.wait(0.35)
+        task.wait(0.3)
         if Config.AutoDungeon then
             if not DUN.ativo then
                 DUN.ativo = true
-                DUN.etapa = 1
+                MENU_IDX = 1
+                TENT_E = 0
+                CICLOS_VAZIOS = 0
                 DUN.falhas = 0
-                DUN.tFase = 0
+                FASE.atual = "ocioso"
+                FASE.t = 0
                 ligarConjunto()
                 dlog("auto dungeon ligado")
             end
             pcall(rodarDungeon)
         elseif DUN.ativo then
             DUN.ativo = false
+            FASE.atual = "ocioso"
             DUN.fase = "ocioso"
             restaurarConjunto()
             dlog("auto dungeon desligado")
@@ -2432,16 +2395,22 @@ criarSlider(dunTab, "Fugir com HP abaixo de (%)", 10, 70, 35, 5, function(v) Con
 criarToggle(dunTab, "Regen subindo (sair do alcance)", true, function(v)
     Config.DunRegenSubir = v
 end)
-criarSecao(dunTab, "Ações")
-criarBotao(dunTab, "▶ Entrar no dungeon agora", function()
-    Config.AutoDungeon = true
-    DUN.etapa = 1
-    DUN.falhas = 0
-    DUN.tFase = 0
+criarSecao(dunTab, "Ponto do botão E")
+local posLabel = criarLabel(dunTab, Config.DunPosSet and tostring(Config.DunPos) or "não configurado", 34)
+criarBotao(dunTab, "📍 Usar minha posição atual", function()
+    local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    Config.DunPos = Vector3.new(math.floor(hrp.Position.X), math.floor(hrp.Position.Y), math.floor(hrp.Position.Z))
+    Config.DunPosSet = true
+    posLabel.Text = tostring(Config.DunPos)
+    print("[DBH][DUN] ponto E salvo: " .. tostring(Config.DunPos))
 end)
-criarBotao(dunTab, "⏹ Parar e voltar ao mundo", function()
+criarSecao(dunTab, "Ações")
+criarBotao(dunTab, "▶ Rodar raid agora (Unstable Grouds / normal)", function()
+    Config.AutoDungeon = true
+end)
+criarBotao(dunTab, "⏹ Parar", function()
     Config.AutoDungeon = false
-    DUN.voltarMundo()
 end)
 criarBotao(dunTab, "🔎 Diagnóstico (console)", function()
     DUN.diagnostico()
@@ -2451,7 +2420,7 @@ task.spawn(function()
         task.wait(0.5)
         dunStatus.Text = string.format("fase: %s   dentro: %s\netapa: %d   falhas: %d   mobs: %d",
             tostring(DUN.fase), tostring(DUN.dentro and "sim" or "não"),
-            tonumber(DUN.etapa) or 0, tonumber(DUN.falhas) or 0, tonumber(mobsVivos()) or 0)
+            tonumber(MENU_IDX) or 0, tonumber(DUN.falhas) or 0, tonumber(mobsVivos()) or 0)
     end
 end)
 
@@ -2492,7 +2461,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "7.0"
+local HUB_VERSAO = "7.1"
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
