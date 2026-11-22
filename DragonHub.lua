@@ -1863,6 +1863,7 @@ local function comecarDrag(i)
         and i.UserInputType ~= Enum.UserInputType.Touch then return end
     local t = i.Target
     while t and t ~= header do
+        if t == titulo then break end
         if t:IsA("TextButton") or t:IsA("TextBox") then return end
         t = t.Parent
     end
