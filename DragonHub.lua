@@ -1279,10 +1279,26 @@ criarDropdown(farmTab, "Alvo", {"Todos", "Só Mobs", "Só Boss", "Só Event"}, f
     Config.AlvoModo = map[v] or "todos"
 end)
 criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
-criarToggle(farmTab, "Auto Regen", false, function(v) Config.AutoRegen = v end)
+criarToggle(farmTab, "Auto Regen (energia)", false, function(v) Config.AutoRegen = v end)
+
+criarSecao(farmTab, "Transformações")
+criarDropdown(farmTab, "Forma", {
+    "SSJAngel", "SSJDemon3", "SSJSunGod", "SSJChristmas",
+    "Kaioken", "UltraInstinct", "SSJBlue", "SSJGod", "Base",
+}, function(v) Config.TransformMode = v end)
+criarToggle(farmTab, "Auto Kaioken", false, function(v) Config.AutoKaioken = v end)
+criarDropdown(farmTab, "Tecla Kaioken", {"G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+    Config.KaiokenTecla = v
+end)
+criarToggle(farmTab, "Auto Fusion", false, function(v) Config.AutoFusion = v end)
+criarDropdown(farmTab, "Tecla Fusion", {"F", "G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+    Config.FusionTecla = v
+end)
 
 criarSecao(farmTab, "Auto Skills (só com Farm Ativo)")
-criarDropdown(farmTab, "Modo", {"off", "single", "combo"}, function(v) Config.SkillMode = v end)
+criarDropdown(farmTab, "Modo", {"off", "todos", "single", "combo"}, function(v)
+    Config.SkillMode = v
+end)
 criarDropdown(farmTab, "Skill Única", {
     "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3"
 }, function(v) Config.SkillSingle = v end)
@@ -1665,6 +1681,10 @@ criarSecao(configTab, "Combate")
 criarSlider(configTab, "Skill Delay (x0.1s)", 5, 50, 15, 5, function(v) Config.SkillDelay = v * 0.1 end)
 criarSecao(configTab, "Sobrevivência")
 criarSlider(configTab, "Ki pra Regen (%)", 10, 50, 30, 5, function(v) Config.KiMin = v / 100 end)
+criarDropdown(configTab, "Tecla Regen", {"C", "G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+    Config.RegenTecla = v
+end)
+criarToggle(configTab, "Regen subindo (stealth)", false, function(v) Config.RegenSubir = v end)
 criarSlider(configTab, "Altura Segura", 40, 300, 100, 10, function(v) Config.SafeHeight = v end)
 
 -- [DUMP DUNGEON] botões
@@ -1865,7 +1885,11 @@ task.spawn(function()
         if farmLigado() and Config.SkillMode ~= "off" and not emRegen and not COL.pausa then
             local alvo = getAlvo()
             if alvo and alvo.Parent then
-                if Config.SkillMode == "single" then
+                if Config.SkillMode == "todos" then
+                    if not usarProximaFerramenta() then
+                        usarProximaBase(alvo)
+                    end
+                elseif Config.SkillMode == "single" then
                     local sk = SKILLS[Config.SkillSingle]
                     if sk then usarSkill(sk, alvo) end
                 elseif Config.SkillMode == "combo" then
@@ -1884,36 +1908,101 @@ task.spawn(function()
 end)
 
 -- [TRANSFORM]
+local NOMES_FORMA = { "CurrentMode", "FormName", "Mode", "Transform", "CurrentForm", "ActiveForm", "Form" }
+
 local function getTransformEquipada()
     local char = plr.Character
     if not char then return nil end
-    local status = char:FindFirstChild("Status")
-    if not status then return nil end
-    for _, nome in ipairs({"CurrentMode", "FormName", "Mode", "Transform"}) do
-        local v = status:FindFirstChild(nome)
-        if v and v:IsA("StringValue") and v.Value ~= "" then
-            return v.Value
+    for _, pasta in ipairs({ char:FindFirstChild("Status"), char }) do
+        if pasta then
+            for _, nome in ipairs(NOMES_FORMA) do
+                local v = pasta:FindFirstChild(nome)
+                if v and v:IsA("StringValue") and v.Value ~= "" then return v.Value end
+            end
         end
+    end
+    for _, nome in ipairs(NOMES_FORMA) do
+        local v = plr:GetAttribute(nome)
+        if type(v) == "string" and v ~= "" then return v end
     end
     return nil
 end
 
+local function transformarPara(modo)
+    if not modo or modo == "" then return false end
+    if ModeInherit then
+        local ok = pcall(function() return ModeInherit:InvokeServer(modo) end)
+        if ok then return true end
+    end
+    if SelectMode then
+        local ok = pcall(function() SelectMode:FireServer(modo) end)
+        if ok then return true end
+    end
+    return false
+end
+
+local TRANS = { ultimo = 0, ultimaForma = nil }
+
 task.spawn(function()
-    while Ativo and task.wait(5) do
-        if Config.AutoTransform and SelectMode then
-            local modo = getTransformEquipada() or Config.TransformMode
-            safe(function() SelectMode:FireServer(modo) end)
+    while Ativo do
+        task.wait(1)
+        if Config.AutoTransform and os.clock() - TRANS.ultimo >= 3 then
+            local atual = getTransformEquipada()
+            if atual ~= Config.TransformMode then
+                TRANS.ultimo = os.clock()
+                local ok = transformarPara(Config.TransformMode)
+                print(("[DBH] transform %s -> %s ok=%s"):format(
+                    tostring(atual), tostring(Config.TransformMode), tostring(ok)))
+            end
         end
     end
 end)
 
 task.spawn(function()
     while Ativo do
-        plr.CharacterAdded:Wait()
-        task.wait(3)
-        if Config.AutoTransform and SelectMode then
-            local modo = getTransformEquipada() or Config.TransformMode
-            safe(function() SelectMode:FireServer(modo) end)
+        local char = plr.Character
+        if not char then
+            plr.CharacterAdded:Wait()
+            char = plr.Character
+        end
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.Died:Wait()
+        else
+            task.wait(1)
+        end
+        task.wait(2)
+        if Config.AutoTransform then
+            transformarPara(Config.TransformMode)
+        end
+    end
+end)
+
+local KAI = { ultimo = 0 }
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if Config.AutoKaioken and not emRegen and os.clock() - KAI.ultimo >= 4 then
+            local atual = getTransformEquipada() or ""
+            if not atual:lower():find("kaioken", 1, true) then
+                KAI.ultimo = os.clock()
+                teclaPorNome(Config.KaiokenTecla)
+            end
+        end
+    end
+end)
+
+local FUS = { ultimo = 0 }
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if Config.AutoFusion and os.clock() - FUS.ultimo >= 6 then
+            local char = plr.Character
+            local nome = char and char.Name or ""
+            if not nome:lower():find("fusion", 1, true) then
+                FUS.ultimo = os.clock()
+                teclaPorNome(Config.FusionTecla)
+            end
         end
     end
 end)
