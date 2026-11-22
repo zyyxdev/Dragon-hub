@@ -274,7 +274,11 @@ local function usarSkill(skill, alvo)
 
     if skill.trocaSlot and skill.slot and skill.slot ~= slotAtual then
         if ToolbarRemote then
-            safe(function() ToolbarRemote:FireServer(skill.slot) end)
+            if ToolbarRemote:IsA("RemoteFunction") then
+                safe(function() ToolbarRemote:InvokeServer(skill.slot) end)
+            else
+                safe(function() ToolbarRemote:FireServer(skill.slot) end)
+            end
             slotAtual = skill.slot
             task.wait(0.2)
         end

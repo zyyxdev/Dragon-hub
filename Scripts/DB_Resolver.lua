@@ -108,6 +108,32 @@ local function buildFromServices(lib)
     end
 end
 
+-- pós-update: remotes em RS.Network.<Service>.RE/RF
+local function loadNetwork()
+    local net = RS:FindFirstChild("Network")
+    if not net then return false end
+    local n = 0
+    for _, svc in ipairs(net:GetChildren()) do
+        local e = { RE = {}, RF = {} }
+        for _, tipo in ipairs({ "RE", "RF" }) do
+            local g = svc:FindFirstChild(tipo)
+            if g then
+                for _, r in ipairs(g:GetChildren()) do
+                    if r:IsA("RemoteEvent") or r:IsA("RemoteFunction")
+                        or r:IsA("UnreliableRemoteEvent") then
+                        e[tipo][r.Name] = r
+                        DB.rawMap[r.Name] = DB.rawMap[r.Name] or r
+                    end
+                end
+            end
+        end
+        DB.services[svc.Name] = e
+        n = n + 1
+    end
+    DB.source = "network"
+    return n > 0
+end
+
 local function loadKnit()
     local pkg, mod = findKnit()
     if not pkg then return false end
