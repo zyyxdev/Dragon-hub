@@ -2139,6 +2139,16 @@ local function getTransformEquipada()
         local v = plr:GetAttribute(nome)
         if type(v) == "string" and v ~= "" then return v end
     end
+    local okB, ativa = pcall(function() return char:GetAttribute("IsTransformed") end)
+    if okB and ativa == true then return "Transformado" end
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("StringValue") and d.Value ~= "" then
+            local low = d.Name:lower()
+            if low:find("form") or low:find("mode") or low:find("transform") then
+                return d.Value
+            end
+        end
+    end
     return nil
 end
 
@@ -2159,7 +2169,7 @@ task.spawn(function()
         if ativa then
             TRANS.aplicada = false
         elseif Config.AutoTransform then
-            if not TRANS.aplicada or os.clock() - TRANS.ultimaTecla > 8 then
+            if not TRANS.aplicada then
                 TRANS.aplicada = true
                 TRANS.ultimaTecla = os.clock()
                 local ok = teclaPorNome(Config.TransformTecla or "Y")
