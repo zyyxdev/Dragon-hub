@@ -140,7 +140,7 @@ local Config = {
     FusionTecla = "F",
     RegenTecla = "C",
     RegenSubir = false,
-    SkillMode = "off",
+    SkillMode = "todos",
     SkillSingle = "UniqueSets_2_1",
     SkillCombo = "dps",
     UsarM1VIM = false,
@@ -1296,7 +1296,7 @@ criarDropdown(farmTab, "Tecla Fusion", {"F", "G", "H", "J", "K", "L", "U", "X", 
 end)
 
 criarSecao(farmTab, "Auto Skills (só com Farm Ativo)")
-criarDropdown(farmTab, "Modo", {"off", "todos", "single", "combo"}, function(v)
+criarDropdown(farmTab, "Modo", {"todos", "off", "single", "combo"}, function(v)
     Config.SkillMode = v
 end)
 criarDropdown(farmTab, "Skill Única", {
@@ -1708,7 +1708,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.0"
+local HUB_VERSAO = "6.1"
 local lblVersao = criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
