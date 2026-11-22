@@ -50,7 +50,6 @@ local S = {
 local SCAN = { active = false, nodes = 0, remotes = 0, token = 0 }
 local CONNS = {}
 local GUI_CONNS = {}
-local hookOriginal = nil
 local HOOK_ORIG = {}
 local HOOK = { active = false, budget = 0, janela = 0, maxPorSeg = 40, n = 0 }
 local pathCache = setmetatable({}, { __mode = "k" })
@@ -327,30 +326,81 @@ local function scanAsync(onDone)
     return true
 end
 
-local function hookNamecall()
-    if not ENV.hookmetamethod or not ENV.getrawmetatable then return false end
+local isOurs
+if ENV.checkcaller and type(checkcaller) == "function" then
+    isOurs = function() return checkcaller() end
+else
+    isOurs = function() return false end
+end
+
+local function caminhoDe(inst)
+    local p = pathCache[inst]
+    if p then return p end
+    local ok, full = pcall(function() return inst:GetFullName() end)
+    p = ok and full or tostring(inst)
+    pathCache[inst] = p
+    return p
+end
+
+local function instalarMetodo(inst, nome)
+    if not inst then return false end
+    local metodo
+    pcall(function() metodo = inst[nome] end)
+    if type(metodo) ~= "function" then return false end
     local ok = pcall(function()
-        hookOriginal = hookmetamethod(game, "__namecall", function(self, ...)
-            local metodo = getnamecallmethod()
-            if S.active and not checkcaller()
-                and (metodo == "FireServer" or metodo == "Fire"
-                    or metodo == "InvokeServer" or metodo == "Invoke") then
-                local n = select("#", ...)
-                local args = {}
-                for i = 1, n do args[i] = select(i, ...) end
-                local okp, path = pcall(function() return self:GetFullName() end)
-                path = okp and path or tostring(self)
+        local orig = hookfunction(metodo, function(self, ...)
+            if HOOK.active and S.active and not isOurs() then
                 local agora = os.clock()
-                local last = S.lastCall[path]
-                if not last or agora - last >= CFG.rateLimit then
-                    S.lastCall[path] = agora
-                    pcall(registrar, path, metodo, args, n)
+                if agora - HOOK.janela >= 1 then
+                    HOOK.janela = agora
+                    HOOK.budget = 0
+                end
+                if HOOK.budget < HOOK.maxPorSeg then
+                    local path = caminhoDe(self)
+                    if deveConectar(path) then
+                        local last = S.lastCall[path]
+                        if not last or agora - last >= CFG.rateLimit then
+                            S.lastCall[path] = agora
+                            HOOK.budget = HOOK.budget + 1
+                            local n = select("#", ...)
+                            local lim = n > 8 and 8 or n
+                            local args = {}
+                            for i = 1, lim do args[i] = select(i, ...) end
+                            pcall(registrar, path, nome, args, lim)
+                        end
+                    end
                 end
             end
-            return hookOriginal(self, ...)
+            return orig(self, ...)
         end)
+        HOOK_ORIG[#HOOK_ORIG + 1] = { metodo = metodo, orig = orig }
     end)
     return ok
+end
+
+local function hookFireServer()
+    if not ENV.hookfunction or type(hookfunction) ~= "function" then return false end
+    local alvos = {}
+    pcall(function()
+        local net = RS:FindFirstChild("Network")
+        local base = net or RS
+        for _, d in ipairs(base:GetDescendants()) do
+            local cls = d.ClassName
+            if cls == "RemoteEvent" or cls == "UnreliableRemoteEvent"
+                or cls == "RemoteFunction" then
+                alvos[cls] = d
+                if alvos.RemoteEvent and alvos.UnreliableRemoteEvent
+                    and alvos.RemoteFunction then break end
+            end
+        end
+    end)
+    local n = 0
+    if alvos.RemoteEvent and instalarMetodo(alvos.RemoteEvent, "FireServer") then n = n + 1 end
+    if alvos.UnreliableRemoteEvent
+        and instalarMetodo(alvos.UnreliableRemoteEvent, "FireServer") then n = n + 1 end
+    if alvos.RemoteFunction and instalarMetodo(alvos.RemoteFunction, "InvokeServer") then n = n + 1 end
+    HOOK.active = n > 0
+    return n > 0
 end
 
 local function snapshot()
@@ -483,7 +533,7 @@ local function save(quiet)
 end
 
 scanNetwork()
-local hooked = hookNamecall()
+local hooked = hookFireServer()
 watchWorkspace()
 
 local guiParent = (ENV.gethui and gethui()) or plr:WaitForChild("PlayerGui")
@@ -514,10 +564,12 @@ local function wipe(apagarArquivos)
         GUI_CONNS[i] = nil
     end
 
-    if hookOriginal then
-        pcall(function() hookmetamethod(game, "__namecall", hookOriginal) end)
-        hookOriginal = nil
+    for i = #HOOK_ORIG, 1, -1 do
+        local h = HOOK_ORIG[i]
+        pcall(function() hookfunction(h.metodo, h.orig) end)
+        HOOK_ORIG[i] = nil
     end
+    HOOK.active = false
 
     for k in pairs(S.sig) do S.sig[k] = nil end
     for k in pairs(S.raw) do S.raw[k] = nil end
