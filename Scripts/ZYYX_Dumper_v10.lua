@@ -42,6 +42,7 @@ local S = {
     drops = {},
     snap = {},
     lastCall = {},
+    onInv = {},
     place = PLACE,
     started = os.date("%Y-%m-%d %H:%M:%S"),
 }
@@ -50,6 +51,8 @@ local SCAN = { active = false, nodes = 0, remotes = 0, token = 0 }
 local CONNS = {}
 local GUI_CONNS = {}
 local hookOriginal = nil
+local fireOrig, fireMethod = nil, nil
+local fireHook = false
 local wiped = false
 
 local function probe(f)
@@ -221,13 +224,23 @@ local function connectRemote(inst, path)
                 registrar(path, "OnClient", args, n)
             end)
         end)
-    else
+    elseif inst:IsA("RemoteFunction") then
         pcall(function()
+            local prev = inst.OnClientInvoke
+            S.onInv[inst] = prev
             inst.OnClientInvoke = function(...)
                 local n = select("#", ...)
                 local args = {}
                 for i = 1, n do args[i] = select(i, ...) end
-                if S.active then registrar(path, "OnClientInvoke", args, n) end
+                if S.active then
+                    local agora = os.clock()
+                    local last = S.evtLast[path]
+                    if not last or agora - last >= CFG.evtRate then
+                        S.evtLast[path] = agora
+                        pcall(registrar, path, "OnClientInvoke", args, n)
+                    end
+                end
+                if type(prev) == "function" then return prev(...) end
                 return nil
             end
         end)
