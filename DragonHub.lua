@@ -990,19 +990,29 @@ criarToggle(collectTab, "Épico (Scrolls)", true, function(v) Config.ColetarEpic
 criarToggle(collectTab, "Lendário (Wish)", true, function(v) Config.ColetarLendario = v end)
 
 -- [ABA REBIRTH]
-local REB = { auto = false, cooldown = 4, falhas = 0 }
+local REB = { auto = false, cooldown = 4, falhas = 0, ocupado = false }
+
+local function porNome(pasta, alvo)
+    if not pasta then return nil end
+    for _, v in ipairs(pasta:GetChildren()) do
+        if v:IsA("ValueBase") and v.Name:lower():find(alvo, 1, true) then
+            return v, pasta.Name .. "." .. v.Name
+        end
+    end
+end
 
 local function valorRebirth()
     local stats = plr:FindFirstChild("Stats")
-    local r = stats and stats:FindFirstChild("Rebirth")
-    if r and r:IsA("ValueBase") then return r.Value, "Stats.Rebirth" end
+    local r, onde = porNome(stats, "rebirth")
+    if r then return r.Value, onde end
     local lead = plr:FindFirstChild("leaderstats")
-    r = lead and lead:FindFirstChild("Rebirth")
-    if r and r:IsA("ValueBase") then return r.Value, "leaderstats.Rebirth" end
+    r, onde = porNome(lead, "rebirth")
+    if r then return r.Value, onde end
     local char = plr.Character
-    local st = char and char:FindFirstChild("Status")
-    r = st and st:FindFirstChild("Rebirth")
-    if r and r:IsA("ValueBase") then return r.Value, "Status.Rebirth" end
+    r, onde = porNome(char and char:FindFirstChild("Status"), "rebirth")
+    if r then return r.Value, onde end
+    r, onde = porNome(char, "rebirth")
+    if r then return r.Value, onde end
     local attr = plr:GetAttribute("Rebirth")
     if attr ~= nil then return attr, "attribute" end
     return nil, "nao achei"
@@ -1013,21 +1023,27 @@ local function tentarRebirth(origem)
         warn("[DBH] RequestRebirth nao encontrado")
         return false
     end
+    if REB.ocupado then return false end
+    REB.ocupado = true
     local antes, fonte = valorRebirth()
-    for _, args in ipairs({ { true }, {} }) do
-        local ok, resp = pcall(function()
-            return RequestRebirth:InvokeServer(table.unpack(args))
-        end)
-        task.wait(0.8)
-        local depois = valorRebirth()
-        local subiu = antes ~= nil and depois ~= nil and depois > antes
-        print(("[DBH] rebirth %s args=%d ok=%s resp=%s antes=%s depois=%s fonte=%s"):format(
-            origem, #args, tostring(ok), tostring(resp),
-            tostring(antes), tostring(depois), fonte))
-        if ok and subiu then
-            REB.falhas = 0
-            return true
+    local subiu = false
+    for i, args in ipairs({ { true }, {} }) do
+        if not subiu then
+            local ok, resp = pcall(function()
+                return RequestRebirth:InvokeServer(table.unpack(args))
+            end)
+            task.wait(1.2)
+            local depois = valorRebirth()
+            subiu = antes ~= nil and depois ~= nil and depois > antes
+            print(("[DBH] rebirth %s args=%d ok=%s resp=%s antes=%s depois=%s fonte=%s"):format(
+                origem, #args, tostring(ok), tostring(resp),
+                tostring(antes), tostring(depois), fonte))
         end
+    end
+    REB.ocupado = false
+    if subiu then
+        REB.falhas = 0
+        return true
     end
     REB.falhas = REB.falhas + 1
     return false
