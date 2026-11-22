@@ -2326,6 +2326,50 @@ function SURV.tick(alvo, hrp)
     return true
 end
 
+-- [DUMP LIVE] grava por chamada, sobrevive ao teleporte de servidor
+local _liveHook = nil
+local function dungeonLiveStop()
+    if not _liveHook then return end
+    pcall(function()
+        local mt = getrawmetatable(game)
+        if mt then
+            setreadonly(mt, false)
+            mt.__namecall = _liveHook
+            setreadonly(mt, true)
+        end
+    end)
+    _liveHook = nil
+    print("[DUMP] log ao vivo OFF")
+end
+
+local function dungeonLiveStart()
+    if _liveHook then return end
+    if not hookmetamethod then warn("[DUMP] sem hookmetamethod") return end
+    local mt = getrawmetatable(game)
+    if not mt then warn("[DUMP] sem metatable") return end
+    local old = mt.__namecall
+    local arquivo = "DBH_dungeon_live.txt"
+    pcall(function() writefile(arquivo, "") end)
+    setreadonly(mt, false)
+    _liveHook = function(self, ...)
+        local m = getnamecallmethod()
+        if _dungeonMatch(m) then
+            local n = select("#", ...)
+            local out = {}
+            for i = 1, n do out[i] = _dungeonSer((select(i, ...))) end
+            local linha = string.format("[%s] %s :: %s(%s)",
+                os.date("%H:%M:%S"), tostring(self):sub(1, 80), m, table.concat(out, ", "))
+            local okApp = pcall(function() appendfile(arquivo, linha .. "\n") end)
+            if not okApp then pcall(function() writefile(arquivo, linha .. "\n") end) end
+            print("[DBH][LIVE] " .. linha)
+        end
+        return old(self, ...)
+    end
+    mt.__namecall = _liveHook
+    setreadonly(mt, true)
+    print("[DUMP] log ao vivo ON -> " .. arquivo)
+end
+
 -- [PATCH KILL] cleanup completo
 matarTudo = function()
     Ativo = false
@@ -2334,6 +2378,7 @@ matarTudo = function()
     end
 
     pcall(function() dungeonHookStop() end)
+    pcall(function() dungeonLiveStop() end)
     pcall(function() pararRegen() end)
     pcall(function() pararLock() end)
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
@@ -2453,6 +2498,12 @@ criarBotao(configTab, "❌ CANCELAR (sem salvar)", function()
     _dungeonBuf = {}
     dungeonHookStop()
 end)
+criarBotao(configTab, "🔴 LOG AO VIVO (sobrevive ao teleporte)", function()
+    dungeonLiveStart()
+end)
+criarBotao(configTab, "⏹ PARAR LOG AO VIVO", function()
+    dungeonLiveStop()
+end)
 
 criarSecao(configTab, "Sistema")
 criarBotao(configTab, "🔴 MATAR SCRIPT", function()
@@ -2462,7 +2513,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "7.1"
+local HUB_VERSAO = "7.2"
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
