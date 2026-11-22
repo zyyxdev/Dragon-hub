@@ -1,4 +1,4 @@
-local VERSION = "10.4"
+local VERSION = "10.5"
 
 if getgenv and getgenv().__ZYYX_DUMP10 then
     pcall(function() getgenv().__ZYYX_DUMP10.stop() end)
@@ -762,38 +762,41 @@ if not hooked then
     pintarHook()
 end
 
-local drag, dStart, sStart = false, nil, nil
+local drag = false
 local arrastavel = true
 
-local function pegarAlca(inst)
-    for _ = 1, 3 do
-        if not inst then return nil end
-        if inst:IsA("TextButton") then return nil end
-        if inst == root then return root end
-        inst = inst.Parent
-    end
-    return nil
-end
-
-root.InputBegan:Connect(function(i)
+local function comecarArrasto(i)
     if not arrastavel then return end
     if i.UserInputType ~= Enum.UserInputType.MouseButton1
         and i.UserInputType ~= Enum.UserInputType.Touch then return end
-    if not pegarAlca(i.Target) then return end
     drag = true
-    dStart = i.Position
-    sStart = root.Position
-end)
-GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
+end
+
+for _, alvo in ipairs({ root, bar, info, title }) do
+    if alvo then
+        pcall(function() alvo.Active = true end)
+        pcall(function() alvo.InputBegan:Connect(comecarArrasto) end)
+    end
+end
+
+local function moverArrasto(i)
     if not drag then return end
-    if i.UserInputType ~= Enum.UserInputType.MouseMovement
-        and i.UserInputType ~= Enum.UserInputType.Touch then return end
-    local d = i.Position - dStart
+    local d = i.Delta
+    if not d or (d.X == 0 and d.Y == 0) then return end
     local cam = workspace.CurrentCamera
     local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-    local nx = math.clamp(sStart.X.Offset + d.X, 0, math.max(0, vp.X - root.AbsoluteSize.X))
-    local ny = math.clamp(sStart.Y.Offset + d.Y, 0, math.max(0, vp.Y - root.AbsoluteSize.Y))
+    local p = root.Position
+    local nx = math.clamp(p.X.Offset + d.X, 0, math.max(0, vp.X - root.AbsoluteSize.X))
+    local ny = math.clamp(p.Y.Offset + d.Y, 0, math.max(0, vp.Y - root.AbsoluteSize.Y))
     root.Position = UDim2.new(0, nx, 0, ny)
+end
+
+GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseMovement then moverArrasto(i) end
+end)
+GUI_CONNS[#GUI_CONNS + 1] = UIS.TouchMoved:Connect(function(touch, gp)
+    if gp then return end
+    moverArrasto(touch)
 end)
 GUI_CONNS[#GUI_CONNS + 1] = UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
