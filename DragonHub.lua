@@ -137,8 +137,6 @@ local Config = {
     TrackerAuto = true,
     AutoTecnica = false,
     TecnicaTecla = "M",
-    AutoKaioken = false,
-    KaiokenTecla = "G",
     AutoFusion = false,
     FusionTecla = "F",
     RegenTecla = "C",
@@ -1512,6 +1510,44 @@ local trackerTab = criarAba("tracker", "⏱ Tracker")
 criarSecao(trackerTab, "Detecção")
 criarToggle(trackerTab, "Auto-detectar bosses", true, function(v) Config.TrackerAuto = v end)
 
+criarSecao(trackerTab, "Bosses e Eventos agora")
+local bossesLabel = criarLabel(trackerTab, "Lendo...", 90)
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        local wm = WS:FindFirstChild("World Mobs")
+        local hrp = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+        local linhas = {}
+        if wm then
+            for _, pasta in ipairs(wm:GetChildren()) do
+                if pasta.Name == "Boss Mobs" or pasta.Name == "Event Mobs" then
+                    for _, mob in ipairs(pasta:GetChildren()) do
+                        if mob:IsA("Model") then
+                            local hum = mob:FindFirstChildOfClass("Humanoid")
+                            local mh = mob:FindFirstChild("HumanoidRootPart")
+                            if hum and mh then
+                                local hp = hum.MaxHealth > 0 and math.floor(hum.Health / hum.MaxHealth * 100) or 0
+                                local d = hrp and math.floor((mh.Position - hrp.Position).Magnitude) or 0
+                                local tag = pasta.Name == "Event Mobs" and "EVENT" or "BOSS"
+                                linhas[#linhas + 1] = string.format("[%s] %s  %d%%  %dm", tag, mob.Name, hp, d)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        if #linhas == 0 then
+            bossesLabel.Text = "Nenhum boss ou evento no mapa."
+        else
+            table.sort(linhas)
+            local corte = math.min(#linhas, 12)
+            local out = {}
+            for i = 1, corte do out[i] = linhas[i] end
+            bossesLabel.Text = table.concat(out, "\n")
+        end
+    end
+end)
+
 criarSecao(trackerTab, "Timers Ativos")
 local timerLabel = criarLabel(trackerTab, "Nenhum boss em respawn.", 100)
 
@@ -1763,7 +1799,7 @@ criarSecao(configTab, "Combate")
 criarSlider(configTab, "Skill Delay (x0.1s)", 5, 50, 15, 5, function(v) Config.SkillDelay = v * 0.1 end)
 criarSecao(configTab, "Sobrevivência")
 criarSlider(configTab, "Ki pra Regen (%)", 10, 50, 30, 5, function(v) Config.KiMin = v / 100 end)
-criarDropdown(configTab, "Tecla Regen", {"C", "G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+criarCampoTecla(configTab, "Tecla Regen", Config.RegenTecla, function(v)
     Config.RegenTecla = v
 end)
 criarToggle(configTab, "Regen subindo (stealth)", false, function(v) Config.RegenSubir = v end)
@@ -1790,7 +1826,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.2"
+local HUB_VERSAO = "6.3"
 local lblVersao = criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
