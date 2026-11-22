@@ -1898,7 +1898,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.6"
+local HUB_VERSAO = "6.7"
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
@@ -1925,65 +1925,122 @@ homeBar.MouseButton1Click:Connect(function()
     janela.Visible = not janela.Visible
 end)
 
+-- [DRAG] ponteiro unico: start por hit-test, movimento por polling de frame
 local dragging = false
-local dragTipo = nil
 local dragInicio = Vector2.new()
 local posInicio = Vector2.new()
+local dragSemToque = 0
 
 pcall(function() header.Active = true end)
 pcall(function() titulo.Active = true end)
 
-local function comecarDrag(i)
-    if i.UserInputType ~= Enum.UserInputType.MouseButton1
-        and i.UserInputType ~= Enum.UserInputType.Touch then return end
-    local t = i.Target
-    while t and t ~= header do
-        if t == titulo then break end
-        if t:IsA("TextButton") or t:IsA("TextBox") then return end
-        t = t.Parent
+local function ponteiro()
+    local ts = UserInputService:GetTouches()
+    if ts and #ts > 0 then
+        local t = ts[#ts]
+        return Vector2.new(t.Position.X, t.Position.Y)
     end
-    dragging = true
-    dragTipo = i.UserInputType
-    dragInicio = i.Position
-    posInicio = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+    local m = UserInputService:GetMouseLocation()
+    return Vector2.new(m.X, m.Y)
 end
 
-local function moverPara(pos)
+local function descendenteDe(obj, alvo)
+    while obj do
+        if obj == alvo then return true end
+        obj = obj.Parent
+    end
+    return false
+end
+
+local function dentroDoHeader(p)
+    local tl = header.AbsolutePosition
+    local sz = header.AbsoluteSize
+    return p.X >= tl.X - 6 and p.X <= tl.X + sz.X + 6
+       and p.Y >= tl.Y - 6 and p.Y <= tl.Y + sz.Y + 6
+end
+
+local function bloqueado(obj)
+    while obj and obj ~= header do
+        if obj ~= titulo and obj:IsA("TextButton") then return true end
+        if obj:IsA("TextBox") then return true end
+        obj = obj.Parent
+    end
+    return false
+end
+
+local function comecarDrag(i)
+    if i.UserInputType ~= Enum.UserInputType.Touch
+        and i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+    if not janela.Visible then return end
+
+    local alvo = i.Target
+    local naBarra
+    if alvo then
+        naBarra = descendenteDe(alvo, header)
+    else
+        naBarra = dentroDoHeader(i.Position)
+    end
+    if not naBarra then return end
+    if alvo and bloqueado(alvo) then return end
+
+    dragging = true
+    dragSemToque = 0
+    dragInicio = ponteiro()
+    posInicio = janela.AbsolutePosition
+end
+
+local function mover(pos)
     if not dragging then return end
-    local cam = workspace.CurrentCamera
-    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    local vp = gui.AbsoluteSize
+    if vp.X < 10 then vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720) end
+    local sz = janela.AbsoluteSize
     local d = pos - dragInicio
     local nx = posInicio.X + d.X
     local ny = posInicio.Y + d.Y
-    local maxX = vp.X - janela.AbsoluteSize.X
-    local maxY = vp.Y - janela.AbsoluteSize.Y
-    if maxX > 0 then nx = math.clamp(nx, 0, maxX) else nx = math.clamp(nx, -400, 400) end
-    if maxY > 0 then ny = math.clamp(ny, 0, maxY) else ny = math.clamp(ny, -400, 400) end
+    local maxX = vp.X - sz.X
+    local maxY = vp.Y - sz.Y
+    if maxX > 0 then nx = math.clamp(nx, 0, maxX) end
+    if maxY > 0 then ny = math.clamp(ny, 0, maxY) end
     janela.Position = UDim2.new(0, nx, 0, ny)
-    posInicio = Vector2.new(nx, ny)
-    dragInicio = pos
 end
 
 header.InputBegan:Connect(comecarDrag)
 titulo.InputBegan:Connect(comecarDrag)
+UserInputService.InputBegan:Connect(comecarDrag)
 
 UserInputService.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch
         or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
-        dragTipo = nil
     end
 end)
 
 UserInputService.InputChanged:Connect(function(i)
-    if not dragging or dragTipo ~= Enum.UserInputType.MouseButton1 then return end
-    if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    moverPara(i.Position)
+    if not dragging then return end
+    if i.UserInputType == Enum.UserInputType.MouseMovement then
+        mover(Vector2.new(i.Position.X, i.Position.Y))
+    end
 end)
 
 UserInputService.TouchMoved:Connect(function(touch, _)
-    if not dragging or dragTipo ~= Enum.UserInputType.Touch then return end
-    moverPara(touch.Position)
+    if not dragging then return end
+    mover(Vector2.new(touch.Position.X, touch.Position.Y))
+end)
+
+RunService.RenderStepped:Connect(function()
+    if not dragging then return end
+    local ts = UserInputService:GetTouches()
+    local tocando = (ts and #ts > 0) or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+    if not tocando then
+        dragSemToque = dragSemToque + 1
+        if dragSemToque >= 18 then
+            dragging = false
+            dragSemToque = 0
+        end
+        return
+    end
+    dragSemToque = 0
+    mover(ponteiro())
 end)
 
 btnMin.MouseButton1Click:Connect(function()
