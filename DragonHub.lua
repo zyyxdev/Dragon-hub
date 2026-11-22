@@ -1350,31 +1350,37 @@ criarToggle(farmTab, "Auto Regen (energia)", false, function(v) Config.AutoRegen
 criarSecao(farmTab, "Transformações")
 criarDropdown(farmTab, "Forma", {
     "SSJAngel", "SSJDemon3", "SSJSunGod", "SSJChristmas",
-    "Kaioken", "UltraInstinct", "SSJBlue", "SSJGod", "Base",
+    "UltraInstinct", "SSJBlue", "SSJGod", "Base",
 }, function(v) Config.TransformMode = v end)
-criarToggle(farmTab, "Auto Técnica (M)", false, function(v) Config.AutoTecnica = v end)
-criarDropdown(farmTab, "Tecla Técnica", {"M", "Y", "C", "G", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
+criarToggle(farmTab, "Auto Técnica", false, function(v) Config.AutoTecnica = v end)
+criarCampoTecla(farmTab, "Tecla Técnica", Config.TecnicaTecla, function(v)
     Config.TecnicaTecla = v
 end)
-criarToggle(farmTab, "Auto Kaioken", false, function(v) Config.AutoKaioken = v end)
-criarDropdown(farmTab, "Tecla Kaioken", {"G", "M", "Y", "C", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
-    Config.KaiokenTecla = v
-end)
 criarToggle(farmTab, "Auto Fusion", false, function(v) Config.AutoFusion = v end)
-criarDropdown(farmTab, "Tecla Fusion", {"F", "M", "Y", "C", "G", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
+criarCampoTecla(farmTab, "Tecla Fusion", Config.FusionTecla, function(v)
     Config.FusionTecla = v
+end)
+criarBotao(farmTab, "🔗 Fusion Agora", function()
+    if teclaPorNome(Config.FusionTecla) then
+        print("[DBH] fusion via tecla " .. Config.FusionTecla)
+    end
 end)
 
 criarSecao(farmTab, "Auto Skills (só com Farm Ativo)")
-criarDropdown(farmTab, "Modo", {"todos", "off", "single", "combo"}, function(v)
+criarDropdown(farmTab, "Modo", { "todos", "off", "single", "combo" }, function(v)
     Config.SkillMode = v
 end)
-criarDropdown(farmTab, "Skill Única", {
-    "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3"
-}, function(v) Config.SkillSingle = v end)
-criarDropdown(farmTab, "Combo", {
-    "dps", "default", "kame", "spirit", "arma", "burst"
-}, function(v) Config.SkillCombo = v end)
+local NOMES_SKILL = {
+    "Kamehameha", "Golpe Único", "Spirit Bomb", "Arma 2", "Arma 3 (Scythe)",
+}
+criarDropdown(farmTab, "Skill Única", NOMES_SKILL, function(v)
+    Config.SkillSingle = v
+end, { "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3" })
+local NOMES_COMBO = { "DPS", "Padrão", "Kame", "Spirit", "Arma", "Burst" }
+criarDropdown(farmTab, "Combo", NOMES_COMBO, function(v)
+    Config.SkillCombo = v
+end, { "dps", "default", "kame", "spirit", "arma", "burst" })
+criarLabel(farmTab, "Teclas de skill: 1=E  2=G  3=F  4=Z  5=T  6=X", 34)
 
 criarSecao(farmTab, "Combate Avançado")
 criarToggle(farmTab, "Auto Lock-On", true, function(v)
@@ -1407,6 +1413,9 @@ criarToggle(collectTab, "Esferas (Wish)", true, function(v) Config.ColetarLendar
 criarToggle(collectTab, "Orbs", true, function(v) Config.ColetarRaro = v end)
 criarToggle(collectTab, "Scrolls", true, function(v) Config.ColetarEpico = v end)
 criarToggle(collectTab, "ExpMat", false, function(v) Config.ColetarComum = v end)
+criarToggle(collectTab, "Itens sem nome (só ID)", true, function(v)
+    Config.ColetarDesconhecido = v
+end)
 
 -- [ABA REBIRTH]
 local REB = { auto = false, cooldown = 4, falhas = 0, ocupado = false }
@@ -2073,20 +2082,6 @@ task.spawn(function()
         if Config.AutoTecnica and not emRegen and os.clock() - TEC.ultimo >= 5 then
             TEC.ultimo = os.clock()
             teclaPorNome(Config.TecnicaTecla)
-        end
-    end
-end)
-
-local KAI = { ultimo = 0 }
-task.spawn(function()
-    while Ativo do
-        task.wait(1)
-        if Config.AutoKaioken and not emRegen and os.clock() - KAI.ultimo >= 4 then
-            local atual = getTransformEquipada() or ""
-            if not atual:lower():find("kaioken", 1, true) then
-                KAI.ultimo = os.clock()
-                teclaPorNome(Config.KaiokenTecla)
-            end
         end
     end
 end)
