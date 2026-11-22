@@ -400,15 +400,35 @@ local function usarProximaBase(alvo)
 end
 
 -- [KI]
+local PARES_KI = {
+    { "CurrentEnergy", "MaxEnergy" },
+    { "Energy", "MaxEnergy" },
+    { "CurrentKi", "MaxKi" },
+    { "Ki", "MaxKi" },
+    { "CurrentMana", "MaxMana" },
+}
+
+local function lerPar(pasta, a, b)
+    if not pasta then return nil end
+    local x = pasta:FindFirstChild(a)
+    local y = pasta:FindFirstChild(b)
+    if x and y and x:IsA("ValueBase") and y:IsA("ValueBase") then
+        local mx = tonumber(y.Value)
+        if mx and mx > 0 then return tonumber(x.Value) or 0, mx end
+    end
+end
+
 local function getKi()
     local char = plr.Character
     if not char then return nil, nil end
-    local status = char:FindFirstChild("Status")
-    if not status then return nil, nil end
-    local curr = status:FindFirstChild("CurrentEnergy")
-    local max = status:FindFirstChild("MaxEnergy")
-    if not curr or not max then return nil, nil end
-    return curr.Value, max.Value
+    local fontes = { char:FindFirstChild("Status"), char, plr:FindFirstChild("Stats"), plr }
+    for _, pasta in ipairs(fontes) do
+        for _, par in ipairs(PARES_KI) do
+            local cur, mx = lerPar(pasta, par[1], par[2])
+            if cur then return cur, mx end
+        end
+    end
+    return nil, nil
 end
 
 -- [REGEN]
@@ -421,39 +441,54 @@ local function iniciarRegen()
         emRegen = false; return
     end
     local hrp = myChar.HumanoidRootPart
-    local posOrig = hrp.Position
-    local posSegura = Vector3.new(posOrig.X, posOrig.Y + Config.SafeHeight, posOrig.Z)
+    local bv
+    local subir = Config.RegenSubir
 
-    local bv = Instance.new("BodyVelocity")
-    bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-    bv.Velocity = Vector3.new(0, 0, 0)
-    bv.Parent = hrp
+    if subir then
+        local posOrig = hrp.Position
+        local posSegura = Vector3.new(posOrig.X, posOrig.Y + Config.SafeHeight, posOrig.Z)
+        bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bv.Velocity = Vector3.new(0, 0, 0)
+        bv.Parent = hrp
+        task.spawn(function()
+            local t = 0
+            while t < 4 and emRegen and Ativo and hrp.Parent do
+                local dir = posSegura - hrp.Position
+                if dir.Magnitude < 10 then break end
+                bv.Velocity = dir.Unit * 200
+                t = t + 0.1
+                task.wait(0.1)
+            end
+            if bv then bv.Velocity = Vector3.new(0, 0, 0) end
+        end)
+    end
 
     task.spawn(function()
-        local t = 0
-        while t < 5 and emRegen and Ativo and hrp.Parent do
-            local dir = posSegura - hrp.Position
-            if dir.Magnitude < 10 then break end
-            bv.Velocity = dir.Unit * 200
-            t = t + 0.1
-            task.wait(0.1)
-        end
-        bv.Velocity = Vector3.new(0, 0, 0)
-
         local inicio = os.clock()
-        pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.C, false, game) end)
+        local code = Enum.KeyCode[Config.RegenTecla or "C"] or Enum.KeyCode.C
+        pcall(function() VIM:SendKeyEvent(true, code, false, game) end)
 
+        local semLeitura = false
         while emRegen and Ativo and hrp.Parent do
-            hrp.CFrame = CFrame.new(posSegura)
+            if subir and bv then
+                local posOrig = hrp.Position
+                hrp.CFrame = CFrame.new(posOrig)
+            end
             local cur, max = getKi()
-            local pct = max and max > 0 and (cur/max) or 0
-            if pct >= 0.95 then break end
-            if (os.clock() - inicio) > 8 then break end
+            if not cur then
+                semLeitura = true
+                if os.clock() - inicio > 6 then break end
+            else
+                semLeitura = false
+                if cur / max >= 0.95 then break end
+                if os.clock() - inicio > 20 then break end
+            end
             task.wait(0.15)
         end
 
-        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
-        bv:Destroy()
+        pcall(function() VIM:SendKeyEvent(false, code, false, game) end)
+        if bv then bv:Destroy() end
         emRegen = false
     end)
 end
@@ -461,7 +496,8 @@ end
 local function pararRegen()
     if not emRegen then return end
     emRegen = false
-    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
+    local code = Enum.KeyCode[Config.RegenTecla or "C"] or Enum.KeyCode.C
+    pcall(function() VIM:SendKeyEvent(false, code, false, game) end)
 end
 
 -- [MOBS]
