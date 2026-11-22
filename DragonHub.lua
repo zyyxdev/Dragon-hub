@@ -80,8 +80,13 @@ end
 -- works em RE e RF sem o script ter que saber qual é qual
 local function callRemote(r, ...)
     if not r then return end
+    local args = table.pack(...)
     safe(function()
-        if r:IsA("RemoteFunction") then r:InvokeServer(...) else r:FireServer(...) end
+        if r:IsA("RemoteFunction") then
+            r:InvokeServer(table.unpack(args, 1, args.n))
+        else
+            r:FireServer(table.unpack(args, 1, args.n))
+        end
     end)
 end
 
