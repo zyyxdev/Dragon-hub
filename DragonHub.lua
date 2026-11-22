@@ -91,6 +91,7 @@ local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFir
 
 local Ativo = true
 local matarTudo  -- [PATCH KILL] forward declaration
+local DUN = { ativo = false, fase = "ocioso", etapa = 1, falhas = 0, dentro = false }
 
 -- [CONFIG]
 local Config = {
@@ -134,6 +135,14 @@ local Config = {
     SkillSingle = "UniqueSets_2_1",
     SkillCombo = "dps",
     UsarM1VIM = false,
+    AutoDungeon = false,
+    DunTudoJunto = true,
+    DunColetar = true,
+    DodgeAtivo = true,
+    DunRaio = 18,
+    DunAltura = 14,
+    DunRegenSubir = true,
+    DunHpFuga = 35,
 }
 
 local function farmLigado()
@@ -173,6 +182,19 @@ local function getCategoria(mob)
     if p == "Mobs"       then return "mobs"  end
     if p == "Boss Mobs"  then return "boss"  end
     if p == "Event Mobs" then return "event" end
+    local lp = p:lower()
+    if lp:find("boss") then return "boss" end
+    if lp:find("event") then return "event" end
+    if lp:find("mob") or lp:find("enemy") or lp:find("dungeon") or lp:find("monster") then
+        return "mobs"
+    end
+    local avo = mob.Parent.Parent
+    if avo then
+        local l2 = avo.Name:lower()
+        if l2:find("dungeon") or l2:find("boss") or l2:find("mob") then
+            return l2:find("boss") and "boss" or "mobs"
+        end
+    end
     return nil
 end
 
@@ -412,7 +434,7 @@ local function iniciarRegen()
     end
     local hrp = myChar.HumanoidRootPart
     local bv
-    local subir = Config.RegenSubir
+    local subir = Config.RegenSubir or (DUN.ativo and Config.DunRegenSubir)
 
     if subir then
         local posOrig = hrp.Position
@@ -482,11 +504,31 @@ end
 
 task.spawn(function()
     while Ativo do
-        local worldMobs = workspace:FindFirstChild("World Mobs")
-        if worldMobs then
-            for _, child in pairs(worldMobs:GetDescendants()) do
-                if child:IsA("Model") and child:FindFirstChild("Humanoid") and child:FindFirstChild("HumanoidRootPart") then
-                    registrarMob(child)
+        local raizes = {}
+        local wm = workspace:FindFirstChild("World Mobs")
+        if wm then raizes[#raizes + 1] = wm end
+        for _, c in ipairs(workspace:GetChildren()) do
+            if c ~= wm then
+                local ln = c:lower()
+                if ln:find("mob") or ln:find("boss") or ln:find("enemy") or ln:find("dungeon") or ln:find("monster") then
+                    raizes[#raizes + 1] = c
+                end
+            end
+        end
+        for _, raiz in ipairs(raizes) do
+            local fila = { { raiz, 0 } }
+            local visitados = 0
+            while #fila > 0 and visitados < 1500 do
+                local item = table.remove(fila)
+                local obj, prof = item[1], item[2]
+                visitados = visitados + 1
+                if obj:IsA("Model") and obj ~= raiz then
+                    if obj:FindFirstChildOfClass("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+                        registrarMob(obj)
+                    end
+                end
+                if prof < 2 then
+                    for _, c in ipairs(obj:GetChildren()) do fila[#fila + 1] = { c, prof + 1 } end
                 end
             end
         end
@@ -504,7 +546,7 @@ local function getAlvo()
     local myChar = plr.Character
     if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
     local myPos = myChar.HumanoidRootPart.Position
-    local modo = Config.AlvoModo or "todos"
+    local modo = (DUN.ativo and "todos") or Config.AlvoModo or "todos"
     local closest, minD = nil, math.huge
     for _, mob in ipairs(mobs) do
         if mob and mob.Parent and mob:FindFirstChild("HumanoidRootPart") and mob.Humanoid.Health > 0 then
