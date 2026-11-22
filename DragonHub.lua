@@ -1597,22 +1597,30 @@ homeBar.MouseButton1Click:Connect(function()
 end)
 
 local dragging = false
-local dragStart, startPos
-local function pegarPos(i)
-    return i.Position
-end
+local posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+
 local function comecarDrag(i)
     if i.UserInputType ~= Enum.UserInputType.MouseButton1
         and i.UserInputType ~= Enum.UserInputType.Touch then return end
     dragging = true
-    dragStart = pegarPos(i)
-    startPos = janela.Position
+    posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 end
-titulo.MouseButton1Down:Connect(function()
-    dragging = true
-    dragStart = UserInputService:GetMouseLocation()
-    startPos = janela.Position
-end)
+
+local function moverDrag(i)
+    if not dragging then return end
+    local d = i.Delta
+    if not d or (d.X == 0 and d.Y == 0) then return end
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    local maxX = math.max(0, vp.X - janela.AbsoluteSize.X)
+    local maxY = math.max(0, vp.Y - janela.AbsoluteSize.Y)
+    posAtual = Vector2.new(
+        math.clamp(posAtual.X + d.X, 0, maxX),
+        math.clamp(posAtual.Y + d.Y, 0, maxY))
+    janela.Position = UDim2.new(0, posAtual.X, 0, posAtual.Y)
+end
+
+titulo.MouseButton1Down:Connect(function() comecarDrag({ UserInputType = Enum.UserInputType.MouseButton1 }) end)
 header.InputBegan:Connect(comecarDrag)
 UserInputService.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -1620,11 +1628,13 @@ UserInputService.InputEnded:Connect(function(i)
     end
 end)
 UserInputService.InputChanged:Connect(function(i)
-    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-        local cur = UserInputService:GetMouseLocation()
-        local delta = cur - dragStart
-        janela.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+        moverDrag(i)
     end
+end)
+UserInputService.TouchMoved:Connect(function(touch, gp)
+    if gp then return end
+    moverDrag(touch)
 end)
 
 btnMin.MouseButton1Click:Connect(function()
