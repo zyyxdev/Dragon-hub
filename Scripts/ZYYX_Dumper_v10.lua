@@ -1,4 +1,4 @@
-local VERSION = "10.2"
+local VERSION = "10.3"
 
 if getgenv and getgenv().__ZYYX_DUMP10 then
     pcall(function() getgenv().__ZYYX_DUMP10.stop() end)
@@ -342,40 +342,60 @@ local function caminhoDe(inst)
     return p
 end
 
+local desligarHook
+
+local function gravarChamada(self, nome, ...)
+    if not HOOK.active or not S.active or isOurs() then return end
+    local agora = os.clock()
+    if agora - HOOK.janela >= 1 then
+        HOOK.janela = agora
+        HOOK.budget = 0
+    end
+    if HOOK.budget >= HOOK.maxPorSeg then return end
+    local path = caminhoDe(self)
+    if not deveConectar(path) then return end
+    local last = S.lastCall[path]
+    if last and agora - last < CFG.rateLimit then return end
+    S.lastCall[path] = agora
+    HOOK.budget = HOOK.budget + 1
+    local n = select("#", ...)
+    local lim = n > 8 and 8 or n
+    local args = {}
+    for i = 1, lim do args[i] = select(i, ...) end
+    registrar(path, nome, args, lim)
+end
+
 local function instalarMetodo(inst, nome)
     if not inst then return false end
     local metodo
     pcall(function() metodo = inst[nome] end)
     if type(metodo) ~= "function" then return false end
     local ok = pcall(function()
-        local orig = hookfunction(metodo, function(self, ...)
-            if HOOK.active and S.active and not isOurs() then
-                local agora = os.clock()
-                if agora - HOOK.janela >= 1 then
-                    HOOK.janela = agora
-                    HOOK.budget = 0
-                end
-                if HOOK.budget < HOOK.maxPorSeg then
-                    local path = caminhoDe(self)
-                    if deveConectar(path) then
-                        local last = S.lastCall[path]
-                        if not last or agora - last >= CFG.rateLimit then
-                            S.lastCall[path] = agora
-                            HOOK.budget = HOOK.budget + 1
-                            local n = select("#", ...)
-                            local lim = n > 8 and 8 or n
-                            local args = {}
-                            for i = 1, lim do args[i] = select(i, ...) end
-                            pcall(registrar, path, nome, args, lim)
-                        end
-                    end
+        local registro = #HOOK_ORIG + 1
+        local orig
+        orig = hookfunction(metodo, function(self, ...)
+            if HOOK.active and S.active then
+                local okr = pcall(gravarChamada, self, nome, ...)
+                if not okr then
+                    pcall(function() hookfunction(HOOK_ORIG[registro].metodo, HOOK_ORIG[registro].orig) end)
+                    HOOK_ORIG[registro] = nil
+                    HOOK.active = false
                 end
             end
             return orig(self, ...)
         end)
-        HOOK_ORIG[#HOOK_ORIG + 1] = { metodo = metodo, orig = orig }
+        HOOK_ORIG[registro] = { metodo = metodo, orig = orig }
     end)
     return ok
+end
+
+desligarHook = function()
+    for i = #HOOK_ORIG, 1, -1 do
+        local h = HOOK_ORIG[i]
+        if h then pcall(function() hookfunction(h.metodo, h.orig) end) end
+        HOOK_ORIG[i] = nil
+    end
+    HOOK.active = false
 end
 
 local function hookFireServer()
@@ -564,12 +584,7 @@ local function wipe(apagarArquivos)
         GUI_CONNS[i] = nil
     end
 
-    for i = #HOOK_ORIG, 1, -1 do
-        local h = HOOK_ORIG[i]
-        pcall(function() hookfunction(h.metodo, h.orig) end)
-        HOOK_ORIG[i] = nil
-    end
-    HOOK.active = false
+    pcall(desligarHook)
 
     for k in pairs(S.sig) do S.sig[k] = nil end
     for k in pairs(S.raw) do S.raw[k] = nil end
