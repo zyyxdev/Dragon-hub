@@ -51,8 +51,9 @@ local SCAN = { active = false, nodes = 0, remotes = 0, token = 0 }
 local CONNS = {}
 local GUI_CONNS = {}
 local hookOriginal = nil
-local fireOrig, fireMethod = nil, nil
-local fireHook = false
+local HOOK_ORIG = {}
+local HOOK = { active = false, budget = 0, janela = 0, maxPorSeg = 40, n = 0 }
+local pathCache = setmetatable({}, { __mode = "k" })
 local wiped = false
 
 local function probe(f)
