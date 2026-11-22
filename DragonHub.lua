@@ -990,46 +990,75 @@ criarToggle(collectTab, "Épico (Scrolls)", true, function(v) Config.ColetarEpic
 criarToggle(collectTab, "Lendário (Wish)", true, function(v) Config.ColetarLendario = v end)
 
 -- [ABA REBIRTH]
+local REB = { auto = false, cooldown = 4, falhas = 0 }
+
+local function valorRebirth()
+    local stats = plr:FindFirstChild("Stats")
+    local r = stats and stats:FindFirstChild("Rebirth")
+    if r and r:IsA("ValueBase") then return r.Value, "Stats.Rebirth" end
+    local lead = plr:FindFirstChild("leaderstats")
+    r = lead and lead:FindFirstChild("Rebirth")
+    if r and r:IsA("ValueBase") then return r.Value, "leaderstats.Rebirth" end
+    local char = plr.Character
+    local st = char and char:FindFirstChild("Status")
+    r = st and st:FindFirstChild("Rebirth")
+    if r and r:IsA("ValueBase") then return r.Value, "Status.Rebirth" end
+    local attr = plr:GetAttribute("Rebirth")
+    if attr ~= nil then return attr, "attribute" end
+    return nil, "nao achei"
+end
+
+local function tentarRebirth(origem)
+    if not RequestRebirth then
+        warn("[DBH] RequestRebirth nao encontrado")
+        return false
+    end
+    local antes, fonte = valorRebirth()
+    for _, args in ipairs({ { true }, {} }) do
+        local ok, resp = pcall(function()
+            return RequestRebirth:InvokeServer(table.unpack(args))
+        end)
+        task.wait(0.8)
+        local depois = valorRebirth()
+        local subiu = antes ~= nil and depois ~= nil and depois > antes
+        print(("[DBH] rebirth %s args=%d ok=%s resp=%s antes=%s depois=%s fonte=%s"):format(
+            origem, #args, tostring(ok), tostring(resp),
+            tostring(antes), tostring(depois), fonte))
+        if ok and subiu then
+            REB.falhas = 0
+            return true
+        end
+    end
+    REB.falhas = REB.falhas + 1
+    return false
+end
+
 local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
 criarSecao(rebirthTab, "Auto Rebirth")
-criarToggle(rebirthTab, "Auto Rebirth", false, function(v) Config.AutoRebirth = v end)
-criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
-    if RequestRebirth then
-        safe(function() RequestRebirth:InvokeServer(true) end)
-        print("[DBH] Rebirth forçado")
-    end
+criarToggle(rebirthTab, "Auto Rebirth", false, function(v)
+    Config.AutoRebirth = v
+    REB.auto = v
+    REB.falhas = 0
 end)
-local infoRebirth = criarLabel(rebirthTab, "Aguardando...", 60)
+criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
+    task.spawn(function() tentarRebirth("manual") end)
+end)
+
+local infoRebirth = criarLabel(rebirthTab, "Procurando rebirth...", 74)
 
 task.spawn(function()
+    local proxima = 0
     while Ativo do
-        task.wait(2)
-        local stats = plr:FindFirstChild("Stats")
-        if stats then
-            local reb = stats:FindFirstChild("Rebirth")
-            if reb then
-                infoRebirth.Text = "Rebirth atual: " .. reb.Value
-                if Config.AutoRebirth then
-                    safe(function()
-                        if PromptRemote then
-                            PromptRemote:FireServer({
-                                UniqueTag = "HudRebirth",
-                                Title = "Rebirth " .. reb.Value .. " -> " .. (reb.Value + 1),
-                                LeftButton = "Details",
-                                MiddleButton = "Confirm",
-                                Prompt = "HudRebirth",
-                                RightButton = "Cancel",
-                                Description = "Confirm Rebirth?",
-                            }, "Confirm")
-                        end
-                    end)
-                    task.wait(0.5)
-                    safe(function()
-                        if RequestRebirth then RequestRebirth:InvokeServer(true) end
-                    end)
-                    task.wait(2)
-                end
-            end
+        task.wait(1)
+        local val, fonte = valorRebirth()
+        infoRebirth.Text = ("Auto: %s\nrebirth: %s (%s)\nfalhas seguidas: %d"):format(
+            REB.auto and "LIGADO" or "desligado",
+            val ~= nil and tostring(val) or "?", fonte, REB.falhas)
+        if REB.auto and val ~= nil and os.clock() >= proxima then
+            local espera = REB.cooldown + REB.falhas * 4
+            if REB.falhas >= 4 then espera = 45 end
+            proxima = os.clock() + espera
+            task.spawn(function() tentarRebirth("auto") end)
         end
     end
 end)
