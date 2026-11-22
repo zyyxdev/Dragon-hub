@@ -168,11 +168,6 @@ local COMBOS = {
     burst = { "UniqueSets_2_1", "UniqueSets_2_3" },
 }
 
-local ROT_BASE = {
-    "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3",
-    "Weapons_3_2", "Weapons_3_3",
-}
-
 local comboIdx = 1
 local baseIdx = 1
 local slotAtual = 1
@@ -346,56 +341,21 @@ local function teclaPorNome(nome)
     return true
 end
 
-local function ferramentasEquipaveis()
-    local lista = {}
-    local vistos = {}
-    local char = plr.Character
-    local bp = plr:FindFirstChild("Backpack")
-    for _, cont in ipairs({ char, bp }) do
-        if cont then
-            for _, t in ipairs(cont:GetChildren()) do
-                if t:IsA("Tool") and not vistos[t] then
-                    vistos[t] = true
-                    lista[#lista + 1] = t
-                end
-            end
-        end
-    end
-    return lista
+local function textboxAtivo()
+    local ok, box = pcall(function() return UserInputService:GetFocusedTextBox() end)
+    return ok and box ~= nil
 end
 
-local function ativarFerramenta(tool)
-    if not tool or not tool.Parent then return false end
-    local char = plr.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    if tool.Parent ~= char then
-        pcall(function() hum:EquipTool(tool) end)
-        task.wait(0.25)
-    end
-    if tool.Parent ~= char then return false end
-    local ok = pcall(function() tool:Activate() end)
-    task.wait(tool.Name == "EnergyScythe" and 0.6 or 0.35)
-    return ok
-end
+local TECLAS_SKILL = { "E", "G", "F", "Z", "T", "X" }
+local SK = { idx = 1, ultimo = 0 }
 
-local idxFerramenta = 0
-local function usarProximaFerramenta()
-    local lista = ferramentasEquipaveis()
-    if #lista == 0 then return false end
-    idxFerramenta = (idxFerramenta % #lista) + 1
-    local tool = lista[idxFerramenta]
-    print("[DBH] skill tool: " .. tool.Name)
-    return ativarFerramenta(tool)
-end
-
-local function usarProximaBase(alvo)
-    local nome = ROT_BASE[baseIdx]
-    baseIdx = (baseIdx % #ROT_BASE) + 1
-    local sk = SKILLS[nome]
-    if not sk then return false end
-    print("[DBH] skill base: " .. nome)
-    usarSkill(sk, alvo)
+local function apertarSkill()
+    if textboxAtivo() then return false end
+    local nome = TECLAS_SKILL[SK.idx]
+    SK.idx = (SK.idx % #TECLAS_SKILL) + 1
+    local code = Enum.KeyCode[nome]
+    if not code then return false end
+    tecla(code, 0.06)
     return true
 end
 
@@ -1881,14 +1841,14 @@ end)
 
 -- [SKILLS LOOP]
 task.spawn(function()
-    while Ativo and task.wait(Config.SkillDelay) do
-        if farmLigado() and Config.SkillMode ~= "off" and not emRegen and not COL.pausa then
+    while Ativo and task.wait(0.1) do
+        if farmLigado() and Config.SkillMode ~= "off" and not emRegen and not COL.pausa
+            and os.clock() - SK.ultimo >= math.max(0.25, Config.SkillDelay) then
             local alvo = getAlvo()
             if alvo and alvo.Parent then
                 if Config.SkillMode == "todos" then
-                    if not usarProximaFerramenta() then
-                        usarProximaBase(alvo)
-                    end
+                    SK.ultimo = os.clock()
+                    apertarSkill()
                 elseif Config.SkillMode == "single" then
                     local sk = SKILLS[Config.SkillSingle]
                     if sk then usarSkill(sk, alvo) end
