@@ -113,7 +113,7 @@ local Config = {
     ColetarEpico = true,
     ColetarLendario = true,
     ColetarDesconhecido = true,
-    ColetarInterrompe = true,
+    ColetarInterrompe = false,
     ColetaCooldown = 3,
     KiMin = 0.3,
     SafeHeight = 100,
@@ -660,7 +660,7 @@ local function tentarColetar()
     if not hrp then _resetColeta() return end
 
     if not _coletaAlvo then
-        if Config.ColetarInterrompe == false and farmLigado() and getAlvo() then return end
+        if farmLigado() and not Config.ColetarInterrompe then return end
         local achado = _procurarDrop(hrp)
         if not achado then return end
         _coletaAlvo = achado
@@ -1449,7 +1449,7 @@ criarToggle(collectTab, "ExpMat", false, function(v) Config.ColetarComum = v end
 criarToggle(collectTab, "Itens sem nome (só ID)", true, function(v)
     Config.ColetarDesconhecido = v
 end)
-criarToggle(collectTab, "Interromper farm pra coletar", true, function(v)
+criarToggle(collectTab, "Interromper farm pra coletar", false, function(v)
     Config.ColetarInterrompe = v
 end)
 
