@@ -310,8 +310,7 @@ end
 local function hookNamecall()
     if not ENV.hookmetamethod or not ENV.getrawmetatable then return false end
     local ok = pcall(function()
-        local old
-        old = hookmetamethod(game, "__namecall", function(self, ...)
+        hookOriginal = hookmetamethod(game, "__namecall", function(self, ...)
             local metodo = getnamecallmethod()
             if S.active and not checkcaller()
                 and (metodo == "FireServer" or metodo == "Fire"
@@ -328,7 +327,7 @@ local function hookNamecall()
                     pcall(registrar, path, metodo, args, n)
                 end
             end
-            return old(self, ...)
+            return hookOriginal(self, ...)
         end)
     end)
     return ok
