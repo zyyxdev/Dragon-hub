@@ -596,7 +596,7 @@ local function wipe(apagarArquivos)
 end
 
 local root = Instance.new("Frame")
-root.Size = UDim2.new(0, 272, 0, 126)
+root.Size = UDim2.new(0, 272, 0, 150)
 root.Position = UDim2.new(0, 14, 0, 14)
 root.BackgroundColor3 = Color3.fromRGB(9, 9, 11)
 root.BackgroundTransparency = 0.08
@@ -694,6 +694,25 @@ local btnScan = mk(96, 78, "SCAN", Color3.fromRGB(40, 90, 190), function()
 end)
 mk(180, 84, "SALVAR", Color3.fromRGB(200, 120, 20), function() save(false) end)
 
+local function mk2(x, w, txt, cor, cb)
+    local b = mk(x, w, txt, cor, cb)
+    b.Position = UDim2.new(0, x, 0, 122)
+    return b
+end
+
+local btnHook = mk2(8, 256, "HOOK: ON  (entrada + saida)", Color3.fromRGB(90, 45, 150), function()
+    if #HOOK_ORIG == 0 then return end
+    HOOK.active = not HOOK.active
+    btnHook.Text = HOOK.active and "HOOK: ON  (entrada + saida)"
+        or "HOOK: OFF  (so entrada)"
+    btnHook.BackgroundColor3 = HOOK.active and Color3.fromRGB(90, 45, 150)
+        or Color3.fromRGB(55, 55, 65)
+end)
+if #HOOK_ORIG == 0 then
+    btnHook.Text = "HOOK: OFF  (executor sem hookfunction)"
+    btnHook.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+end
+
 local drag, dStart, sStart = false, nil, nil
 bar.InputBegan:Connect(function(i)
     if i.Target == btnX then return end
@@ -725,8 +744,10 @@ task.spawn(function()
         local scanTxt = SCAN.active
             and ("varrendo %d nos / %d remotes"):format(SCAN.nodes, SCAN.remotes)
             or ("scan ok: %d remotes"):format(#S.arch)
-        info.Text = ("%s  place:%s\n%s\nservicos:%d  sig:%d  calls:%d"):format(
-            S.active and "GRAVANDO" or "PAUSADO", S.place,
+        local hookTxt = #HOOK_ORIG == 0 and "hook:n/a"
+            or (HOOK.active and "hook:on" or "hook:off")
+        info.Text = ("%s %s  place:%s\n%s\nservicos:%d  sig:%d  calls:%d"):format(
+            S.active and "GRAVANDO" or "PAUSADO", hookTxt, S.place,
             scanTxt, S.network, S.uniq, S.total)
         btnScan.Text = SCAN.active and "..." or "SCAN"
         task.wait(0.4)
@@ -784,7 +805,7 @@ getgenv().__ZYYX_DUMP10 = {
 }
 
 print(("[D10] v%s pronto | servicos=%d hook=%s"):format(
-    VERSION, S.network, hooked and "on" or "off"))
+    VERSION, S.network, (#HOOK_ORIG > 0 and HOOK.active) and "on" or "off"))
 
 task.spawn(function()
     task.wait(1)
