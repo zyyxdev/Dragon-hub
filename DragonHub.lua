@@ -125,6 +125,7 @@ local Config = {
     ColetarRaro = true,
     ColetarEpico = true,
     ColetarLendario = true,
+    ColetarDesconhecido = true,
     ColetaCooldown = 3,
     KiMin = 0.3,
     SafeHeight = 100,
@@ -559,10 +560,10 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT] PATCH A+: histerese + cooldown por item + global
-local COLETA_PARAR = 5
-local COLETA_TIMEOUT = 10
-local COLETA_CD_ITEM = 8
+-- [AUTOCOLLECT]
+local COLETA_PARAR = 6
+local COLETA_TIMEOUT = 20
+local COLETA_CD_ITEM = 6
 
 local coletando = false
 local COL = { pausa = false }
@@ -572,16 +573,25 @@ local _coletaUltimoDrop = nil
 local _coletaUltimaGlobal = 0
 local _coletaIgnorar = setmetatable({}, {__mode = "k"})
 
+local function _nomeDoDrop(item)
+    for _, c in ipairs(item:GetDescendants()) do
+        if c:IsA("StringValue") and c.Value ~= "" and not c.Name:match("^%d+$") then
+            return c.Value
+        end
+    end
+    local attr = item:GetAttribute("ItemName")
+    if type(attr) == "string" and attr ~= "" then return attr end
+end
+
 local function extrairInfo(item)
-    local id = tonumber(item.Name:match("ItemDrop_(%d+)")) or 0
-    local nome = item.Name
-    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
-    if sv and sv:IsA("StringValue") then nome = sv.Value end
+    local id = tonumber(tostring(item.Name):match("(%d+)%s*$")) or 0
+    local nome = _nomeDoDrop(item)
     return id, nome
 end
 
 local function _dropBase(drop)
     if not drop or not drop.Parent then return nil end
+    if drop:IsA("BasePart") then return drop end
     return drop.PrimaryPart or drop:FindFirstChildWhichIsA("BasePart")
 end
 
@@ -591,17 +601,54 @@ local function _resetColeta()
     COL.pausa = false
 end
 
-local function _dropPermitido(itemName)
-    local low = itemName:lower()
+local function _containers()
+    local lista = {}
+    local ps = WS:FindFirstChild("PartStorage")
+    if ps then lista[#lista + 1] = ps end
+    for _, nome in ipairs({ "ItemDrops", "Drops", "Items" }) do
+        local f = WS:FindFirstChild(nome)
+        if f then lista[#lista + 1] = f end
+    end
+    return lista
+end
+
+local function _dropPermitido(nome)
+    if not nome or nome == "" then
+        return Config.ColetarDesconhecido ~= false
+    end
+    local low = nome:lower()
     local ehEsfera = low:find("wish") or low:find("standard") or low:find("premium")
     local ehOrb = low:find("orb")
-    local ehScroll = low:find("powerscroll")
+    local ehScroll = low:find("powerscroll") or low:find("scroll")
     local ehExp = low:find("expmat")
     if ehEsfera and (Config.ColetarLendario or Config.ColetarRaro) then return true end
     if ehOrb and Config.ColetarRaro then return true end
     if ehScroll and Config.ColetarEpico then return true end
     if ehExp and Config.ColetarComum then return true end
-    return false
+    return Config.ColetarDesconhecido ~= false
+end
+
+local function _procurarDrop(hrp)
+    local agora = os.clock()
+    local melhor, melhorD = nil, math.huge
+    for _, cont in ipairs(_containers()) do
+        for _, item in ipairs(cont:GetChildren()) do
+            if tostring(item.Name):find("ItemDrop_") then
+                local ignoraAte = _coletaIgnorar[item]
+                if not ignoraAte or ignoraAte < agora then
+                    local base = _dropBase(item)
+                    if base then
+                        local _, nome = extrairInfo(item)
+                        if _dropPermitido(nome) then
+                            local d = (base.Position - hrp.Position).Magnitude
+                            if d < melhorD then melhor, melhorD = item, d end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return melhor
 end
 
 local function tentarColetar()
@@ -625,25 +672,10 @@ local function tentarColetar()
     local hrp = c:FindFirstChild("HumanoidRootPart")
     if not hrp then _resetColeta() return end
 
-    local ps = WS:FindFirstChild("PartStorage")
-    if not ps then return end
-
     if not _coletaAlvo then
-        local melhor, melhorD = nil, math.huge
-        for _, item in ipairs(ps:GetChildren()) do
-            if item.Name:find("^ItemDrop_") then
-                local ignoraAte = _coletaIgnorar[item]
-                if not ignoraAte or ignoraAte < agora then
-                    local base = _dropBase(item)
-                    if base then
-                        local d = (base.Position - hrp.Position).Magnitude
-                        if d < melhorD then melhor, melhorD = item, d end
-                    end
-                end
-            end
-        end
-        if not melhor then return end
-        _coletaAlvo = melhor
+        local achado = _procurarDrop(hrp)
+        if not achado then return end
+        _coletaAlvo = achado
         _coletaInicio = agora
         COL.pausa = true
     end
@@ -651,51 +683,46 @@ local function tentarColetar()
     local base = _dropBase(_coletaAlvo)
     if not base then _resetColeta() return end
 
-    local id, itemName = extrairInfo(_coletaAlvo)
-    if not _dropPermitido(itemName) then
-        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
-        _resetColeta()
+    local dist = (base.Position - hrp.Position).Magnitude
+    if dist > COLETA_PARAR then
+        voarPara(base.Position + Vector3.new(0, 2, 0), Config.FlySpeed)
         return
     end
 
-    local dist = (base.Position - hrp.Position).Magnitude
-    if dist < COLETA_PARAR then
-        if vooBv then vooBv.Velocity = Vector3.zero end
-        coletando = true
-        _coletaUltimoDrop = _coletaAlvo
-        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
+    if vooBv then vooBv.Velocity = Vector3.zero end
+    coletando = true
+    _coletaUltimoDrop = _coletaAlvo
+    _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
 
-        for _, p in ipairs(c:GetDescendants()) do
-            if p:IsA("BasePart") then p.CanCollide = false end
-        end
+    for _, p in ipairs(c:GetDescendants()) do
+        if p:IsA("BasePart") then p.CanCollide = false end
+    end
 
-        hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
-        task.wait(0.25)
-
+    for _ = 1, 3 do
         pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
-        task.wait(0.4)
+        task.wait(0.08)
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+        task.wait(0.35)
+        if not _coletaAlvo.Parent then break end
+    end
 
-        task.wait(0.15)
+    if _coletaAlvo and _coletaAlvo.Parent then
         local cam = workspace.CurrentCamera
         if cam then
             local vp = cam.ViewportSize
-            pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
-            task.wait(0.1)
-            pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
+            local ok, sp = pcall(function() return cam:WorldToViewportPoint(base.Position) end)
+            local sx, sy = vp.X / 2, vp.Y / 2
+            if ok and sp and sp.Z > 0 then sx, sy = sp.X, sp.Y end
+            pcall(function() VIM:SendMouseButtonEvent(math.floor(sx), math.floor(sy), 0, true, game, 0) end)
+            task.wait(0.08)
+            pcall(function() VIM:SendMouseButtonEvent(math.floor(sx), math.floor(sy), 0, false, game, 0) end)
+            task.wait(0.3)
         end
-
-        _coletaUltimaGlobal = os.clock()
-        coletando = false
-        _resetColeta()
-        return
     end
 
-    if dist > 10 then
-        voarPara(base.Position, Config.FlySpeed)
-    else
-        voarPara(base.Position, Config.FlySpeed * 0.3)
-    end
+    _coletaUltimaGlobal = os.clock()
+    coletando = false
+    _resetColeta()
 end
 
 -- [ESP GUI]
