@@ -1214,10 +1214,12 @@ local function criarDropdown(parent, texto, opcoes, callback, valores)
     frame.Parent = parent
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
 
+    local escolhido = tostring(opcoes[1] or "?")
+
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 1, 0)
     btn.BackgroundTransparency = 1
-    btn.Text = texto .. ": " .. tostring(opcoes[1] or "?")
+    btn.Text = texto .. ": " .. escolhido
     btn.TextColor3 = P.text
     btn.TextSize = 11
     btn.Font = Enum.Font.GothamMedium
@@ -1226,56 +1228,98 @@ local function criarDropdown(parent, texto, opcoes, callback, valores)
     btn.Parent = frame
     local bPad = Instance.new("UIPadding", btn)
     bPad.PaddingLeft = UDim.new(0, 12)
+    bPad.PaddingRight = UDim.new(0, 26)
+
+    local seta = Instance.new("TextLabel")
+    seta.Size = UDim2.new(0, 20, 1, 0)
+    seta.Position = UDim2.new(1, -22, 0, 0)
+    seta.BackgroundTransparency = 1
+    seta.Text = "▼"
+    seta.TextColor3 = P.textDim
+    seta.TextSize = 10
+    seta.Font = Enum.Font.GothamBold
+    seta.Parent = frame
 
     btn.MouseButton1Click:Connect(function()
-        if overlayAberto then fecharOverlay(); return end
+        fecharOverlay()
 
-        local ov = Instance.new("Frame")
-        ov.Name = "__dbhDropOverlay"
-        ov.BackgroundColor3 = P.panel
-        ov.BorderSizePixel = 0
-        ov.ZIndex = 500
-        ov.Parent = janela
+        local vp = gui.AbsoluteSize
+        if vp.X < 10 then vp = Vector2.new(360, 640) end
 
-        local absBtn = btn.AbsolutePosition
-        local absJan = janela.AbsolutePosition
-        local tamBtn = btn.AbsoluteSize
-        local alt = math.min(#opcoes * 28, 200)
+        local back = Instance.new("TextButton")
+        back.Name = "__dbhDropOverlay"
+        back.Size = UDim2.new(1, 0, 1, 0)
+        back.BackgroundColor3 = Color3.new(0, 0, 0)
+        back.BackgroundTransparency = 0.45
+        back.Text = ""
+        back.AutoButtonColor = false
+        back.ZIndex = 900
+        back.Parent = gui
 
-        ov.Position = UDim2.new(0, absBtn.X - absJan.X, 0, absBtn.Y - absJan.Y + tamBtn.Y + 2)
-        ov.Size = UDim2.new(0, tamBtn.X, 0, alt)
-        Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 8)
-        local stk = Instance.new("UIStroke", ov)
-        stk.Color = P.accent; stk.Thickness = 1
+        local card = Instance.new("Frame")
+        card.AnchorPoint = Vector2.new(0.5, 0.5)
+        card.Position = UDim2.new(0.5, 0, 0.5, 0)
+        card.Size = UDim2.new(0, math.min(320, vp.X - 40), 0, math.min(#opcoes * 34 + 54, vp.Y - 120))
+        card.BackgroundColor3 = P.panel
+        card.BorderSizePixel = 0
+        card.ZIndex = 901
+        card.Parent = back
+        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+        local stk = Instance.new("UIStroke", card)
+        stk.Color = P.stroke
+        stk.Thickness = 1
 
-        local ls = Instance.new("ScrollingFrame", ov)
-        ls.Size = UDim2.new(1, 0, 1, 0)
+        local tituloCard = Instance.new("TextLabel")
+        tituloCard.Size = UDim2.new(1, -24, 0, 40)
+        tituloCard.Position = UDim2.new(0, 16, 0, 0)
+        tituloCard.BackgroundTransparency = 1
+        tituloCard.Text = texto
+        tituloCard.TextColor3 = P.accent2
+        tituloCard.TextSize = 11
+        tituloCard.Font = Enum.Font.GothamBold
+        tituloCard.TextXAlignment = Enum.TextXAlignment.Left
+        tituloCard.ZIndex = 902
+        tituloCard.Parent = card
+
+        local ls = Instance.new("ScrollingFrame")
+        ls.Size = UDim2.new(1, -16, 1, -52)
+        ls.Position = UDim2.new(0, 8, 0, 44)
         ls.BackgroundTransparency = 1
         ls.BorderSizePixel = 0
         ls.ScrollBarThickness = 3
-        ls.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 28)
+        ls.ScrollBarImageColor3 = P.stroke
+        ls.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 34)
+        ls.ZIndex = 902
+        ls.Parent = card
         Instance.new("UIListLayout", ls)
 
         for i, opt in ipairs(opcoes) do
             local valor = valores and valores[i] or opt
-            local ob = Instance.new("TextButton", ls)
-            ob.Size = UDim2.new(1, 0, 0, 28)
-            ob.BackgroundTransparency = 1
+            local ob = Instance.new("TextButton")
+            ob.Size = UDim2.new(1, 0, 0, 30)
+            ob.BackgroundColor3 = (tostring(opt) == escolhido) and P.elev or P.panel
+            ob.BackgroundTransparency = (tostring(opt) == escolhido) and 0 or 0.4
             ob.Text = tostring(opt)
-            ob.TextColor3 = P.text
+            ob.TextColor3 = (tostring(opt) == escolhido) and P.accent or P.text
             ob.TextSize = 11
             ob.Font = Enum.Font.GothamMedium
             ob.TextXAlignment = Enum.TextXAlignment.Left
-            ob.ZIndex = 501
+            ob.BorderSizePixel = 0
+            ob.ZIndex = 903
+            ob.Parent = ls
             local op = Instance.new("UIPadding", ob)
             op.PaddingLeft = UDim.new(0, 12)
+            Instance.new("UICorner", ob).CornerRadius = UDim.new(0, 6)
             ob.MouseButton1Click:Connect(function()
-                btn.Text = texto .. ": " .. tostring(opt)
+                escolhido = tostring(opt)
+                btn.Text = texto .. ": " .. escolhido
                 fecharOverlay()
                 if callback then callback(valor) end
             end)
         end
-        overlayAberto = ov
+
+        back.MouseButton1Click:Connect(fecharOverlay)
+        overlayAberto = back
     end)
 end
 
