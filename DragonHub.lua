@@ -843,6 +843,7 @@ local contentArea = Instance.new("Frame")
 contentArea.Size = UDim2.new(1, -20, 1, -86)
 contentArea.Position = UDim2.new(0, 10, 0, 78)
 contentArea.BackgroundTransparency = 1
+contentArea.ClipsDescendants = true
 contentArea.Parent = janela
 
 local abas = {}
@@ -1067,8 +1068,6 @@ local function criarLabel(parent, texto, altura)
     lbl.Font = Enum.Font.Code
     lbl.TextWrapped = true
     lbl.AutomaticSize = Enum.AutomaticSize.Y
-    lbl.Size = UDim2.new(1, 0, 0, 0)
-    lbl.MinSize = UDim2.new(0, 0, 0, altura)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Top
     lbl.Parent = parent
@@ -1098,6 +1097,7 @@ local function criarDropdown(parent, texto, opcoes, callback)
     btn.TextSize = 11
     btn.Font = Enum.Font.GothamMedium
     btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.TextTruncate = Enum.TextTruncate.AtEnd
     btn.Parent = frame
     local bPad = Instance.new("UIPadding", btn)
     bPad.PaddingLeft = UDim.new(0, 12)
@@ -1598,11 +1598,22 @@ end)
 
 local dragging = false
 local dragStart, startPos
+local function pegarPos(i)
+    return i.Position
+end
+local function comecarDrag(i)
+    if i.UserInputType ~= Enum.UserInputType.MouseButton1
+        and i.UserInputType ~= Enum.UserInputType.Touch then return end
+    dragging = true
+    dragStart = pegarPos(i)
+    startPos = janela.Position
+end
 titulo.MouseButton1Down:Connect(function()
     dragging = true
     dragStart = UserInputService:GetMouseLocation()
     startPos = janela.Position
 end)
+header.InputBegan:Connect(comecarDrag)
 UserInputService.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
