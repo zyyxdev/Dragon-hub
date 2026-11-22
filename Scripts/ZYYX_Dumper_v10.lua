@@ -204,7 +204,7 @@ local function deveConectar(path)
 end
 
 local function connectRemote(inst, path)
-    if S.events[inst] then return end
+    if wiped or S.events[inst] then return end
     S.events[inst] = true
     if not deveConectar(path) then return end
     if inst:IsA("RemoteEvent") or inst:IsA("UnreliableRemoteEvent") then
@@ -375,7 +375,8 @@ local FILTRO_DROP = { "drop", "orb", "star", "dragonball", "sphere", "chest", "b
 
 local function watchWorkspace()
     pcall(function()
-        WS.ChildAdded:Connect(function(it)
+        CONNS[#CONNS + 1] = WS.ChildAdded:Connect(function(it)
+            if wiped then return end
             local low = string.lower(it.Name)
             for _, f in ipairs(FILTRO_DROP) do
                 if string.find(low, f, 1, true) then
@@ -482,6 +483,52 @@ gui.IgnoreGuiInset = true
 gui.DisplayOrder = 99
 gui.Parent = guiParent
 
+local function wipe(apagarArquivos)
+    if wiped then return end
+    wiped = true
+    S.active = false
+    SCAN.active = false
+    SCAN.token = SCAN.token + 1
+    pcall(save, true)
+
+    for i = #CONNS, 1, -1 do
+        pcall(function() CONNS[i]:Disconnect() end)
+        CONNS[i] = nil
+    end
+    for i = #GUI_CONNS, 1, -1 do
+        pcall(function() GUI_CONNS[i]:Disconnect() end)
+        GUI_CONNS[i] = nil
+    end
+
+    if hookOriginal then
+        pcall(function() hookmetamethod(game, "__namecall", hookOriginal) end)
+        hookOriginal = nil
+    end
+
+    for k in pairs(S.sig) do S.sig[k] = nil end
+    for k in pairs(S.raw) do S.raw[k] = nil end
+    for k in pairs(S.events) do S.events[k] = nil end
+    for k in pairs(S.evtLast) do S.evtLast[k] = nil end
+    for k in pairs(S.arch) do S.arch[k] = nil end
+    for k in pairs(S.services) do S.services[k] = nil end
+    for k in pairs(S.drops) do S.drops[k] = nil end
+    for k in pairs(S.snap) do S.snap[k] = nil end
+    for k in pairs(S.lastCall) do S.lastCall[k] = nil end
+    S.total, S.uniq, S.appended, S.network = 0, 0, 0, 0
+
+    if apagarArquivos and canFile then
+        pcall(function()
+            if typeof(delfile) == "function" then
+                if type(isfile) ~= "function" or isfile(FILE) then delfile(FILE) end
+                if type(isfile) ~= "function" or isfile(MAPF) then delfile(MAPF) end
+            end
+        end)
+    end
+
+    pcall(function() gui:Destroy() end)
+    pcall(function() getgenv().__ZYYX_DUMP10 = nil end)
+end
+
 local root = Instance.new("Frame")
 root.Size = UDim2.new(0, 272, 0, 126)
 root.Position = UDim2.new(0, 14, 0, 14)
@@ -504,7 +551,7 @@ bar.Parent = root
 Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 10)
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -16, 1, 0)
+title.Size = UDim2.new(1, -46, 1, 0)
 title.Position = UDim2.new(0, 8, 0, 0)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.Code
@@ -513,6 +560,32 @@ title.TextColor3 = Color3.fromRGB(255, 160, 60)
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Text = ("ZYYX DUMPER v%s"):format(VERSION)
 title.Parent = bar
+
+local btnX = Instance.new("TextButton")
+btnX.Name = "ZYYX_CLOSE"
+btnX.Size = UDim2.new(0, 18, 0, 18)
+btnX.Position = UDim2.new(1, -22, 0, 2)
+btnX.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+btnX.BackgroundTransparency = 0.1
+btnX.Text = "X"
+btnX.TextColor3 = Color3.new(1, 1, 1)
+btnX.Font = Enum.Font.GothamBold
+btnX.TextSize = 11
+btnX.TextXAlignment = Enum.TextXAlignment.Center
+btnX.BorderSizePixel = 0
+btnX.AutoButtonColor = false
+btnX.Parent = bar
+Instance.new("UICorner", btnX).CornerRadius = UDim.new(0, 4)
+btnX.MouseEnter:Connect(function()
+    btnX.BackgroundColor3 = Color3.fromRGB(240, 60, 60)
+end)
+btnX.MouseLeave:Connect(function()
+    btnX.BackgroundColor3 = Color3.fromRGB(190, 45, 45)
+end)
+btnX.MouseButton1Click:Connect(function()
+    btnX.Text = "..."
+    wipe(false)
+end)
 
 local info = Instance.new("TextLabel")
 info.Size = UDim2.new(1, -16, 0, 58)
