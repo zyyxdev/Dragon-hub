@@ -1756,49 +1756,57 @@ homeBar.MouseButton1Click:Connect(function()
 end)
 
 local dragging = false
-local posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+local dragTipo = nil
+local dragInicio = Vector2.new()
+local posInicio = Vector2.new()
 
 local function comecarDrag(i)
     if i.UserInputType ~= Enum.UserInputType.MouseButton1
         and i.UserInputType ~= Enum.UserInputType.Touch then return end
     local t = i.Target
     while t and t ~= header do
-        if t:IsA("TextButton") then return end
+        if t:IsA("TextButton") or t:IsA("TextBox") then return end
         t = t.Parent
     end
     dragging = true
-    posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+    dragTipo = i.UserInputType
+    dragInicio = i.Position
+    posInicio = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 end
 
-local function moverDrag(i)
+local function moverDrag(pos)
     if not dragging then return end
-    local d = i.Delta
-    if not d or (d.X == 0 and d.Y == 0) then return end
     local cam = workspace.CurrentCamera
     local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
     local maxX = math.max(0, vp.X - janela.AbsoluteSize.X)
     local maxY = math.max(0, vp.Y - janela.AbsoluteSize.Y)
-    posAtual = Vector2.new(
-        math.clamp(posAtual.X + d.X, 0, maxX),
-        math.clamp(posAtual.Y + d.Y, 0, maxY))
-    janela.Position = UDim2.new(0, posAtual.X, 0, posAtual.Y)
+    local d = pos - dragInicio
+    local nx = math.clamp(posInicio.X + d.X, 0, maxX)
+    local ny = math.clamp(posInicio.Y + d.Y, 0, maxY)
+    janela.Position = UDim2.new(0, nx, 0, ny)
 end
 
-titulo.MouseButton1Down:Connect(function() comecarDrag({ UserInputType = Enum.UserInputType.MouseButton1 }) end)
 header.InputBegan:Connect(comecarDrag)
+titulo.InputBegan:Connect(comecarDrag)
+
 UserInputService.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+    if i.UserInputType == Enum.UserInputType.Touch
+        or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
+        dragTipo = nil
     end
 end)
+
 UserInputService.InputChanged:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
-        moverDrag(i)
-    end
+    if not dragging or dragTipo ~= Enum.UserInputType.MouseButton1 then return end
+    if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+    moverDrag(i.Position)
 end)
+
 UserInputService.TouchMoved:Connect(function(touch, gp)
+    if not dragging or dragTipo ~= Enum.UserInputType.Touch then return end
     if gp then return end
-    moverDrag(touch)
+    moverDrag(touch.Position)
 end)
 
 btnMin.MouseButton1Click:Connect(function()
