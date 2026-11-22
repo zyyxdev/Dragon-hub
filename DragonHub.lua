@@ -90,6 +90,7 @@ local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFir
 local Ativo = true
 local matarTudo  -- [PATCH KILL] forward declaration
 local DUN = { ativo = false, fase = "ocioso", etapa = 1, falhas = 0, dentro = false }
+local formaAtiva, tecnicaAtiva, fusionAtiva
 
 -- [CONFIG]
 local Config = {
@@ -2774,7 +2775,7 @@ local function getTransformEquipada()
     return nil
 end
 
-local function formaAtiva()
+formaAtiva = function()
     local atual = getTransformEquipada()
     if not atual or atual == "" then return false, nil end
     local low = atual:lower()
@@ -2805,7 +2806,7 @@ end)
 
 local TEC = { aplicada = false, ultimaTecla = 0 }
 
-local function tecnicaAtiva()
+tecnicaAtiva = function()
     local atual = getTransformEquipada()
     if atual and atual:lower():find("kaioken", 1, true) then return true end
     local char = plr.Character
@@ -2837,7 +2838,7 @@ end)
 
 local FUS = { aplicada = false, ultimaTecla = 0 }
 
-local function fusionAtiva()
+fusionAtiva = function()
     local char = plr.Character
     local nome = char and char.Name or ""
     if nome:lower():find("fusion", 1, true) then return true end
