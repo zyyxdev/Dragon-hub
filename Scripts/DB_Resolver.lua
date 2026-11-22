@@ -237,9 +237,9 @@ function DB.report()
 end
 
 -- ── boot
-if not loadMap() then
-    loadKnit()
-end
+loadMap()        -- mapa do dumper (se existir) tem prioridade
+loadNetwork()    -- caminho atual: RS.Network
+loadKnit()       -- legado
 DB.mapRaw()
 
 return DB

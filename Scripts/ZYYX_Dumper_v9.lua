@@ -311,6 +311,15 @@ end
 
 local KnitLib = loadKnit()
 
+-- pós-update: remotes migraram pra RS.Network.<Service>.RE/RF
+if not next(S.services) then
+    local net = RS:FindFirstChild("Network")
+    if net then
+        local n = collectFromFolder(net)
+        log("SYS", "network", "tree", ("services=%d"):format(n))
+    end
+end
+
 -- ───────────────────────────── varredura de remotes
 local CONTAINER = {
     Folder = true, Model = true, ScreenGui = true, SurfaceGui = true,
