@@ -143,6 +143,8 @@ local Config = {
     DunAltura = 14,
     DunRegenSubir = true,
     DunHpFuga = 35,
+    DunPos = nil,
+    DunPosSet = false,
 }
 
 local function farmLigado()
