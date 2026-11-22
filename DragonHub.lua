@@ -95,7 +95,8 @@ local ExecuteSkill_Special = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill
 local RequestRebirth       = resolveRemote("PlayerLevelService", "RF", "RequestRebirth")
 local PromptRemote         = resolveRemote("PromptService", "RE", "Prompt")
 local SuperFlight          = resolveRemote("FlightService", "RE", "SuperFlight")
-local SelectMode           = resolveRemote("ModeTransformService", "RE", "SelectMode", "ChangeModeInherit", "ChangeMode")
+local SelectMode           = resolveRemote("ModeTransformService", "RE", "SelectMode", "ChangeMode")
+local ModeInherit          = resolveRemote("ModeTransformService", "RF", "ChangeModeInherit")
 local ToolbarRemote        = resolveRemote("ToolService", "RF", "ChangeToolbarSlotRequest")
     or resolveRemote("ToolService", "RE", "UpdatePlayerToolbarSelection")
 local LockedOnRemote       = resolveRemote("SkillManager", "RE", "LockedOnChanged")
@@ -131,7 +132,14 @@ local Config = {
     FlySpeed = 250,
     AttackRange = 8,
     SkillDelay = 1.5,
+    SkillTodos = true,
     TrackerAuto = true,
+    AutoKaioken = false,
+    KaiokenTecla = "G",
+    AutoFusion = false,
+    FusionTecla = "F",
+    RegenTecla = "C",
+    RegenSubir = false,
     SkillMode = "off",
     SkillSingle = "UniqueSets_2_1",
     SkillCombo = "dps",
@@ -160,7 +168,13 @@ local COMBOS = {
     burst = { "UniqueSets_2_1", "UniqueSets_2_3" },
 }
 
+local ROT_BASE = {
+    "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3",
+    "Weapons_3_2", "Weapons_3_3",
+}
+
 local comboIdx = 1
+local baseIdx = 1
 local slotAtual = 1
 
 local BossTimers = {
@@ -316,6 +330,73 @@ local function usarSkill(skill, alvo)
     safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, true) end)
     task.wait(skill.pause or 0.5)
     safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, false) end)
+end
+
+local function tecla(code, dur)
+    dur = dur or 0.08
+    pcall(function() VIM:SendKeyEvent(true, code, false, game) end)
+    task.wait(dur)
+    pcall(function() VIM:SendKeyEvent(false, code, false, game) end)
+end
+
+local function teclaPorNome(nome)
+    local code = Enum.KeyCode[nome or ""]
+    if not code then return false end
+    tecla(code, 0.1)
+    return true
+end
+
+local function ferramentasEquipaveis()
+    local lista = {}
+    local vistos = {}
+    local char = plr.Character
+    local bp = plr:FindFirstChild("Backpack")
+    for _, cont in ipairs({ char, bp }) do
+        if cont then
+            for _, t in ipairs(cont:GetChildren()) do
+                if t:IsA("Tool") and not vistos[t] then
+                    vistos[t] = true
+                    lista[#lista + 1] = t
+                end
+            end
+        end
+    end
+    return lista
+end
+
+local function ativarFerramenta(tool)
+    if not tool or not tool.Parent then return false end
+    local char = plr.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    if tool.Parent ~= char then
+        pcall(function() hum:EquipTool(tool) end)
+        task.wait(0.25)
+    end
+    if tool.Parent ~= char then return false end
+    local ok = pcall(function() tool:Activate() end)
+    task.wait(tool.Name == "EnergyScythe" and 0.6 or 0.35)
+    return ok
+end
+
+local idxFerramenta = 0
+local function usarProximaFerramenta()
+    local lista = ferramentasEquipaveis()
+    if #lista == 0 then return false end
+    idxFerramenta = (idxFerramenta % #lista) + 1
+    local tool = lista[idxFerramenta]
+    print("[DBH] skill tool: " .. tool.Name)
+    return ativarFerramenta(tool)
+end
+
+local function usarProximaBase(alvo)
+    local nome = ROT_BASE[baseIdx]
+    baseIdx = (baseIdx % #ROT_BASE) + 1
+    local sk = SKILLS[nome]
+    if not sk then return false end
+    print("[DBH] skill base: " .. nome)
+    usarSkill(sk, alvo)
+    return true
 end
 
 -- [KI]
