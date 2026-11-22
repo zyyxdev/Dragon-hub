@@ -1,4 +1,4 @@
-local VERSION = "10.1"
+local VERSION = "10.2"
 
 if getgenv and getgenv().__ZYYX_DUMP10 then
     pcall(function() getgenv().__ZYYX_DUMP10.stop() end)
@@ -722,5 +722,5 @@ print(("[D10] v%s pronto | servicos=%d hook=%s"):format(
 
 task.spawn(function()
     task.wait(1)
-    if not SCAN.active and #S.arch == 0 then scanAsync() end
+    if not wiped and not SCAN.active and #S.arch == 0 then scanAsync() end
 end)
