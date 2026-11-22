@@ -125,7 +125,6 @@ local Config = {
     ColetarRaro = true,
     ColetarEpico = true,
     ColetarLendario = true,
-    ColetarDesconhecido = true,
     ColetaCooldown = 3,
     KiMin = 0.3,
     SafeHeight = 100,
@@ -560,10 +559,10 @@ local function expandirHitbox()
     end
 end
 
--- [AUTOCOLLECT]
-local COLETA_PARAR = 6
-local COLETA_TIMEOUT = 20
-local COLETA_CD_ITEM = 6
+-- [AUTOCOLLECT] PATCH A+: histerese + cooldown por item + global
+local COLETA_PARAR = 5
+local COLETA_TIMEOUT = 10
+local COLETA_CD_ITEM = 8
 
 local coletando = false
 local COL = { pausa = false }
@@ -573,25 +572,16 @@ local _coletaUltimoDrop = nil
 local _coletaUltimaGlobal = 0
 local _coletaIgnorar = setmetatable({}, {__mode = "k"})
 
-local function _nomeDoDrop(item)
-    for _, c in ipairs(item:GetDescendants()) do
-        if c:IsA("StringValue") and c.Value ~= "" and not c.Name:match("^%d+$") then
-            return c.Value
-        end
-    end
-    local attr = item:GetAttribute("ItemName")
-    if type(attr) == "string" and attr ~= "" then return attr end
-end
-
 local function extrairInfo(item)
-    local id = tonumber(tostring(item.Name):match("(%d+)%s*$")) or 0
-    local nome = _nomeDoDrop(item)
+    local id = tonumber(item.Name:match("ItemDrop_(%d+)")) or 0
+    local nome = item.Name
+    local sv = item:FindFirstChild("ItemName") or item:FindFirstChild("Name")
+    if sv and sv:IsA("StringValue") then nome = sv.Value end
     return id, nome
 end
 
 local function _dropBase(drop)
     if not drop or not drop.Parent then return nil end
-    if drop:IsA("BasePart") then return drop end
     return drop.PrimaryPart or drop:FindFirstChildWhichIsA("BasePart")
 end
 
@@ -601,54 +591,17 @@ local function _resetColeta()
     COL.pausa = false
 end
 
-local function _containers()
-    local lista = {}
-    local ps = WS:FindFirstChild("PartStorage")
-    if ps then lista[#lista + 1] = ps end
-    for _, nome in ipairs({ "ItemDrops", "Drops", "Items" }) do
-        local f = WS:FindFirstChild(nome)
-        if f then lista[#lista + 1] = f end
-    end
-    return lista
-end
-
-local function _dropPermitido(nome)
-    if not nome or nome == "" then
-        return Config.ColetarDesconhecido ~= false
-    end
-    local low = nome:lower()
+local function _dropPermitido(itemName)
+    local low = itemName:lower()
     local ehEsfera = low:find("wish") or low:find("standard") or low:find("premium")
     local ehOrb = low:find("orb")
-    local ehScroll = low:find("powerscroll") or low:find("scroll")
+    local ehScroll = low:find("powerscroll")
     local ehExp = low:find("expmat")
     if ehEsfera and (Config.ColetarLendario or Config.ColetarRaro) then return true end
     if ehOrb and Config.ColetarRaro then return true end
     if ehScroll and Config.ColetarEpico then return true end
     if ehExp and Config.ColetarComum then return true end
-    return Config.ColetarDesconhecido ~= false
-end
-
-local function _procurarDrop(hrp)
-    local agora = os.clock()
-    local melhor, melhorD = nil, math.huge
-    for _, cont in ipairs(_containers()) do
-        for _, item in ipairs(cont:GetChildren()) do
-            if tostring(item.Name):find("ItemDrop_") then
-                local ignoraAte = _coletaIgnorar[item]
-                if not ignoraAte or ignoraAte < agora then
-                    local base = _dropBase(item)
-                    if base then
-                        local _, nome = extrairInfo(item)
-                        if _dropPermitido(nome) then
-                            local d = (base.Position - hrp.Position).Magnitude
-                            if d < melhorD then melhor, melhorD = item, d end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return melhor
+    return false
 end
 
 local function tentarColetar()
@@ -672,10 +625,25 @@ local function tentarColetar()
     local hrp = c:FindFirstChild("HumanoidRootPart")
     if not hrp then _resetColeta() return end
 
+    local ps = WS:FindFirstChild("PartStorage")
+    if not ps then return end
+
     if not _coletaAlvo then
-        local achado = _procurarDrop(hrp)
-        if not achado then return end
-        _coletaAlvo = achado
+        local melhor, melhorD = nil, math.huge
+        for _, item in ipairs(ps:GetChildren()) do
+            if item.Name:find("^ItemDrop_") then
+                local ignoraAte = _coletaIgnorar[item]
+                if not ignoraAte or ignoraAte < agora then
+                    local base = _dropBase(item)
+                    if base then
+                        local d = (base.Position - hrp.Position).Magnitude
+                        if d < melhorD then melhor, melhorD = item, d end
+                    end
+                end
+            end
+        end
+        if not melhor then return end
+        _coletaAlvo = melhor
         _coletaInicio = agora
         COL.pausa = true
     end
@@ -683,46 +651,51 @@ local function tentarColetar()
     local base = _dropBase(_coletaAlvo)
     if not base then _resetColeta() return end
 
-    local dist = (base.Position - hrp.Position).Magnitude
-    if dist > COLETA_PARAR then
-        voarPara(base.Position + Vector3.new(0, 2, 0), Config.FlySpeed)
+    local id, itemName = extrairInfo(_coletaAlvo)
+    if not _dropPermitido(itemName) then
+        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
+        _resetColeta()
         return
     end
 
-    if vooBv then vooBv.Velocity = Vector3.zero end
-    coletando = true
-    _coletaUltimoDrop = _coletaAlvo
-    _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
+    local dist = (base.Position - hrp.Position).Magnitude
+    if dist < COLETA_PARAR then
+        if vooBv then vooBv.Velocity = Vector3.zero end
+        coletando = true
+        _coletaUltimoDrop = _coletaAlvo
+        _coletaIgnorar[_coletaAlvo] = agora + COLETA_CD_ITEM
 
-    for _, p in ipairs(c:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = false end
-    end
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
 
-    for _ = 1, 3 do
+        hrp.CFrame = CFrame.new(base.Position + Vector3.new(0, 3, 0))
+        task.wait(0.25)
+
         pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
-        task.wait(0.08)
+        task.wait(0.4)
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-        task.wait(0.35)
-        if not _coletaAlvo.Parent then break end
-    end
 
-    if _coletaAlvo and _coletaAlvo.Parent then
+        task.wait(0.15)
         local cam = workspace.CurrentCamera
         if cam then
             local vp = cam.ViewportSize
-            local ok, sp = pcall(function() return cam:WorldToViewportPoint(base.Position) end)
-            local sx, sy = vp.X / 2, vp.Y / 2
-            if ok and sp and sp.Z > 0 then sx, sy = sp.X, sp.Y end
-            pcall(function() VIM:SendMouseButtonEvent(math.floor(sx), math.floor(sy), 0, true, game, 0) end)
-            task.wait(0.08)
-            pcall(function() VIM:SendMouseButtonEvent(math.floor(sx), math.floor(sy), 0, false, game, 0) end)
-            task.wait(0.3)
+            pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
+            task.wait(0.1)
+            pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
         end
+
+        _coletaUltimaGlobal = os.clock()
+        coletando = false
+        _resetColeta()
+        return
     end
 
-    _coletaUltimaGlobal = os.clock()
-    coletando = false
-    _resetColeta()
+    if dist > 10 then
+        voarPara(base.Position, Config.FlySpeed)
+    else
+        voarPara(base.Position, Config.FlySpeed * 0.3)
+    end
 end
 
 -- [ESP GUI]
@@ -1143,56 +1116,662 @@ local function criarSlider(parent, texto, min, max, default, step, callback)
     dragBtn.Parent = barBg
 
     local dragging = false
-local dragTipo = nil
-local dragInicio = Vector2.new()
-local posInicio = Vector2.new()
+    dragBtn.MouseButton1Down:Connect(function() dragging = true end)
+    dragBtn.MouseButton1Up:Connect(function() dragging = false end)
+    dragBtn.MouseLeave:Connect(function() dragging = false end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if not dragging then return end
+        if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+            local pos = i.Position
+            local abs = barBg.AbsolutePosition
+            local size = barBg.AbsoluteSize
+            local rel = math.clamp((pos.X - abs.X) / size.X, 0, 1)
+            local valor = min + (max - min) * rel
+            valor = math.floor(valor / step + 0.5) * step
+            barFill.Size = UDim2.new(rel, 0, 1, 0)
+            label.Text = texto .. ": " .. valor
+            if callback then callback(valor) end
+        end
+    end)
+end
+
+local function criarBotao(parent, texto, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 32)
+    btn.BackgroundColor3 = P.elev
+    btn.BackgroundTransparency = 0.2
+    btn.Text = texto
+    btn.TextColor3 = P.text
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamMedium
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = true
+    btn.Parent = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+    btn.MouseButton1Click:Connect(callback)
+end
+
+local function criarLabel(parent, texto, altura)
+    altura = altura or 60
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 0, altura)
+    lbl.BackgroundColor3 = P.elev
+    lbl.BackgroundTransparency = 0.4
+    lbl.Text = texto
+    lbl.TextColor3 = P.text
+    lbl.TextSize = 10
+    lbl.Font = Enum.Font.Code
+    lbl.TextWrapped = true
+    lbl.AutomaticSize = Enum.AutomaticSize.Y
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.TextYAlignment = Enum.TextYAlignment.Top
+    lbl.Parent = parent
+    Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 8)
+    local p = Instance.new("UIPadding", lbl)
+    p.PaddingLeft = UDim.new(0, 12)
+    p.PaddingTop = UDim.new(0, 8)
+    p.PaddingRight = UDim.new(0, 12)
+    return lbl
+end
+
+-- [DROPDOWN v2] overlay fora do scroll
+local function criarDropdown(parent, texto, opcoes, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 40)
+    frame.BackgroundColor3 = P.elev
+    frame.BackgroundTransparency = 0.2
+    frame.BorderSizePixel = 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = texto .. ": " .. tostring(opcoes[1] or "?")
+    btn.TextColor3 = P.text
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamMedium
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.TextTruncate = Enum.TextTruncate.AtEnd
+    btn.Parent = frame
+    local bPad = Instance.new("UIPadding", btn)
+    bPad.PaddingLeft = UDim.new(0, 12)
+
+    btn.MouseButton1Click:Connect(function()
+        if overlayAberto then fecharOverlay(); return end
+
+        local ov = Instance.new("Frame")
+        ov.Name = "__dbhDropOverlay"
+        ov.BackgroundColor3 = P.panel
+        ov.BorderSizePixel = 0
+        ov.ZIndex = 500
+        ov.Parent = janela
+
+        local absBtn = btn.AbsolutePosition
+        local absJan = janela.AbsolutePosition
+        local tamBtn = btn.AbsoluteSize
+        local alt = math.min(#opcoes * 28, 200)
+
+        ov.Position = UDim2.new(0, absBtn.X - absJan.X, 0, absBtn.Y - absJan.Y + tamBtn.Y + 2)
+        ov.Size = UDim2.new(0, tamBtn.X, 0, alt)
+        Instance.new("UICorner", ov).CornerRadius = UDim.new(0, 8)
+        local stk = Instance.new("UIStroke", ov)
+        stk.Color = P.accent; stk.Thickness = 1
+
+        local ls = Instance.new("ScrollingFrame", ov)
+        ls.Size = UDim2.new(1, 0, 1, 0)
+        ls.BackgroundTransparency = 1
+        ls.BorderSizePixel = 0
+        ls.ScrollBarThickness = 3
+        ls.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 28)
+        Instance.new("UIListLayout", ls)
+
+        for _, opt in ipairs(opcoes) do
+            local ob = Instance.new("TextButton", ls)
+            ob.Size = UDim2.new(1, 0, 0, 28)
+            ob.BackgroundTransparency = 1
+            ob.Text = tostring(opt)
+            ob.TextColor3 = P.text
+            ob.TextSize = 11
+            ob.Font = Enum.Font.GothamMedium
+            ob.TextXAlignment = Enum.TextXAlignment.Left
+            ob.ZIndex = 501
+            local op = Instance.new("UIPadding", ob)
+            op.PaddingLeft = UDim.new(0, 12)
+            ob.MouseButton1Click:Connect(function()
+                btn.Text = texto .. ": " .. tostring(opt)
+                fecharOverlay()
+                if callback then callback(opt) end
+            end)
+        end
+        overlayAberto = ov
+    end)
+end
+
+-- [ABA FARM]
+local farmTab = criarAba("farm", "⚔ Farm")
+criarSecao(farmTab, "Farm")
+criarToggle(farmTab, "Farm Ativo", false, function(v)
+    Config.FarmAtivo = v
+    if not v then destravar() end
+end)
+criarDropdown(farmTab, "Alvo", {"Todos", "Só Mobs", "Só Boss", "Só Event"}, function(v)
+    local map = { ["Todos"] = "todos", ["Só Mobs"] = "mobs", ["Só Boss"] = "boss", ["Só Event"] = "event" }
+    Config.AlvoModo = map[v] or "todos"
+end)
+criarToggle(farmTab, "Auto Transform", false, function(v) Config.AutoTransform = v end)
+criarToggle(farmTab, "Auto Regen (energia)", false, function(v) Config.AutoRegen = v end)
+
+criarSecao(farmTab, "Transformações")
+criarDropdown(farmTab, "Forma", {
+    "SSJAngel", "SSJDemon3", "SSJSunGod", "SSJChristmas",
+    "Kaioken", "UltraInstinct", "SSJBlue", "SSJGod", "Base",
+}, function(v) Config.TransformMode = v end)
+criarToggle(farmTab, "Auto Técnica (M)", false, function(v) Config.AutoTecnica = v end)
+criarDropdown(farmTab, "Tecla Técnica", {"M", "Y", "C", "G", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
+    Config.TecnicaTecla = v
+end)
+criarToggle(farmTab, "Auto Kaioken", false, function(v) Config.AutoKaioken = v end)
+criarDropdown(farmTab, "Tecla Kaioken", {"G", "M", "Y", "C", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
+    Config.KaiokenTecla = v
+end)
+criarToggle(farmTab, "Auto Fusion", false, function(v) Config.AutoFusion = v end)
+criarDropdown(farmTab, "Tecla Fusion", {"F", "M", "Y", "C", "G", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
+    Config.FusionTecla = v
+end)
+
+criarSecao(farmTab, "Auto Skills (só com Farm Ativo)")
+criarDropdown(farmTab, "Modo", {"todos", "off", "single", "combo"}, function(v)
+    Config.SkillMode = v
+end)
+criarDropdown(farmTab, "Skill Única", {
+    "UniqueSets_2_1", "UniqueSets_2_2", "UniqueSets_2_3", "Weapons_3_2", "Weapons_3_3"
+}, function(v) Config.SkillSingle = v end)
+criarDropdown(farmTab, "Combo", {
+    "dps", "default", "kame", "spirit", "arma", "burst"
+}, function(v) Config.SkillCombo = v end)
+
+criarSecao(farmTab, "Combate Avançado")
+criarToggle(farmTab, "Auto Lock-On", true, function(v)
+    Config.AutoLock = v
+    if not v then destravar() end
+end)
+criarToggle(farmTab, "Noclip com farm", true, function(v) Config.Noclip = v end)
+criarToggle(farmTab, "Hitbox Expandida", false, function(v) Config.HitboxExpandida = v end)
+criarSlider(farmTab, "Multiplicador Hitbox", 1, 5, 2, 1, function(v) Config.HitboxMulti = v end)
+criarToggle(farmTab, "M1 via VIM (mobile)", false, function(v) Config.UsarM1VIM = v end)
+criarSecao(farmTab, "Visual")
+criarToggle(farmTab, "ESP Mobs", false, function(v) Config.ESPMobs = v end)
+criarToggle(farmTab, "ESP Itens", false, function(v) Config.ESPItems = v end)
+criarSecao(farmTab, "Movimento")
+criarBotao(farmTab, "🌌 Voo Nativo (5s)", function()
+    if SuperFlight then
+        safe(function() SuperFlight:FireServer(true) end)
+        task.wait(5)
+        safe(function() SuperFlight:FireServer(false) end)
+    end
+end)
+
+-- [ABA COLLECT]
+local collectTab = criarAba("collect", "💎 Collect")
+criarSecao(collectTab, "Auto Coletar")
+criarToggle(collectTab, "Auto Coletar", false, function(v) Config.AutoCollect = v end)
+criarSlider(collectTab, "Cooldown entre coletas (s)", 1, 15, 3, 1, function(v) Config.ColetaCooldown = v end)
+criarSecao(collectTab, "O que coletar")
+criarToggle(collectTab, "Esferas (Wish)", true, function(v) Config.ColetarLendario = v end)
+criarToggle(collectTab, "Orbs", true, function(v) Config.ColetarRaro = v end)
+criarToggle(collectTab, "Scrolls", true, function(v) Config.ColetarEpico = v end)
+criarToggle(collectTab, "ExpMat", false, function(v) Config.ColetarComum = v end)
+
+-- [ABA REBIRTH]
+local REB = { auto = false, cooldown = 4, falhas = 0, ocupado = false }
+
+local function porNome(pasta, alvo)
+    if not pasta then return nil end
+    for _, v in ipairs(pasta:GetChildren()) do
+        if v:IsA("ValueBase") and v.Name:lower():find(alvo, 1, true) then
+            return v, pasta.Name .. "." .. v.Name
+        end
+    end
+end
+
+local function valorRebirth()
+    local stats = plr:FindFirstChild("Stats")
+    local r, onde = porNome(stats, "rebirth")
+    if r then return r.Value, onde end
+    local lead = plr:FindFirstChild("leaderstats")
+    r, onde = porNome(lead, "rebirth")
+    if r then return r.Value, onde end
+    local char = plr.Character
+    r, onde = porNome(char and char:FindFirstChild("Status"), "rebirth")
+    if r then return r.Value, onde end
+    r, onde = porNome(char, "rebirth")
+    if r then return r.Value, onde end
+    local attr = plr:GetAttribute("Rebirth")
+    if attr ~= nil then return attr, "attribute" end
+    return nil, "nao achei"
+end
+
+local function tentarRebirth(origem)
+    if not RequestRebirth then
+        warn("[DBH] RequestRebirth nao encontrado")
+        return false
+    end
+    if REB.ocupado then return false end
+    REB.ocupado = true
+    local antes, fonte = valorRebirth()
+    local subiu = false
+    for i, args in ipairs({ { true }, {} }) do
+        if not subiu then
+            local ok, resp = pcall(function()
+                return RequestRebirth:InvokeServer(table.unpack(args))
+            end)
+            task.wait(1.2)
+            local depois = valorRebirth()
+            subiu = antes ~= nil and depois ~= nil and depois > antes
+            print(("[DBH] rebirth %s args=%d ok=%s resp=%s antes=%s depois=%s fonte=%s"):format(
+                origem, #args, tostring(ok), tostring(resp),
+                tostring(antes), tostring(depois), fonte))
+        end
+    end
+    REB.ocupado = false
+    if subiu then
+        REB.falhas = 0
+        return true
+    end
+    REB.falhas = REB.falhas + 1
+    return false
+end
+
+local rebirthTab = criarAba("rebirth", "🔄 Rebirth")
+criarSecao(rebirthTab, "Auto Rebirth")
+criarToggle(rebirthTab, "Auto Rebirth", false, function(v)
+    Config.AutoRebirth = v
+    REB.auto = v
+    REB.falhas = 0
+end)
+criarBotao(rebirthTab, "🔄 Forçar Rebirth Agora", function()
+    task.spawn(function() tentarRebirth("manual") end)
+end)
+
+local infoRebirth = criarLabel(rebirthTab, "Procurando rebirth...", 74)
+
+task.spawn(function()
+    local proxima = 0
+    while Ativo do
+        task.wait(1)
+        local val, fonte = valorRebirth()
+        infoRebirth.Text = ("Auto: %s\nrebirth: %s (%s)\nfalhas seguidas: %d"):format(
+            REB.auto and "LIGADO" or "desligado",
+            val ~= nil and tostring(val) or "?", fonte, REB.falhas)
+        if REB.auto and val ~= nil and os.clock() >= proxima then
+            local espera = REB.cooldown + REB.falhas * 4
+            if REB.falhas >= 4 then espera = 45 end
+            proxima = os.clock() + espera
+            task.spawn(function() tentarRebirth("auto") end)
+        end
+    end
+end)
+
+-- [ABA TRACKER]
+local trackerTab = criarAba("tracker", "⏱ Tracker")
+criarSecao(trackerTab, "Detecção")
+criarToggle(trackerTab, "Auto-detectar bosses", true, function(v) Config.TrackerAuto = v end)
+
+criarSecao(trackerTab, "Timers Ativos")
+local timerLabel = criarLabel(trackerTab, "Nenhum boss em respawn.", 100)
+
+criarSecao(trackerTab, "Voar até Boss")
+local bossInput = Instance.new("TextBox", trackerTab)
+bossInput.Size = UDim2.new(1, 0, 0, 32)
+bossInput.BackgroundColor3 = P.elev
+bossInput.BackgroundTransparency = 0.2
+bossInput.BorderSizePixel = 0
+bossInput.Text = ""
+bossInput.PlaceholderText = "Nome do boss..."
+bossInput.TextColor3 = P.text
+bossInput.Font = Enum.Font.GothamMedium
+bossInput.TextSize = 11
+bossInput.ClearTextOnFocus = false
+Instance.new("UICorner", bossInput).CornerRadius = UDim.new(0, 8)
+local biPad = Instance.new("UIPadding", bossInput)
+biPad.PaddingLeft = UDim.new(0, 12)
+
+criarBotao(trackerTab, "✈️ Ir para o boss", function()
+    local nome = bossInput.Text:lower():gsub("%s+", "")
+    if nome == "" then return end
+    local wm = WS:FindFirstChild("World Mobs")
+    if not wm then return end
+    local achou = false
+    for _, pasta in ipairs(wm:GetChildren()) do
+        for _, mob in ipairs(pasta:GetChildren()) do
+            if mob:IsA("Model") then
+                local mobNome = mob.Name:gsub("%-?%d+$", ""):lower():gsub("%s+", "")
+                if mobNome == nome then
+                    local hrp = mob:FindFirstChild("HumanoidRootPart")
+                    if hrp then voarPara(hrp.Position); achou = true; return end
+                end
+            end
+        end
+    end
+    if not achou then warn("[DBH] Boss '"..nome.."' não encontrado") end
+end)
+
+-- [PATCH T] tracker: limpa estado quando boss respawna + primeira detecção
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if Config.TrackerAuto then
+            local wm = WS:FindFirstChild("World Mobs")
+            if wm then
+                local vivos = {}
+                for _, pasta in ipairs(wm:GetChildren()) do
+                    if pasta.Name == "Boss Mobs" or pasta.Name == "Event Mobs" then
+                        for _, mob in ipairs(pasta:GetChildren()) do
+                            if mob:IsA("Model") then
+                                local base = mob.Name:gsub("%-?%d+$", "")
+                                vivos[base] = true
+                                _G.bossVistos = _G.bossVistos or {}
+                                _G.bossVistos[base] = true
+                            end
+                        end
+                    end
+                end
+                _G.bossEstado = _G.bossEstado or {}
+                -- [PATCH T] boss respawnou -> limpa timer
+                for nome in pairs(_G.bossEstado) do
+                    if vivos[nome] then _G.bossEstado[nome] = nil end
+                end
+                -- [PATCH T] boss visto sumiu -> inicia timer
+                for nome in pairs(_G.bossVistos or {}) do
+                    if not vivos[nome] and not _G.bossEstado[nome] then
+                        local tempo = BossTimers[nome] or BossTimers._default
+                        _G.bossEstado[nome] = {morreuEm = os.clock(), respawnEm = tempo}
+                        _G.bossVistos[nome] = nil
+                    end
+                end
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        local agora = os.clock()
+        local linhas = {}
+        local total = 0
+        _G.bossEstado = _G.bossEstado or {}
+        for nome, info in pairs(_G.bossEstado) do
+            local passado = agora - info.morreuEm
+            local restante = info.respawnEm - passado
+            if restante > 0 then
+                linhas[#linhas+1] = string.format("%-15s %d:%02d", nome, math.floor(restante/60), math.floor(restante%60))
+                total = total + 1
+            else
+                _G.bossEstado[nome] = nil
+            end
+        end
+        if total == 0 then timerLabel.Text = "Nenhum boss em respawn."
+        else table.sort(linhas); timerLabel.Text = table.concat(linhas, "\n") end
+    end
+end)
+
+-- [DUMP DUNGEON] hook isolado, install/uninstall sob demanda
+local _dungeonHook = nil
+local _dungeonBuf = {}
+local _dungeonAtivo = false
+local DUNGEON_MAX = 400
+local DUNGEON_PATHS = {
+    "Dungeon", "dungeon", "Portal", "Teleport",
+    "NextArea", "NextFloor", "StartDungeon", "EnterDungeon",
+    "Lobby", "Match", "Queue", "StartMatch", "EnterMatch",
+}
+
+local function _dungeonMatch(m)
+    for _, k in ipairs(DUNGEON_PATHS) do
+        if m:find(k, 1, true) then return true end
+    end
+    return false
+end
+
+local function _dungeonSer(v, depth)
+    depth = depth or 0
+    if depth > 3 then return "<...>" end
+    local t = type(v)
+    if t == "string" then return string.format("%q", v) end
+    if t == "number" or t == "boolean" or t == "nil" then return tostring(v) end
+    if t == "Instance" then return v:GetFullName() end
+    if t == "Vector3" then return string.format("V3(%.1f,%.1f,%.1f)", v.X, v.Y, v.Z) end
+    if t == "CFrame" then
+        local p = v.Position
+        return string.format("CF(%.1f,%.1f,%.1f)", p.X, p.Y, p.Z)
+    end
+    if t == "table" then
+        local parts, n = {}, 0
+        for k, vv in pairs(v) do
+            n = n + 1
+            if n > 10 then parts[#parts+1] = "..." break end
+            parts[#parts+1] = tostring(k) .. "=" .. _dungeonSer(vv, depth+1)
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    return "<" .. t .. ">"
+end
+
+local function dungeonHookStart()
+    if _dungeonHook then return end
+    if not hookmetamethod then warn("[DUMP] sem hookmetamethod"); return end
+    local mt = getrawmetatable(game)
+    if not mt then warn("[DUMP] sem metatable"); return end
+    local old = mt.__namecall
+    setreadonly(mt, false)
+    _dungeonHook = function(self, ...)
+        local m = getnamecallmethod()
+        if _dungeonAtivo and _dungeonMatch(m) then
+            local n = select("#", ...)
+            local out = {}
+            for i = 1, n do out[i] = _dungeonSer((select(i, ...))) end
+            if #_dungeonBuf >= DUNGEON_MAX then table.remove(_dungeonBuf, 1) end
+            _dungeonBuf[#_dungeonBuf+1] = string.format("[%s] %s(%s)",
+                os.date("%H:%M:%S"), m, table.concat(out, ", "))
+        end
+        return old(self, ...)
+    end
+    mt.__namecall = _dungeonHook
+    setreadonly(mt, true)
+    _dungeonAtivo = true
+    print("[DUMP] hook dungeon ON")
+end
+
+local function dungeonHookStop()
+    if not _dungeonHook then return end
+    _dungeonAtivo = false
+    pcall(function()
+        local mt = getrawmetatable(game)
+        if not mt then return end
+        setreadonly(mt, false)
+        mt.__namecall = _dungeonHook
+        setreadonly(mt, true)
+    end)
+    _dungeonHook = nil
+    print("[DUMP] hook dungeon OFF")
+end
+
+local function dungeonHookDump()
+    dungeonHookStop()
+    if #_dungeonBuf == 0 then print("[DUMP] vazio"); return end
+    local txt = table.concat(_dungeonBuf, "\n")
+    if writefile then
+        local fn = "Dungeon_dump_" .. os.time() .. ".txt"
+        writefile(fn, txt)
+        print("[DUMP] salvo: " .. fn)
+    else
+        print(txt)
+    end
+    _dungeonBuf = {}
+end
+
+-- [PATCH KILL] cleanup completo
+matarTudo = function()
+    Ativo = false
+    for k, v in pairs(Config) do
+        if type(v) == "boolean" then Config[k] = false end
+    end
+
+    pcall(function() dungeonHookStop() end)
+    pcall(function() pararRegen() end)
+    pcall(function() pararLock() end)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.C, false, game) end)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+
+    if vooBv then pcall(function() vooBv:Destroy() end); vooBv = nil end
+    if vooBg then pcall(function() vooBg:Destroy() end); vooBg = nil end
+
+    local c = plr.Character
+    if c then
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then pcall(function() p.CanCollide = true end) end
+        end
+    end
+
+    local wm = WS:FindFirstChild("World Mobs")
+    if wm then
+        for _, pasta in ipairs(wm:GetChildren()) do
+            for _, m in ipairs(pasta:GetChildren()) do
+                local hrp = m.FindFirstChild and m:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local orig = hrp:FindFirstChild("__OrigSize")
+                    if orig then
+                        pcall(function() hrp.Size = orig.Value end)
+                        orig:Destroy()
+                    end
+                end
+            end
+        end
+    end
+
+    for m, bb in pairs(espCache) do pcall(function() bb:Destroy() end) end
+    for i, bb in pairs(dropESP) do pcall(function() bb:Destroy() end) end
+
+    pcall(function() gui:Destroy() end)
+    pcall(function() espGui:Destroy() end)
+    print("[DBH] kill switch executado")
+end
+
+-- [ABA CONFIG]
+local configTab = criarAba("config", "⚙ Config")
+criarSecao(configTab, "Movimento")
+criarSlider(configTab, "WalkSpeed", 16, 200, 16, 1, function(v) Config.WalkSpeed = v end)
+criarSlider(configTab, "FlySpeed", 50, 500, 250, 10, function(v) Config.FlySpeed = v end)
+criarSlider(configTab, "Attack Range", 5, 20, 8, 1, function(v) Config.AttackRange = v end)
+criarSecao(configTab, "Combate")
+criarSlider(configTab, "Skill Delay (x0.1s)", 5, 50, 15, 5, function(v) Config.SkillDelay = v * 0.1 end)
+criarSecao(configTab, "Sobrevivência")
+criarSlider(configTab, "Ki pra Regen (%)", 10, 50, 30, 5, function(v) Config.KiMin = v / 100 end)
+criarDropdown(configTab, "Tecla Regen", {"C", "G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+    Config.RegenTecla = v
+end)
+criarToggle(configTab, "Regen subindo (stealth)", false, function(v) Config.RegenSubir = v end)
+criarSlider(configTab, "Altura Segura", 40, 300, 100, 10, function(v) Config.SafeHeight = v end)
+
+-- [DUMP DUNGEON] botões
+criarSecao(configTab, "Dump Dungeon")
+criarBotao(configTab, "▶️ START DUMP", function()
+    dungeonHookStart()
+end)
+criarBotao(configTab, "⏹ STOP + SALVAR", function()
+    dungeonHookDump()
+end)
+criarBotao(configTab, "❌ CANCELAR (sem salvar)", function()
+    _dungeonBuf = {}
+    dungeonHookStop()
+end)
+
+criarSecao(configTab, "Sistema")
+criarBotao(configTab, "🔴 MATAR SCRIPT", function()
+    matarTudo()
+end)
+
+-- [ABA SOBRE]
+local sobreTab = criarAba("sobre", "ℹ Sobre")
+criarSecao(sobreTab, "Info")
+local HUB_VERSAO = "6.2"
+local lblVersao = criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
+print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
+local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
+
+task.spawn(function()
+    while Ativo and gui.Parent do
+        local jobId = game.JobId ~= "" and game.JobId:sub(1, 8) .. "..." or "Privado"
+        local ping = math.floor(plr:GetNetworkPing() * 1000)
+        infoServidor.Text =
+            "Hora: " .. os.date("%H:%M:%S") ..
+            "\nData: " .. os.date("%d/%m/%Y") ..
+            "\nServidor: " .. jobId ..
+            "\nJogadores: " .. #Players:GetPlayers() ..
+            "\nPing: " .. ping .. " ms"
+        task.wait(2)
+    end
+end)
+
+abas.farm.ativar()
+
+-- [INTERAÇÕES]
+homeBar.MouseButton1Click:Connect(function()
+    fecharOverlay()
+    janela.Visible = not janela.Visible
+end)
+
+local dragging = false
+local posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 
 local function comecarDrag(i)
     if i.UserInputType ~= Enum.UserInputType.MouseButton1
         and i.UserInputType ~= Enum.UserInputType.Touch then return end
     local t = i.Target
     while t and t ~= header do
-        if t:IsA("TextButton") or t:IsA("TextBox") then return end
+        if t:IsA("TextButton") then return end
         t = t.Parent
     end
     dragging = true
-    dragTipo = i.UserInputType
-    dragInicio = i.Position
-    posInicio = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+    posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 end
 
-local function moverDrag(pos)
+local function moverDrag(i)
     if not dragging then return end
+    local d = i.Delta
+    if not d or (d.X == 0 and d.Y == 0) then return end
     local cam = workspace.CurrentCamera
     local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
     local maxX = math.max(0, vp.X - janela.AbsoluteSize.X)
     local maxY = math.max(0, vp.Y - janela.AbsoluteSize.Y)
-    local d = pos - dragInicio
-    local nx = math.clamp(posInicio.X + d.X, 0, maxX)
-    local ny = math.clamp(posInicio.Y + d.Y, 0, maxY)
-    janela.Position = UDim2.new(0, nx, 0, ny)
+    posAtual = Vector2.new(
+        math.clamp(posAtual.X + d.X, 0, maxX),
+        math.clamp(posAtual.Y + d.Y, 0, maxY))
+    janela.Position = UDim2.new(0, posAtual.X, 0, posAtual.Y)
 end
 
+titulo.MouseButton1Down:Connect(function() comecarDrag({ UserInputType = Enum.UserInputType.MouseButton1 }) end)
 header.InputBegan:Connect(comecarDrag)
-titulo.InputBegan:Connect(comecarDrag)
-
 UserInputService.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
         dragging = false
-        dragTipo = nil
     end
 end)
-
 UserInputService.InputChanged:Connect(function(i)
-    if not dragging or dragTipo ~= Enum.UserInputType.MouseButton1 then return end
-    if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    moverDrag(i.Position)
+    if i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch then
+        moverDrag(i)
+    end
 end)
-
 UserInputService.TouchMoved:Connect(function(touch, gp)
-    if not dragging or dragTipo ~= Enum.UserInputType.Touch then return end
     if gp then return end
-    moverDrag(touch.Position)
+    moverDrag(touch)
 end)
 
 btnMin.MouseButton1Click:Connect(function()
