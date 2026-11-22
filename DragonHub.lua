@@ -2104,81 +2104,101 @@ local function getTransformEquipada()
     return nil
 end
 
-local function transformarPara(modo)
-    if not modo or modo == "" then return false end
-    if ModeInherit then
-        local ok = pcall(function() return ModeInherit:InvokeServer(modo) end)
-        if ok then return true end
-    end
-    if SelectMode then
-        local ok = pcall(function() SelectMode:FireServer(modo) end)
-        if ok then return true end
-    end
-    local code = Enum.KeyCode.Y
-    tecla(code, 0.1)
-    return true
+local function formaAtiva()
+    local atual = getTransformEquipada()
+    if not atual or atual == "" then return false, nil end
+    local low = atual:lower()
+    if low == "base" or low == "none" or low == "normal" then return false, atual end
+    return true, atual
 end
 
-local TRANS = { ultimo = 0, ultimaForma = nil }
+local TRANS = { aplicada = false, ultimaTecla = 0 }
 
 task.spawn(function()
     while Ativo do
         task.wait(1)
-        if Config.AutoTransform and os.clock() - TRANS.ultimo >= 3 then
-            local atual = getTransformEquipada()
-            if atual ~= Config.TransformMode then
-                TRANS.ultimo = os.clock()
-                local ok = transformarPara(Config.TransformMode)
-                print(("[DBH] transform %s -> %s ok=%s"):format(
-                    tostring(atual), tostring(Config.TransformMode), tostring(ok)))
+        local ativa, atual = formaAtiva()
+        if ativa then
+            TRANS.aplicada = false
+        elseif Config.AutoTransform then
+            if not TRANS.aplicada or os.clock() - TRANS.ultimaTecla > 8 then
+                TRANS.aplicada = true
+                TRANS.ultimaTecla = os.clock()
+                local ok = teclaPorNome("Y")
+                print(("[DBH] transform Y ok=%s forma=%s"):format(tostring(ok), tostring(atual)))
             end
-        end
-    end
-end)
-
-task.spawn(function()
-    while Ativo do
-        local char = plr.Character
-        if not char then
-            plr.CharacterAdded:Wait()
-            char = plr.Character
-        end
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.Died:Wait()
         else
-            task.wait(1)
-        end
-        task.wait(2)
-        if Config.AutoTransform then
-            transformarPara(Config.TransformMode)
+            TRANS.aplicada = false
         end
     end
 end)
 
-local TEC = { ultimo = 0 }
+local TEC = { aplicada = false, ultimaTecla = 0 }
+
+local function tecnicaAtiva()
+    local atual = getTransformEquipada()
+    if atual and atual:lower():find("kaioken", 1, true) then return true end
+    local char = plr.Character
+    local st = char and char:FindFirstChild("Status")
+    for _, nome in ipairs({ "Technique", "TechniqueName", "ActiveTechnique", "Kaioken" }) do
+        local v = (st and st:FindFirstChild(nome)) or (char and char:FindFirstChild(nome))
+        if v and v:IsA("StringValue") and v.Value ~= "" then return true end
+        if v and v:IsA("BoolValue") and v.Value then return true end
+    end
+    return false
+end
+
 task.spawn(function()
     while Ativo do
         task.wait(1)
-        if Config.AutoTecnica and not emRegen and os.clock() - TEC.ultimo >= 5 then
-            TEC.ultimo = os.clock()
-            teclaPorNome(Config.TecnicaTecla)
+        if Config.AutoTecnica and not emRegen then
+            if tecnicaAtiva() then
+                TEC.aplicada = false
+            elseif not TEC.aplicada then
+                TEC.aplicada = true
+                TEC.ultimaTecla = os.clock()
+                teclaPorNome(Config.TecnicaTecla)
+            end
+        else
+            TEC.aplicada = false
         end
     end
 end)
 
-local FUS = { ultimo = 0 }
+local FUS = { aplicada = false, ultimaTecla = 0 }
+
+local function fusionAtiva()
+    local char = plr.Character
+    local nome = char and char.Name or ""
+    if nome:lower():find("fusion", 1, true) then return true end
+    local attr = char and char:GetAttribute("Fusion")
+    return attr == true
+end
+
 task.spawn(function()
     while Ativo do
         task.wait(1)
-        if Config.AutoFusion and os.clock() - FUS.ultimo >= 6 then
-            local char = plr.Character
-            local nome = char and char.Name or ""
-            if not nome:lower():find("fusion", 1, true) then
-                FUS.ultimo = os.clock()
+        if Config.AutoFusion then
+            if fusionAtiva() then
+                FUS.aplicada = false
+            elseif not FUS.aplicada then
+                FUS.aplicada = true
+                FUS.ultimaTecla = os.clock()
                 teclaPorNome(Config.FusionTecla)
             end
+        else
+            FUS.aplicada = false
         end
+    end
+end)
+
+task.spawn(function()
+    while Ativo do
+        plr.CharacterAdded:Wait()
+        task.wait(2)
+        TRANS.aplicada = false
+        TEC.aplicada = false
+        FUS.aplicada = false
     end
 end)
 
