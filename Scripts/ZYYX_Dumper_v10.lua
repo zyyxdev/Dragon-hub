@@ -1,4 +1,4 @@
-local VERSION = "10.3"
+local VERSION = "10.4"
 
 if getgenv and getgenv().__ZYYX_DUMP10 then
     pcall(function() getgenv().__ZYYX_DUMP10.stop() end)
@@ -50,8 +50,8 @@ local S = {
 local SCAN = { active = false, nodes = 0, remotes = 0, token = 0 }
 local CONNS = {}
 local GUI_CONNS = {}
-local HOOK_ORIG = {}
-local HOOK = { active = false, nivel = 0, budget = 0, janela = 0, maxPorSeg = 40 }
+local HOOK = { active = false, nivel = 0, budget = 0, janela = 0, maxPorSeg = 40, erros = 0 }
+local hookOriginal = nil
 local pathCache = setmetatable({}, { __mode = "k" })
 local wiped = false
 
@@ -146,6 +146,7 @@ local function header()
         "player=" .. plr.Name,
         "start=" .. S.started,
         "network=" .. tostring(S.network),
+        "hook=" .. tostring(HOOK.nivel),
         "=========================",
     }, "\n") .. "\n"
 end
@@ -344,16 +345,31 @@ end
 
 local desligarHook
 
+local elegivel = setmetatable({}, { __mode = "k" })
+
+local function alvoOk(inst)
+    local e = elegivel[inst]
+    if e ~= nil then return e end
+    local ok, cls = pcall(function() return inst.ClassName end)
+    local val = false
+    if ok and (cls == "RemoteEvent" or cls == "UnreliableRemoteEvent"
+        or cls == "RemoteFunction") then
+        val = deveConectar(caminhoDe(inst))
+    end
+    elegivel[inst] = val
+    return val
+end
+
 local function gravarChamada(self, nome, ...)
-    if not HOOK.active or not S.active or isOurs() then return end
+    if not HOOK.active or not S.active then return end
     local agora = os.clock()
     if agora - HOOK.janela >= 1 then
         HOOK.janela = agora
         HOOK.budget = 0
     end
     if HOOK.budget >= HOOK.maxPorSeg then return end
+    if not alvoOk(self) then return end
     local path = caminhoDe(self)
-    if not deveConectar(path) then return end
     local last = S.lastCall[path]
     if last and agora - last < CFG.rateLimit then return end
     S.lastCall[path] = agora
@@ -365,88 +381,58 @@ local function gravarChamada(self, nome, ...)
     registrar(path, nome, args, lim)
 end
 
-local function instalarMetodo(inst, nome)
-    if not inst then return false end
-    local metodo
-    pcall(function() metodo = inst[nome] end)
-    if type(metodo) ~= "function" then return false end
-    local ok = pcall(function()
-        local registro = #HOOK_ORIG + 1
-        local orig
-        orig = hookfunction(metodo, function(self, ...)
-            if HOOK.active and S.active then
-                local okr = pcall(gravarChamada, self, nome, ...)
-                if not okr then
-                    pcall(function() hookfunction(HOOK_ORIG[registro].metodo, HOOK_ORIG[registro].orig) end)
-                    HOOK_ORIG[registro] = nil
-                    HOOK.active = false
+local function nomecall(self, ...)
+    if HOOK.active and S.active and not isOurs() then
+        local metodo = getnamecallmethod()
+        if metodo == "FireServer" or metodo == "Fire" then
+            if HOOK.nivel >= 1 then
+                local ok = pcall(gravarChamada, self, metodo, ...)
+                if not ok then
+                    HOOK.erros = HOOK.erros + 1
+                    if HOOK.erros > 4 then desligarHook() end
                 end
             end
-            return orig(self, ...)
-        end)
-        HOOK_ORIG[registro] = { metodo = metodo, orig = orig }
-    end)
-    return ok
+        elseif metodo == "InvokeServer" or metodo == "Invoke" then
+            if HOOK.nivel >= 2 then
+                local ok = pcall(gravarChamada, self, metodo, ...)
+                if not ok then
+                    HOOK.erros = HOOK.erros + 1
+                    if HOOK.erros > 4 then desligarHook() end
+                end
+            end
+        end
+    end
+    return hookOriginal(self, ...)
 end
 
 desligarHook = function()
-    for i = #HOOK_ORIG, 1, -1 do
-        local h = HOOK_ORIG[i]
-        if h then pcall(function() hookfunction(h.metodo, h.orig) end) end
-        HOOK_ORIG[i] = nil
+    if hookOriginal then
+        pcall(function() hookmetamethod(game, "__namecall", hookOriginal) end)
     end
     HOOK.active = false
+    HOOK.erros = 0
 end
 
-local ALVOS = {}
-
-local function acharAlvos()
-    if ALVOS.RemoteEvent then return end
-    pcall(function()
-        local net = RS:FindFirstChild("Network")
-        local base = net or RS
-        for _, d in ipairs(base:GetDescendants()) do
-            local cls = d.ClassName
-            if (cls == "RemoteEvent" or cls == "UnreliableRemoteEvent"
-                or cls == "RemoteFunction") and not ALVOS[cls] then
-                ALVOS[cls] = d
-                if ALVOS.RemoteEvent and ALVOS.UnreliableRemoteEvent
-                    and ALVOS.RemoteFunction then break end
-            end
-        end
-    end)
-end
-
-local function hookFireServer()
-    if not ENV.hookfunction or type(hookfunction) ~= "function" then return false end
-    acharAlvos()
-    local n = 0
-    if ALVOS.RemoteEvent and instalarMetodo(ALVOS.RemoteEvent, "FireServer") then n = n + 1 end
-    if ALVOS.UnreliableRemoteEvent
-        and instalarMetodo(ALVOS.UnreliableRemoteEvent, "FireServer") then n = n + 1 end
-    HOOK.nivel = n > 0 and 1 or 0
-    HOOK.active = n > 0
-    return n > 0
-end
-
-local function hookInvoke()
-    if HOOK.nivel ~= 1 then return false end
-    if not ALVOS.RemoteFunction then acharAlvos() end
-    if not ALVOS.RemoteFunction then return false end
-    if not instalarMetodo(ALVOS.RemoteFunction, "InvokeServer") then return false end
-    HOOK.nivel = 2
-    HOOK.active = true
-    return true
-end
 
 local function hookNivel(novo)
     pcall(desligarHook)
     HOOK.nivel = 0
     if novo <= 0 then return 0 end
-    if not hookFireServer() then return 0 end
-    if novo >= 2 then hookInvoke() end
+    if not ENV.hookmetamethod or not ENV.getrawmetatable then return 0 end
+    local ok = pcall(function()
+        hookOriginal = hookmetamethod(game, "__namecall", nomecall)
+    end)
+    if not ok or type(hookOriginal) ~= "function" then
+        hookOriginal = nil
+        return 0
+    end
+    HOOK.nivel = novo >= 2 and 2 or 1
+    HOOK.active = true
+    HOOK.erros = 0
     return HOOK.nivel
 end
+
+local hooked = hookNivel(1) > 0
 
 local function snapshot()
     local char = plr.Character
@@ -578,7 +564,6 @@ local function save(quiet)
 end
 
 scanNetwork()
-local hooked = hookFireServer()
 watchWorkspace()
 
 local guiParent = (ENV.gethui and gethui()) or plr:WaitForChild("PlayerGui")
@@ -777,30 +762,42 @@ if not hooked then
     pintarHook()
 end
 
-local drag, dStart, sStart = false, nil, nil
-bar.InputBegan:Connect(function(i)
-    if i.Target == btnX then return end
-    if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
-        drag = true
-        dStart = i.Position
-        sStart = root.Position
-    end
+local arrastaOk = false
+pcall(function()
+    local det = Instance.new("UIDragDetector")
+    det.Name = "ZYYX_DRAG"
+    det.DragStyle = Enum.UIDragDetectorDragStyle.TranslatePlane
+    det.ResponseStyle = Enum.UIDragDetectorResponseStyle.Custom
+    det.Parent = bar
+    arrastaOk = true
 end)
-GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
-    if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
-        or i.UserInputType == Enum.UserInputType.Touch) then
-        local d = i.Position - dStart
-        root.Position = UDim2.new(sStart.X.Scale, sStart.X.Offset + d.X,
-            sStart.Y.Scale, sStart.Y.Offset + d.Y)
-    end
-end)
-GUI_CONNS[#GUI_CONNS + 1] = UIS.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1
-        or i.UserInputType == Enum.UserInputType.Touch then
-        drag = false
-    end
-end)
+
+if not arrastaOk then
+    local drag, dStart, sStart = false, nil, nil
+    bar.InputBegan:Connect(function(i)
+        if i.Target == btnX then return end
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            drag = true
+            dStart = i.Position
+            sStart = root.Position
+        end
+    end)
+    GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
+        if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
+            or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - dStart
+            root.Position = UDim2.new(sStart.X.Scale, sStart.X.Offset + d.X,
+                sStart.Y.Scale, sStart.Y.Offset + d.Y)
+        end
+    end)
+    GUI_CONNS[#GUI_CONNS + 1] = UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+            or i.UserInputType == Enum.UserInputType.Touch then
+            drag = false
+        end
+    end)
+end
 
 task.spawn(function()
     local t = 0
@@ -868,7 +865,7 @@ getgenv().__ZYYX_DUMP10 = {
 }
 
 print(("[D10] v%s pronto | servicos=%d hook=%s"):format(
-    VERSION, S.network, (#HOOK_ORIG > 0 and HOOK.active) and "on" or "off"))
+    VERSION, S.network, HOOK.active and ("on:" .. tostring(HOOK.nivel)) or "off"))
 
 task.spawn(function()
     task.wait(1)
