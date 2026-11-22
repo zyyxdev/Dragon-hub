@@ -80,10 +80,8 @@ end
 local ExecuteSkill         = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill")
 local ExecuteSkill_Special = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill_Special")
 local RequestRebirth       = resolveRemote("PlayerLevelService", "RF", "RequestRebirth")
-local PromptRemote         = resolveRemote("PromptService", "RE", "Prompt")
 local SuperFlight          = resolveRemote("FlightService", "RE", "SuperFlight")
 local SelectMode           = resolveRemote("ModeTransformService", "RE", "SelectMode", "ChangeMode")
-local ModeInherit          = resolveRemote("ModeTransformService", "RF", "ChangeModeInherit")
 local ToolbarRemote        = resolveRemote("ToolService", "RF", "ChangeToolbarSlotRequest")
     or resolveRemote("ToolService", "RE", "UpdatePlayerToolbarSelection")
 local LockedOnRemote       = resolveRemote("SkillManager", "RE", "LockedOnChanged")
@@ -1865,8 +1863,8 @@ local PAD_ROTA = {
     { nome = "modo normal",   pads = { "normal" },                                    espera = 1.0 },
     { nome = "play",          pads = { "play", "start", "iniciar", "enter", "join" }, espera = 2.6 },
 }
-local PAD_RESTART = { "restart", "play again", "retry", "again", "novamente" }
-local PAD_SAIR = { "return to world", "voltar ao mundo", "leave", "sair", "exit" }
+DUN.PAD_RESTART = { "restart", "play again", "retry", "again", "novamente" }
+DUN.PAD_SAIR = { "return to world", "voltar ao mundo", "leave", "sair", "exit" }
 
 local function dlog(...)
     print("[DBH][DUN]", ...)
@@ -1916,7 +1914,7 @@ local function acharBotoes(padroes, exigirVisivel)
     return achados
 end
 
-local _cliqueT, _cliqueAlvo, _cliqueAlvoT = 0, nil, 0
+local CLK = { t = 0, alvo = nil, alvoT = 0 }
 
 local function clicarObjeto(obj)
     if not obj or not obj.Parent then return false end
@@ -1932,11 +1930,11 @@ end
 
 local function clicarSeguro(obj)
     local agora = os.clock()
-    if agora - _cliqueT < 0.8 then return false end
-    if obj == _cliqueAlvo and agora - _cliqueAlvoT < 3.5 then return false end
-    _cliqueT = agora
-    _cliqueAlvo = obj
-    _cliqueAlvoT = agora
+    if agora - CLK.t < 0.8 then return false end
+    if obj == CLK.alvo and agora - CLK.alvoT < 3.5 then return false end
+    CLK.t = agora
+    CLK.alvo = obj
+    CLK.alvoT = agora
     return clicarObjeto(obj)
 end
 
@@ -1952,17 +1950,17 @@ local function clicarPadrao(padroes)
     return false
 end
 
-local _ultimoMobVivo, _mobCheckT = 0, 0
+local MOBC = { n = 0, t = 0 }
 local function mobsVivos()
-    if os.clock() - _mobCheckT < 0.5 then return _ultimoMobVivo end
-    _mobCheckT = os.clock()
+    if os.clock() - MOBC.t < 0.5 then return MOBC.n end
+    MOBC.t = os.clock()
     local n = 0
     for _, m in ipairs(mobs) do
         if m and m.Parent and m:FindFirstChildOfClass("Humanoid") and m.Humanoid.Health > 0 then
             n = n + 1
         end
     end
-    _ultimoMobVivo = n
+    MOBC.n = n
     return n
 end
 
@@ -1976,13 +1974,13 @@ local function bossPerto()
     return false
 end
 
-local _estado, _estadoT = "fora", 0
+local ESTD = { st = "fora", t = 0 }
 function estadoDungeon()
-    if os.clock() - _estadoT < 1.2 then return _estado end
-    _estadoT = os.clock()
+    if os.clock() - ESTD.t < 1.2 then return ESTD.st end
+    ESTD.t = os.clock()
     local st = "fora"
     if mobsVivos() > 0 or bossPerto() then st = "dentro" end
-    _estado = st
+    ESTD.st = st
     DUN.dentro = (st == "dentro")
     return st
 end
@@ -2119,12 +2117,12 @@ local function rodarDungeon()
             return
         end
         if semMobHa(agora, 5) then
-            if clicarPadrao(PAD_RESTART) then
+            if clicarPadrao(DUN.PAD_RESTART) then
                 dlog("restart clicado")
                 MENU_IDX = 4
                 TENT_E = 0
                 irPara("buff", 3.0)
-            elseif clicarPadrao(PAD_SAIR) then
+            elseif clicarPadrao(DUN.PAD_SAIR) then
                 dlog("saída clicada")
                 irPara("ocioso", 1.5)
             else
@@ -2145,7 +2143,7 @@ local function rodarDungeon()
 end
 
 DUN.voltarMundo = function()
-    clicarPadrao(PAD_SAIR)
+    clicarPadrao(DUN.PAD_SAIR)
     FASE.atual = "ocioso"
     DUN.fase = "ocioso"
 end
