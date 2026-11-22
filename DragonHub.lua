@@ -126,6 +126,7 @@ local Config = {
     ColetarEpico = true,
     ColetarLendario = true,
     ColetarDesconhecido = true,
+    ColetarInterrompe = true,
     ColetaCooldown = 3,
     KiMin = 0.3,
     SafeHeight = 100,
@@ -570,6 +571,7 @@ local _coletaInicio = 0
 local _coletaUltimoDrop = nil
 local _coletaUltimaGlobal = 0
 local _coletaIgnorar = setmetatable({}, {__mode = "k"})
+local _coletaPausaInicio = 0
 
 local function _nomeDoDrop(item)
     for _, c in ipairs(item:GetDescendants()) do
@@ -596,6 +598,7 @@ end
 local function _resetColeta()
     _coletaAlvo = nil
     _coletaInicio = 0
+    _coletaPausaInicio = 0
     COL.pausa = false
 end
 
@@ -671,10 +674,12 @@ local function tentarColetar()
     if not hrp then _resetColeta() return end
 
     if not _coletaAlvo then
+        if Config.ColetarInterrompe == false and farmLigado() and getAlvo() then return end
         local achado = _procurarDrop(hrp)
         if not achado then return end
         _coletaAlvo = achado
         _coletaInicio = agora
+        _coletaPausaInicio = agora
         COL.pausa = true
     end
 
@@ -1458,6 +1463,9 @@ criarToggle(collectTab, "ExpMat", false, function(v) Config.ColetarComum = v end
 criarToggle(collectTab, "Itens sem nome (só ID)", true, function(v)
     Config.ColetarDesconhecido = v
 end)
+criarToggle(collectTab, "Interromper farm pra coletar", true, function(v)
+    Config.ColetarInterrompe = v
+end)
 
 -- [ABA REBIRTH]
 local REB = { auto = false, cooldown = 4, falhas = 0, ocupado = false }
@@ -1899,8 +1907,10 @@ end)
 
 local dragging = false
 local dragTipo = nil
-local dragInicio = Vector2.new()
-local posInicio = Vector2.new()
+local posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+
+pcall(function() header.Active = true end)
+pcall(function() titulo.Active = true end)
 
 local function comecarDrag(i)
     if i.UserInputType ~= Enum.UserInputType.MouseButton1
@@ -1913,20 +1923,20 @@ local function comecarDrag(i)
     end
     dragging = true
     dragTipo = i.UserInputType
-    dragInicio = i.Position
-    posInicio = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+    posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 end
 
-local function moverDrag(pos)
+local function moverDrag(delta)
     if not dragging then return end
+    if not delta or (delta.X == 0 and delta.Y == 0) then return end
+    posAtual = Vector2.new(posAtual.X + delta.X, posAtual.Y + delta.Y)
     local cam = workspace.CurrentCamera
     local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
-    local maxX = math.max(0, vp.X - janela.AbsoluteSize.X)
-    local maxY = math.max(0, vp.Y - janela.AbsoluteSize.Y)
-    local d = pos - dragInicio
-    local nx = math.clamp(posInicio.X + d.X, 0, maxX)
-    local ny = math.clamp(posInicio.Y + d.Y, 0, maxY)
-    janela.Position = UDim2.new(0, nx, 0, ny)
+    local maxX = vp.X - janela.AbsoluteSize.X
+    local maxY = vp.Y - janela.AbsoluteSize.Y
+    if maxX > 0 then posAtual = Vector2.new(math.clamp(posAtual.X, 0, maxX), posAtual.Y) end
+    if maxY > 0 then posAtual = Vector2.new(posAtual.X, math.clamp(posAtual.Y, 0, maxY)) end
+    janela.Position = UDim2.new(0, posAtual.X, 0, posAtual.Y)
 end
 
 header.InputBegan:Connect(comecarDrag)
@@ -1943,13 +1953,13 @@ end)
 UserInputService.InputChanged:Connect(function(i)
     if not dragging or dragTipo ~= Enum.UserInputType.MouseButton1 then return end
     if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    moverDrag(i.Position)
+    moverDrag(i.Delta)
 end)
 
 UserInputService.TouchMoved:Connect(function(touch, gp)
     if not dragging or dragTipo ~= Enum.UserInputType.Touch then return end
     if gp then return end
-    moverDrag(touch.Position)
+    moverDrag(touch.Delta)
 end)
 
 btnMin.MouseButton1Click:Connect(function()
@@ -1964,6 +1974,10 @@ end)
 -- [LOOP FARM]
 task.spawn(function()
     while Ativo and task.wait(0.08) do
+        if COL.pausa and _coletaPausaInicio > 0
+            and os.clock() - _coletaPausaInicio > 12 then
+            _resetColeta()
+        end
         if farmLigado() and not emRegen and not COL.pausa then
             local alvo = getAlvo()
             if alvo then
