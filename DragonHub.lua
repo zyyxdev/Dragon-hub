@@ -206,6 +206,14 @@ local function pararLock()
     LockAlvo = nil
 end
 
+local function destravar()
+    pararLock()
+    alvoTravado = nil
+    if LockedOnRemote then
+        safe(function() LockedOnRemote:FireServer(nil) end)
+    end
+end
+
 local function lockOn(mobModel)
     if LockedOnRemote then
         safe(function() LockedOnRemote:FireServer(mobModel) end)
@@ -287,10 +295,20 @@ local function atacar(alvo)
 
     local cam = workspace.CurrentCamera
     if cam then
-        local vp = cam.ViewportSize
-        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, true, game, 0) end)
-        task.wait(0.05)
-        pcall(function() VIM:SendMouseButtonEvent(vp.X/2, vp.Y/2, 0, false, game, 0) end)
+        local alvoPart = alvo:FindFirstChild("Head") or alvo.HumanoidRootPart
+        local sx, sy
+        local ok, sp = pcall(function()
+            return cam:WorldToViewportPoint(alvoPart.Position)
+        end)
+        if ok and sp and sp.Z > 0 then
+            sx, sy = sp.X, sp.Y
+        else
+            local vp = cam.ViewportSize
+            sx, sy = vp.X / 2, vp.Y / 2
+        end
+        pcall(function() VIM:SendMouseButtonEvent(math.floor(sx), math.floor(sy), 0, true, game, 0) end)
+        task.wait(0.04)
+        pcall(function() VIM:SendMouseButtonEvent(math.floor(sx), math.floor(sy), 0, false, game, 0) end)
     end
 end
 
@@ -1233,7 +1251,10 @@ end
 -- [ABA FARM]
 local farmTab = criarAba("farm", "⚔ Farm")
 criarSecao(farmTab, "Farm")
-criarToggle(farmTab, "Farm Ativo", false, function(v) Config.FarmAtivo = v end)
+criarToggle(farmTab, "Farm Ativo", false, function(v)
+    Config.FarmAtivo = v
+    if not v then destravar() end
+end)
 criarDropdown(farmTab, "Alvo", {"Todos", "Só Mobs", "Só Boss", "Só Event"}, function(v)
     local map = { ["Todos"] = "todos", ["Só Mobs"] = "mobs", ["Só Boss"] = "boss", ["Só Event"] = "event" }
     Config.AlvoModo = map[v] or "todos"
@@ -1267,7 +1288,10 @@ criarDropdown(farmTab, "Combo", {
 }, function(v) Config.SkillCombo = v end)
 
 criarSecao(farmTab, "Combate Avançado")
-criarToggle(farmTab, "Auto Lock-On", true, function(v) Config.AutoLock = v end)
+criarToggle(farmTab, "Auto Lock-On", true, function(v)
+    Config.AutoLock = v
+    if not v then destravar() end
+end)
 criarToggle(farmTab, "Noclip com farm", true, function(v) Config.Noclip = v end)
 criarToggle(farmTab, "Hitbox Expandida", false, function(v) Config.HitboxExpandida = v end)
 criarSlider(farmTab, "Multiplicador Hitbox", 1, 5, 2, 1, function(v) Config.HitboxMulti = v end)
@@ -1701,6 +1725,11 @@ local posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 local function comecarDrag(i)
     if i.UserInputType ~= Enum.UserInputType.MouseButton1
         and i.UserInputType ~= Enum.UserInputType.Touch then return end
+    local t = i.Target
+    while t and t ~= header do
+        if t:IsA("TextButton") then return end
+        t = t.Parent
+    end
     dragging = true
     posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 end
@@ -1782,7 +1811,7 @@ task.spawn(function()
                 pararLock()
             end
         else
-            alvoTravado = nil
+            if LockAlvo then destravar() end
             if COL.pausa and vooBv then vooBv.Velocity = Vector3.zero end
         end
     end
@@ -1898,7 +1927,9 @@ local function transformarPara(modo)
         local ok = pcall(function() SelectMode:FireServer(modo) end)
         if ok then return true end
     end
-    return false
+    local code = Enum.KeyCode.Y
+    tecla(code, 0.1)
+    return true
 end
 
 local TRANS = { ultimo = 0, ultimaForma = nil }
