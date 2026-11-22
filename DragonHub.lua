@@ -134,6 +134,8 @@ local Config = {
     SkillDelay = 1.5,
     SkillTodos = true,
     TrackerAuto = true,
+    AutoTecnica = false,
+    TecnicaTecla = "M",
     AutoKaioken = false,
     KaiokenTecla = "G",
     AutoFusion = false,
@@ -345,11 +347,19 @@ local function usarSkill(skill, alvo)
     safe(function() ExecuteSkill:FireServer(skill.nome, cfg, 1, false) end)
 end
 
+local function textboxAberto()
+    local ok, box = pcall(function() return UserInputService:GetFocusedTextBox() end)
+    return ok and box ~= nil
+end
+
 local function tecla(code, dur)
+    if not code then return false end
+    if textboxAberto() then return false end
     dur = dur or 0.08
     pcall(function() VIM:SendKeyEvent(true, code, false, game) end)
     task.wait(dur)
     pcall(function() VIM:SendKeyEvent(false, code, false, game) end)
+    return true
 end
 
 local function teclaPorNome(nome)
@@ -359,16 +369,11 @@ local function teclaPorNome(nome)
     return true
 end
 
-local function textboxAtivo()
-    local ok, box = pcall(function() return UserInputService:GetFocusedTextBox() end)
-    return ok and box ~= nil
-end
-
 local TECLAS_SKILL = { "E", "G", "F", "Z", "T", "X" }
 local SK = { idx = 1, ultimo = 0 }
 
 local function apertarSkill()
-    if textboxAtivo() then return false end
+    if textboxAberto() then return false end
     local nome = TECLAS_SKILL[SK.idx]
     SK.idx = (SK.idx % #TECLAS_SKILL) + 1
     local code = Enum.KeyCode[nome]
@@ -1267,12 +1272,16 @@ criarDropdown(farmTab, "Forma", {
     "SSJAngel", "SSJDemon3", "SSJSunGod", "SSJChristmas",
     "Kaioken", "UltraInstinct", "SSJBlue", "SSJGod", "Base",
 }, function(v) Config.TransformMode = v end)
+criarToggle(farmTab, "Auto Técnica (M)", false, function(v) Config.AutoTecnica = v end)
+criarDropdown(farmTab, "Tecla Técnica", {"M", "Y", "C", "G", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
+    Config.TecnicaTecla = v
+end)
 criarToggle(farmTab, "Auto Kaioken", false, function(v) Config.AutoKaioken = v end)
-criarDropdown(farmTab, "Tecla Kaioken", {"G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+criarDropdown(farmTab, "Tecla Kaioken", {"G", "M", "Y", "C", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
     Config.KaiokenTecla = v
 end)
 criarToggle(farmTab, "Auto Fusion", false, function(v) Config.AutoFusion = v end)
-criarDropdown(farmTab, "Tecla Fusion", {"F", "G", "H", "J", "K", "L", "U", "X", "V", "B", "N"}, function(v)
+criarDropdown(farmTab, "Tecla Fusion", {"F", "M", "Y", "C", "G", "H", "J", "K", "L", "U", "V", "B", "N"}, function(v)
     Config.FusionTecla = v
 end)
 
@@ -1692,7 +1701,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.1"
+local HUB_VERSAO = "6.2"
 local lblVersao = criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
@@ -1965,6 +1974,17 @@ task.spawn(function()
         task.wait(2)
         if Config.AutoTransform then
             transformarPara(Config.TransformMode)
+        end
+    end
+end)
+
+local TEC = { ultimo = 0 }
+task.spawn(function()
+    while Ativo do
+        task.wait(1)
+        if Config.AutoTecnica and not emRegen and os.clock() - TEC.ultimo >= 5 then
+            TEC.ultimo = os.clock()
+            teclaPorNome(Config.TecnicaTecla)
         end
     end
 end)
