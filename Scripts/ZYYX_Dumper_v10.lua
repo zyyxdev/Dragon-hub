@@ -751,12 +751,13 @@ local TEXTOS = {
     [2] = "HOOK: MAX saida RE+RF",
 }
 
+local btnHook
 local function pintarHook()
     btnHook.Text = TEXTOS[HOOK.nivel] or TEXTOS[0]
     btnHook.BackgroundColor3 = CORES[HOOK.nivel] or CORES[0]
 end
 
-local btnHook = mk2(8, 256, TEXTOS[1], CORES[1], function()
+btnHook = mk2(8, 256, TEXTOS[1], CORES[1], function()
     if not ENV.hookfunction or type(hookfunction) ~= "function" then
         btnHook.Text = "HOOK: n/a (executor sem hookfunction)"
         btnHook.BackgroundColor3 = CORES[0]
@@ -807,8 +808,7 @@ task.spawn(function()
         local scanTxt = SCAN.active
             and ("varrendo %d nos / %d remotes"):format(SCAN.nodes, SCAN.remotes)
             or ("scan ok: %d remotes"):format(#S.arch)
-        local hookTxt = #HOOK_ORIG == 0 and "hook:n/a"
-            or (HOOK.active and "hook:on" or "hook:off")
+        local hookTxt = "hook:" .. tostring(HOOK.nivel)
         info.Text = ("%s %s  place:%s\n%s\nservicos:%d  sig:%d  calls:%d"):format(
             S.active and "GRAVANDO" or "PAUSADO", hookTxt, S.place,
             scanTxt, S.network, S.uniq, S.total)
