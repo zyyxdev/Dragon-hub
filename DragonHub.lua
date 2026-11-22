@@ -465,6 +465,7 @@ local COLETA_TIMEOUT = 10
 local COLETA_CD_ITEM = 8
 
 local coletando = false
+local COL = { pausa = false }
 local _coletaAlvo = nil
 local _coletaInicio = 0
 local _coletaUltimoDrop = nil
@@ -487,6 +488,7 @@ end
 local function _resetColeta()
     _coletaAlvo = nil
     _coletaInicio = 0
+    COL.pausa = false
 end
 
 local function _dropPermitido(itemName)
@@ -543,6 +545,7 @@ local function tentarColetar()
         if not melhor then return end
         _coletaAlvo = melhor
         _coletaInicio = agora
+        COL.pausa = true
     end
 
     local base = _dropBase(_coletaAlvo)
@@ -1625,7 +1628,7 @@ end)
 -- [LOOP FARM]
 task.spawn(function()
     while Ativo and task.wait(0.08) do
-        if farmLigado() and not emRegen then
+        if farmLigado() and not emRegen and not COL.pausa then
             local alvo = getAlvo()
             if alvo then
                 if Config.AutoLock and alvoTravado ~= alvo.Name then
@@ -1660,6 +1663,7 @@ task.spawn(function()
             end
         else
             alvoTravado = nil
+            if COL.pausa and vooBv then vooBv.Velocity = Vector3.zero end
         end
     end
 end)
@@ -1668,7 +1672,7 @@ end)
 task.spawn(function()
     while Ativo do
         task.wait(0.3)
-        if farmLigado() and Config.Noclip then
+        if (farmLigado() and Config.Noclip) or Config.AutoCollect or COL.pausa then
             local char = plr.Character
             if char then
                 for _, p in ipairs(char:GetDescendants()) do
@@ -1691,9 +1695,9 @@ end)
 task.spawn(function()
     while Ativo do
         task.wait(0.15)
-        if Config.AutoCollect and not farmLigado() then
+        if Config.AutoCollect then
             tentarColetar()
-        elseif not Config.AutoCollect then
+        else
             _resetColeta()
         end
     end
@@ -1718,7 +1722,7 @@ end)
 -- [SKILLS LOOP]
 task.spawn(function()
     while Ativo and task.wait(Config.SkillDelay) do
-        if farmLigado() and Config.SkillMode ~= "off" and not emRegen then
+        if farmLigado() and Config.SkillMode ~= "off" and not emRegen and not COL.pausa then
             local alvo = getAlvo()
             if alvo and alvo.Parent then
                 if Config.SkillMode == "single" then
