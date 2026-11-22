@@ -46,9 +46,11 @@ local S = {
     started = os.date("%Y-%m-%d %H:%M:%S"),
 }
 
-local SCAN = { active = false, nodes = 0, remotes = 0 }
+local SCAN = { active = false, nodes = 0, remotes = 0, token = 0 }
 local CONNS = {}
+local GUI_CONNS = {}
 local hookOriginal = nil
+local wiped = false
 
 local function probe(f)
     local ok, v = pcall(f)
@@ -261,10 +263,12 @@ local function scanNetwork()
 end
 
 local function scanAsync(onDone)
-    if SCAN.active then return false end
+    if SCAN.active or wiped then return false end
     SCAN.active = true
     SCAN.nodes = 0
     SCAN.remotes = 0
+    SCAN.token = SCAN.token + 1
+    local meuToken = SCAN.token
     S.arch = {}
 
     local queue = {
@@ -276,7 +280,7 @@ local function scanAsync(onDone)
     local head = 1
 
     task.spawn(function()
-        while head <= #queue do
+        while head <= #queue and SCAN.token == meuToken do
             local item = queue[head]
             head = head + 1
             local inst, depth, path, maxd = item[1], item[2], item[3], item[4]
@@ -301,8 +305,10 @@ local function scanAsync(onDone)
 
             if head % CFG.slice == 0 then task.wait() end
         end
-        SCAN.active = false
-        if onDone then pcall(onDone) end
+        if SCAN.token == meuToken then
+            SCAN.active = false
+            if onDone then pcall(onDone) end
+        end
     end)
     return true
 end
