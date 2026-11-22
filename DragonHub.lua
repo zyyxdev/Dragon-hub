@@ -750,8 +750,12 @@ barVisual.Active = false
 Instance.new("UICorner", barVisual).CornerRadius = UDim.new(1, 0)
 
 local janela = Instance.new("Frame")
-janela.Size = UDim2.new(0, 440, 0, 340)
-janela.Position = UDim2.new(0.5, -220, 0.5, -170)
+local _camUI = workspace.CurrentCamera
+local _vpUI = _camUI and _camUI.ViewportSize or Vector2.new(1280, 720)
+local _wUI = math.clamp(_vpUI.X - 48, 300, 440)
+local _hUI = math.clamp(_vpUI.Y - 140, 260, 380)
+janela.Size = UDim2.new(0, _wUI, 0, _hUI)
+janela.Position = UDim2.new(0.5, -_wUI / 2, 0.5, -_hUI / 2)
 janela.BackgroundColor3 = P.bg
 janela.BackgroundTransparency = 0.1
 janela.BorderSizePixel = 0
@@ -809,20 +813,28 @@ btnKill.AutoButtonColor = false
 btnKill.Parent = header
 Instance.new("UICorner", btnKill).CornerRadius = UDim.new(0, 5)
 
-local tabBar = Instance.new("Frame")
-tabBar.Size = UDim2.new(1, -20, 0, 32)
+local tabBar = Instance.new("ScrollingFrame")
+tabBar.Size = UDim2.new(1, -20, 0, 34)
 tabBar.Position = UDim2.new(0, 10, 0, 40)
 tabBar.BackgroundColor3 = P.panel
 tabBar.BackgroundTransparency = 0.3
 tabBar.BorderSizePixel = 0
+tabBar.ScrollBarThickness = 0
+tabBar.ScrollingDirection = Enum.ScrollingDirection.X
+tabBar.CanvasSize = UDim2.new(0, 0, 0, 0)
+tabBar.AutomaticCanvasSize = Enum.AutomaticSize.X
+tabBar.ElasticBehavior = Enum.ElasticBehavior.Never
 tabBar.Parent = janela
 Instance.new("UICorner", tabBar).CornerRadius = UDim.new(0, 8)
 
 local tabLayout = Instance.new("UIListLayout", tabBar)
 tabLayout.FillDirection = Enum.FillDirection.Horizontal
-tabLayout.Padding = UDim.new(0, 3)
-tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tabLayout.Padding = UDim.new(0, 4)
+tabLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
 tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+local tabPad = Instance.new("UIPadding", tabBar)
+tabPad.PaddingLeft = UDim.new(0, 6)
+tabPad.PaddingRight = UDim.new(0, 6)
 
 local contentArea = Instance.new("Frame")
 contentArea.Size = UDim2.new(1, -20, 1, -86)
@@ -839,7 +851,8 @@ end
 
 local function criarAba(nome, display)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, 78, 0, 26)
+    btn.Size = UDim2.new(0, 0, 0, 26)
+    btn.AutomaticSize = Enum.AutomaticSize.X
     btn.BackgroundColor3 = P.elev
     btn.BackgroundTransparency = 1
     btn.Text = display
@@ -848,7 +861,11 @@ local function criarAba(nome, display)
     btn.Font = Enum.Font.GothamBold
     btn.BorderSizePixel = 0
     btn.AutoButtonColor = false
+    btn.TextTruncate = Enum.TextTruncate.None
     btn.Parent = tabBar
+    local bPad = Instance.new("UIPadding", btn)
+    bPad.PaddingLeft = UDim.new(0, 10)
+    bPad.PaddingRight = UDim.new(0, 10)
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
     local scroll = Instance.new("ScrollingFrame")
@@ -1046,6 +1063,9 @@ local function criarLabel(parent, texto, altura)
     lbl.TextSize = 10
     lbl.Font = Enum.Font.Code
     lbl.TextWrapped = true
+    lbl.AutomaticSize = Enum.AutomaticSize.Y
+    lbl.Size = UDim2.new(1, 0, 0, 0)
+    lbl.MinSize = UDim2.new(0, 0, 0, altura)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.TextYAlignment = Enum.TextYAlignment.Top
     lbl.Parent = parent
