@@ -630,6 +630,7 @@ mk(180, 84, "SALVAR", Color3.fromRGB(200, 120, 20), function() save(false) end)
 
 local drag, dStart, sStart = false, nil, nil
 bar.InputBegan:Connect(function(i)
+    if i.Target == btnX then return end
     if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
         drag = true
@@ -637,7 +638,7 @@ bar.InputBegan:Connect(function(i)
         sStart = root.Position
     end
 end)
-UIS.InputChanged:Connect(function(i)
+GUI_CONNS[#GUI_CONNS + 1] = UIS.InputChanged:Connect(function(i)
     if drag and (i.UserInputType == Enum.UserInputType.MouseMovement
         or i.UserInputType == Enum.UserInputType.Touch) then
         local d = i.Position - dStart
@@ -645,7 +646,7 @@ UIS.InputChanged:Connect(function(i)
             sStart.Y.Scale, sStart.Y.Offset + d.Y)
     end
 end)
-UIS.InputEnded:Connect(function(i)
+GUI_CONNS[#GUI_CONNS + 1] = UIS.InputEnded:Connect(function(i)
     if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
         drag = false
@@ -688,8 +689,8 @@ task.spawn(function()
     end
 end)
 
-UIS.InputBegan:Connect(function(inp, gp)
-    if gp then return end
+GUI_CONNS[#GUI_CONNS + 1] = UIS.InputBegan:Connect(function(inp, gp)
+    if wiped or gp then return end
     if inp.KeyCode == Enum.KeyCode.RightShift then
         S.active = not S.active
         btnRec.Text = S.active and "PAUSAR" or "GRAVAR"
@@ -712,12 +713,8 @@ getgenv().__ZYYX_DUMP10 = {
     map = buildMap,
     file = FILE,
     mapFile = MAPF,
-    stop = function()
-        S.active = false
-        save(true)
-        pcall(function() gui:Destroy() end)
-        getgenv().__ZYYX_DUMP10 = nil
-    end,
+    wipe = wipe,
+    stop = function() wipe(false) end,
 }
 
 print(("[D10] v%s pronto | servicos=%d hook=%s"):format(
