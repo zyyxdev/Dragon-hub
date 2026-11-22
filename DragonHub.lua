@@ -1207,7 +1207,7 @@ local function criarLabel(parent, texto, altura)
 end
 
 -- [DROPDOWN v2] overlay fora do scroll
-local function criarDropdown(parent, texto, opcoes, callback)
+local function criarDropdown(parent, texto, opcoes, callback, valores)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 0, 40)
     frame.BackgroundColor3 = P.elev
@@ -1258,7 +1258,8 @@ local function criarDropdown(parent, texto, opcoes, callback)
         ls.CanvasSize = UDim2.new(0, 0, 0, #opcoes * 28)
         Instance.new("UIListLayout", ls)
 
-        for _, opt in ipairs(opcoes) do
+        for i, opt in ipairs(opcoes) do
+            local valor = valores and valores[i] or opt
             local ob = Instance.new("TextButton", ls)
             ob.Size = UDim2.new(1, 0, 0, 28)
             ob.BackgroundTransparency = 1
@@ -1273,10 +1274,62 @@ local function criarDropdown(parent, texto, opcoes, callback)
             ob.MouseButton1Click:Connect(function()
                 btn.Text = texto .. ": " .. tostring(opt)
                 fecharOverlay()
-                if callback then callback(opt) end
+                if callback then callback(valor) end
             end)
         end
         overlayAberto = ov
+    end)
+end
+
+local function criarCampoTecla(parent, texto, default, callback)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 40)
+    frame.BackgroundColor3 = P.elev
+    frame.BackgroundTransparency = 0.2
+    frame.BorderSizePixel = 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -86, 1, 0)
+    lbl.Position = UDim2.new(0, 14, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = texto
+    lbl.TextColor3 = P.text
+    lbl.TextSize = 11
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Parent = frame
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0, 46, 0, 26)
+    box.Position = UDim2.new(1, -58, 0.5, -13)
+    box.BackgroundColor3 = P.panel
+    box.BorderSizePixel = 0
+    box.Text = default or ""
+    box.PlaceholderText = "A-Z"
+    box.TextColor3 = P.accent
+    box.TextSize = 13
+    box.Font = Enum.Font.GothamBold
+    box.ClearTextOnFocus = false
+    box.Parent = frame
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+    local jaAplicou = false
+    local function aplicar()
+        if jaAplicou then return end
+        jaAplicou = true
+        local letra = tostring(box.Text or ""):upper():gsub("[^A-Z]", "")
+        letra = letra:sub(1, 1)
+        if letra == "" then letra = default or "A" end
+        box.Text = letra
+        if callback then callback(letra) end
+        task.delay(0.1, function() jaAplicou = false end)
+    end
+
+    box.FocusLost:Connect(aplicar)
+    box:GetPropertyChangedSignal("Text"):Connect(function()
+        if #box.Text > 1 then box.Text = box.Text:sub(#box.Text, #box.Text) end
     end)
 end
 
