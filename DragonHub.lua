@@ -1892,6 +1892,7 @@ local function acharBotoes(padroes, exigirVisivel)
     local achados = {}
     for _, raiz in ipairs(guiRaizes()) do
         for _, obj in ipairs(raiz:GetDescendants()) do
+            if #achados >= 60 then break end
             if obj:IsA("TextButton") and not obj:IsDescendantOf(gui) then
                 local t = tostring(obj.Text or ""):lower()
                 if t ~= "" then
@@ -2009,17 +2010,29 @@ local function estadoDungeon()
     if #acharBotoes({ "ready", "pronto", "start dungeon", "iniciar dungeon", "create lobby", "criar lobby" }, true) > 0 then
         st = "lobby"
     else
-        local dentro = false
+        local pastaDungeon = false
         for _, c in ipairs(WS:GetChildren()) do
-            if tostring(c.Name):lower():find("dungeon", 1, true) then dentro = true break end
+            if tostring(c.Name):lower():find("dungeon", 1, true) then pastaDungeon = true break end
             if c:IsA("Folder") or c:IsA("Model") then
                 for _, cc in ipairs(c:GetChildren()) do
-                    if tostring(cc.Name):lower():find("dungeon", 1, true) then dentro = true break end
+                    if tostring(cc.Name):lower():find("dungeon", 1, true) then pastaDungeon = true break end
                 end
-                if dentro then break end
+                if pastaDungeon then break end
             end
         end
-        if dentro then st = "dentro" end
+        if pastaDungeon then
+            local mobDungeon = false
+            for _, m in ipairs(mobs) do
+                local pai = m and m.Parent
+                if pai then
+                    if tostring(pai.Name):lower():find("dungeon", 1, true) then mobDungeon = true break end
+                    local avo = pai.Parent
+                    if avo and tostring(avo.Name):lower():find("dungeon", 1, true) then mobDungeon = true break end
+                end
+            end
+            local botaoFim = #acharBotoes({ "play again", "jogar novamente", "return to world", "voltar ao mundo" }, true) > 0
+            if mobDungeon or botaoFim then st = "dentro" end
+        end
     end
 
     _estado = st
