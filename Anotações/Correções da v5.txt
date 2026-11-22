@@ -1,0 +1,424 @@
+Blocos corrigidos — colar no DragonHub v5
+
+🔧 BLOCO 1 — Config global (colar no topo, depois dos services)
+
+```lua
+-- ═══════════════════════════════════════════════
+-- REMOTES (paths confirmados via dump de tráfego)
+-- ═══════════════════════════════════════════════
+local KnitPath = RS.Packages._Index["sleitnick_knit@1.4.7"].knit.Services
+
+local SkillMgrV2   = KnitPath.SkillManagerV2.RE
+local SkillMgr     = KnitPath.SkillManager.RE
+local SkillRemote  = RS.Remotes.SkillRemote
+
+local RE_ExecuteSkill        = SkillMgrV2.ExecuteSkill
+local RE_ExecuteSkillSpecial = SkillMgrV2.ExecuteSkill_Special
+local RE_LockedOnChanged     = SkillMgr.LockedOnChanged
+
+-- ═══════════════════════════════════════════════
+-- CONFIG de combate
+-- ═══════════════════════════════════════════════
+local CombatCfg = {
+    M1_Delay        = 0.35,   -- intervalo entre M1
+    M1_Range        = 12,     -- studs pra acertar M1
+    Skill_Delay     = 1.2,    -- intervalo entre skills
+    Skill_Range     = 30,     -- range da skill
+    Skill_Current   = "UniqueSets_2_1", -- Kamehameha por padrão
+    Skill_Slot      = 1,
+    AutoLock        = true,   -- trava alvo automaticamente
+}
+```
+
+---
+
+🔧 BLOCO 2 — M1 funcional (substitui atacar() atual)
+
+```lua
+-- ═══════════════════════════════════════════════
+-- M1 — ataque básico via SkillRemote
+-- ═══════════════════════════════════════════════
+local function m1(atargetPos)
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local cam = workspace.CurrentCamera
+    local cframe = hrp.CFrame
+    local camCF = cam and cam.CFrame or cframe
+
+    pcall(function()
+        SkillRemote:FireServer({
+            Began = true,
+            CFrame = cframe,
+            Aim = atargetPos,
+            Camera = camCF,
+            Type = 1,
+        })
+    end)
+
+    task.wait(0.05)
+
+    pcall(function()
+        SkillRemote:FireServer({
+            Began = false,
+            CFrame = cframe,
+            Aim = atargetPos,
+            Camera = camCF,
+            Type = 1,
+        })
+    end)
+end
+
+-- Lock/unlock de alvo (aumenta precisão)
+local function lockOn(nomeMob)
+    pcall(function()
+        RE_LockedOnChanged:FireServer(nomeMob or "")
+    end)
+end
+```
+
+Onde colar: substitui a função atacar() existente (linhas ~200-250 do v5).
+
+---
+
+🔧 BLOCO 3 — Skill funcional
+
+```lua
+-- ═══════════════════════════════════════════════
+-- SKILL — comando real via SkillManagerV2
+-- ═══════════════════════════════════════════════
+local function usarSkill(skillId, slot, targetPos, mobNome)
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local params = { HumCFrame = hrp.CFrame }
+
+    if targetPos then
+        params.targetPos = targetPos
+    end
+    if mobNome then
+        params.Target = mobNome
+    end
+
+    -- "Special" é obrigatório pra skills do tipo UniqueSets
+    if skillId:find("UniqueSets") then
+        pcall(function()
+            RE_ExecuteSkillSpecial:FireServer(plr.Name, skillId)
+        end)
+        task.wait(0.03)
+    end
+
+    pcall(function()
+        RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
+    end)
+end
+```
+
+Onde colar: função nova, coloca junto de atacar(). Depois liga no AutoSkill.
+
+---
+
+🔧 BLOCO 4 — Auto Farm + Auto Skill (substitui loop atual)
+
+```lua
+(decidi apagar, você entenderá no outro arquivo (o txt "2")
+
+Onde colar: substitui o loop AUTO FARM existente (linhas ~660-690 do v5).
+
+---
+
+🔧 BLOCO 5 — Dropdown de mobs (usa a estrutura nova confirmada)
+
+```lua
+-- ═══════════════════════════════════════════════
+-- LISTA DE MOBS VIVOS (WS.World Mobs.Mobs + Boss Mobs)
+-- ═══════════════════════════════════════════════
+local function getMobsVivos()
+    local lista = {}
+    local seen = {}
+
+    local function varrer(pasta)
+        if not pasta then return end
+        for _, mob in ipairs(pasta:GetChildren()) do
+            if mob:IsA("Model") and mob:FindFirstChild("Humanoid") 
+            and mob:FindFirstChild("HumanoidRootPart") then
+                local hum = mob.Humanoid
+                if hum.Health > 0 then
+                    local base = mob.Name:gsub("%-?%d+$", "")
+                    if not seen[base] then
+                        seen[base] = {nome=base, count=0}
+                    end
+                    seen[base].count = seen[base].count + 1
+                end
+            end
+        end
+    end
+
+    local wm = WS:FindFirstChild("World Mobs")
+    if wm then
+        varrer(wm:FindFirstChild("Mobs"))
+        varrer(wm:FindFirstChild("Boss Mobs"))
+    end
+
+    for _, info in pairs(seen) do
+        table.insert(lista, info)
+    end
+    table.sort(lista, function(a, b) return a.nome < b.nome end)
+    return lista
+end
+```
+
+Onde colar: substitui a função parseMobSpawns() existente. A getMobMaisProximo() continua igual, mas o mob.pos agora vem de HumanoidRootPart.Position em vez do JSON.
+
+Ajuste na getMobMaisProximo():
+
+```lua
+local function getMobMaisProximo()
+    local char = plr.Character
+    if not char then return nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local myPos = hrp.Position
+
+    local maisProximo, minD = nil, math.huge
+
+    local function checar(pasta, isBoss)
+        if not pasta then return end
+        for _, mob in ipairs(pasta:GetChildren()) do
+            if mob:IsA("Model") and mob:FindFirstChild("HumanoidRootPart") then
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health > 0 then
+                    local d = (mob.HumanoidRootPart.Position - myPos).Magnitude
+                    if d < minD then
+                        minD = d
+                        maisProximo = {
+                            model = mob,
+                            fullName = mob.Name,
+                            baseName = mob.Name:gsub("%-?%d+$", ""),
+                            pos = mob.HumanoidRootPart.Position,
+                            dist = d,
+                            isBoss = isBoss,
+                            hp = hum.Health,
+                            maxHp = hum.MaxHealth,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    local wm = WS:FindFirstChild("World Mobs")
+    if wm then
+        checar(wm:FindFirstChild("Mobs"), false)
+        checar(wm:FindFirstChild("Boss Mobs"), true)
+    end
+
+    return maisProximo
+end
+```
+
+---
+
+🔧 BLOCO 6 — ESP com HP real (substitui ESP atual)
+
+```lua
+-- ═══════════════════════════════════════════════
+-- ESP — usa Humanoid.Health direto (sem timer fake)
+-- ═══════════════════════════════════════════════
+local espGui = Instance.new("ScreenGui")
+espGui.Name = "DBH_ESP"
+espGui.ResetOnSpawn = false
+espGui.Parent = CoreGui
+
+local espCache = {}
+
+local function criarESP(mob)
+    local hrp = mob:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "DBH_ESP"
+    bb.Size = UDim2.new(0, 120, 0, 40)
+    bb.StudsOffset = Vector3.new(0, 3, 0)
+    bb.AlwaysOnTop = true
+    bb.Adornee = hrp
+    bb.Parent = espGui
+
+    local nome = Instance.new("TextLabel", bb)
+    nome.Size = UDim2.new(1, 0, 0, 18)
+    nome.BackgroundTransparency = 1
+    nome.TextColor3 = mob:FindFirstChild("Humanoid") and 
+        (mob.Parent and mob.Parent.Name == "Boss Mobs" and Color3.fromRGB(255,80,80) or Color3.fromRGB(255,200,80))
+        or Color3.new(1,1,1)
+    nome.TextStrokeTransparency = 0.5
+    nome.TextSize = 12
+    nome.Font = Enum.Font.GothamBold
+    nome.Text = mob.Name
+
+    local hpBar = Instance.new("Frame", bb)
+    hpBar.Size = UDim2.new(1, -10, 0, 6)
+    hpBar.Position = UDim2.new(0, 5, 0, 20)
+    hpBar.BackgroundColor3 = Color3.fromRGB(40,40,40)
+    hpBar.BorderSizePixel = 0
+
+    local hpFill = Instance.new("Frame", hpBar)
+    hpFill.Size = UDim2.new(1, 0, 1, 0)
+    hpFill.BackgroundColor3 = Color3.fromRGB(80,200,120)
+    hpFill.BorderSizePixel = 0
+
+    espCache[mob] = {bb=bb, hpFill=hpFill}
+end
+
+local function removerESP(mob)
+    local c = espCache[mob]
+    if c and c.bb then c.bb:Destroy() end
+    espCache[mob] = nil
+end
+
+task.spawn(function()
+    while Ativo do
+        task.wait(0.3)
+        if not ShowESP then
+            for mob in pairs(espCache) do removerESP(mob) end
+            continue
+        end
+
+        local vivos = {}
+        local wm = WS:FindFirstChild("World Mobs")
+        if wm then
+            for _, pasta in ipairs({wm:FindFirstChild("Mobs"), wm:FindFirstChild("Boss Mobs")}) do
+                if pasta then
+                    for _, mob in ipairs(pasta:GetChildren()) do
+                        if mob:IsA("Model") and mob:FindFirstChild("HumanoidRootPart") then
+                            vivos[mob] = true
+                            if not espCache[mob] then criarESP(mob) end
+                            local c = espCache[mob]
+                            local hum = mob:FindFirstChildOfClass("Humanoid")
+                            if c and hum then
+                                local pct = hum.Health / math.max(hum.MaxHealth, 1)
+                                c.hpFill.Size = UDim2.new(pct, 0, 1, 0)
+                                c.hpFill.BackgroundColor3 = pct > 0.5 and Color3.fromRGB(80,200,120)
+                                    or pct > 0.2 and Color3.fromRGB(255,200,80)
+                                    or Color3.fromRGB(220,60,60)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        for mob in pairs(espCache) do
+            if not vivos[mob] then removerESP(mob) end
+        end
+    end
+end)
+```
+
+Onde colar: substitui o bloco de ESP atual.
+
+---
+
+🔧 BLOCO 7 — Slider real (substitui botões +5/-5)
+
+```lua
+-- ═══════════════════════════════════════════════
+-- SLIDER real (arrastar)
+-- ═══════════════════════════════════════════════
+local function mkSlider(parent, label, min, max, default, cb)
+    local f = Instance.new("Frame", parent)
+    f.Size = UDim2.new(1, -8, 0, 40)
+    f.BackgroundTransparency = 1
+
+    local l = Instance.new("TextLabel", f)
+    l.Size = UDim2.new(1, 0, 0, 14)
+    l.BackgroundTransparency = 1
+    l.TextColor3 = Color3.fromRGB(220, 220, 225)
+    l.TextSize = 11
+    l.Font = Enum.Font.Gotham
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Text = label .. ": " .. default
+
+    local bar = Instance.new("Frame", f)
+    bar.Size = UDim2.new(1, 0, 0, 12)
+    bar.Position = UDim2.new(0, 0, 0, 22)
+    bar.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+    bar.BorderSizePixel = 0
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+
+    local fill = Instance.new("Frame", bar)
+    fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(255, 140, 30)
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+
+    local function setFromX(x)
+        local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+        local val = math.floor(min + (max - min) * rel)
+        fill.Size = UDim2.new(rel, 0, 1, 0)
+        l.Text = label .. ": " .. val
+        cb(val)
+    end
+
+    bar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            setFromX(i.Position.X)
+        end
+    end)
+    UIS.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
+        or i.UserInputType == Enum.UserInputType.Touch) then
+            setFromX(i.Position.X)
+        end
+    end)
+    UIS.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+```
+
+Onde colar: na aba configTab, troca os botões mkBtn(farmTab, "Attack Range: +5"...) por:
+
+```lua
+mkSlider(farmTab, "Attack Range", 5, 50, CombatCfg.M1_Range, function(v)
+    CombatCfg.M1_Range = v
+end)
+mkSlider(farmTab, "Skill Delay (x0.1s)", 3, 50, 12, function(v)
+    CombatCfg.Skill_Delay = v / 10
+end)
+mkSlider(farmTab, "Fly Speed", 50, 500, Config.FlySpeed, function(v)
+    Config.FlySpeed = v
+end)
+```
+
+---
+
+Resumo de onde colar
+
+Bloco Local no DragonHub v5
+1 (config + remotes) Topo, após local plr = ...
+2 (M1 + lock) Substitui atacar()
+3 (skill) Junto de atacar(), função nova
+4 (loop combate) Substitui o loop AUTO FARM
+5 (lista mobs) Substitui parseMobSpawns() + ajuste em getMobMaisProximo()
+6 (ESP) Substitui bloco ESP
+7 (slider) Adiciona em configTab
+
+Observações técnicas críticas
+
+1. ExecuteSkill precisa de HumCFrame correto — use hrp.CFrame no momento do disparo. Se mandar CFrame velho, o servidor rejeita.
+2. ExecuteSkill_Special é obrigatório pra UniqueSets_* — sem ele, o servidor ignora o ExecuteSkill seguinte.
+3. M1 precisa de Began=true seguido de Began=false — não dá pra só mandar true. O servidor espera o ciclo.
+4. Dano é 100% server-side — o cliente só manda "executei skill X no mob Y". Sem forjar dano.
+5. Skills disponíveis confirmadas: UniqueSets_2_1 (Kame), UniqueSets_2_2 (melee), UniqueSets_2_3 (Spirit Bomb), Weapons_3_2 (Dimensional Slash), Weapons_3_3 (Scythe).
+6. Se o servidor der kick/erro de "too many requests", aumenta Skill_Delay pra 1.5-2s. Anti-spam existe.

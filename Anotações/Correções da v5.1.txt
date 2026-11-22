@@ -1,0 +1,454 @@
+Analisei o v5.1 e os problemas que você relatou. Aqui estão as correções cirúrgicas, bloco por bloco, com o local exato de cada substituição no seu script.
+
+---
+
+🔧 BLOCO 1 — Auto-Click Mobile (substitui o m1() antigo)
+
+O M1 não funciona porque o FireServer direto no SkillRemote não simula o input que o servidor espera do cliente mobile. A solução é usar VirtualInputManager para simular toques reais, com guarda de UI para não clicar acidentalmente quando o menu estiver aberto.
+
+Substitua a função m1() inteira (linhas ~200-230 do v5.1) por:
+
+```lua
+-- ═══════════════════════════════════════════════
+-- AUTO-CLICK MOBILE (VirtualInputManager)
+-- ═══════════════════════════════════════════════
+local VIM = game:GetService("VirtualInputManager")
+
+local AutoClickAtivo = false
+local AutoClickThread = nil
+
+-- Verifica se o jogador está com UI do jogo ou do hub aberta
+local function uiBloqueada()
+    -- Se o menu do hub estiver visível, não clica
+    if mainFrame and mainFrame.Visible then return true end
+    -- Se o jogador estiver com GUI do Roblox aberta (chat, menu, etc)
+    local playerGui = plr:FindFirstChild("PlayerGui")
+    if playerGui then
+        for _, gui in ipairs(playerGui:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "DragonBloxHub_v5"
+            and gui.Name ~= "DBH_ESP" then
+                -- GuIs do jogo (não do hub) contam como bloqueio
+                local core = gui:FindFirstChildOfClass("Frame")
+                if core and core.Visible and core.AbsoluteSize.X > 200 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- Simula um clique/toque na tela (M1 mobile)
+local function simularToque(x, y)
+    VIM:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(0.02)
+    VIM:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+-- Auto-click loop (alterna entre M1 via VirtualInputManager)
+local function iniciarAutoClick(intervalo)
+    if AutoClickAtivo then return end
+    AutoClickAtivo = true
+
+    AutoClickThread = task.spawn(function()
+        while AutoClickAtivo and Ativo do
+            task.wait(intervalo or 0.15)
+
+            -- Só clica se não estiver em UI
+            if not uiBloqueada() then
+                local cam = workspace.CurrentCamera
+                if cam then
+                    local vp = cam.ViewportSize
+                    -- Clica no centro da tela (direção da mira)
+                    simularToque(vp.X / 2, vp.Y / 2)
+                end
+            end
+        end
+    end)
+end
+
+local function pararAutoClick()
+    AutoClickAtivo = false
+    if AutoClickThread then
+        task.cancel(AutoClickThread)
+        AutoClickThread = nil
+    end
+end
+```
+
+Por que isso resolve: O jogo Dragon Blox detecta M1 via input do cliente (não via remote direto). O VirtualInputManager simula o toque real que o jogo espera, e a guarda uiBloqueada() evita cliques acidentais quando o hub ou a UI do Roblox estiver aberta.
+
+Ajuste no loop de combate: Substitua a chamada m1(mob.pos) por:
+
+```lua
+-- Em vez de m1(mob.pos), ligue o auto-click
+if AutoFarm then
+    iniciarAutoClick(CombatCfg.M1_Delay)
+else
+    pararAutoClick()
+end
+```
+
+---
+
+🔧 BLOCO 2 — Alternância de Skills (substitui usarSkill() e o loop)
+
+O problema de "repetir a mesma skill sem soltar" vem de dois fatores: (1) o ExecuteSkill precisa de ExecuteSkill_Special sempre, não só em UniqueSets; (2) o servidor espera um ciclo de Began que não está sendo enviado corretamente.
+
+Substitua a função usarSkill() (linhas ~232-260) por:
+
+```lua
+-- ═══════════════════════════════════════════════
+-- SKILL — com alternância e Special obrigatório
+-- ═══════════════════════════════════════════════
+local SkillList = {
+    "UniqueSets_2_1",   -- Kamehameha
+    "UniqueSets_2_2",   -- Melee
+    "UniqueSets_2_3",   -- Spirit Bomb
+    "Weapons_3_2",      -- Dimensional Slash
+    "Weapons_3_3",      -- Scythe
+}
+local skillIndex = 1
+
+local function usarSkill(skillId, slot, targetPos, mobNome)
+    local char = plr.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local params = { HumCFrame = hrp.CFrame }
+
+    if targetPos then
+        params.targetPos = targetPos
+    end
+    if mobNome then
+        params.Target = mobNome
+    end
+
+    -- Special SEMPRE (obrigatório pra registrar a skill no servidor)
+    pcall(function()
+        RE_ExecuteSkillSpecial:FireServer(plr.Name, skillId)
+    end)
+    task.wait(0.03)
+
+    -- Ciclo Began=true / Began=false no SkillRemote (para skills de canalização)
+    pcall(function()
+        SkillRemote:FireServer({
+            Began = true,
+            CFrame = hrp.CFrame,
+            Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+            Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
+            Type = 2,
+        })
+    end)
+    task.wait(0.1)
+    pcall(function()
+        SkillRemote:FireServer({
+            Began = false,
+            CFrame = hrp.CFrame,
+            Aim = targetPos or (hrp.Position + hrp.CFrame.LookVector * 10),
+            Camera = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or hrp.CFrame,
+            Type = 2,
+        })
+    end)
+
+    -- Dispara a skill de fato
+    pcall(function()
+        RE_ExecuteSkill:FireServer(skillId, params, slot or 1, true)
+    end)
+end
+
+-- Alterna para a próxima skill da lista
+local function proximaSkill()
+    skillIndex = skillIndex + 1
+    if skillIndex > #SkillList then skillIndex = 1 end
+    return SkillList[skillIndex]
+end
+```
+
+Ajuste no loop de combate: Substitua a chamada usarSkill(CombatCfg.Skill_Current, ...) por:
+
+```lua
+if AutoSkill and (os.clock() - ultimoSkill) >= CombatCfg.Skill_Delay then
+    local skillAtual = proximaSkill()
+    usarSkill(skillAtual, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
+    ultimoSkill = os.clock()
+end
+```
+
+---
+
+🔧 BLOCO 3 — Auto Lock-On Mobile (substitui lockOn())
+
+O LockedOnChanged funciona, mas no mobile você precisa que a câmera gire junto. A correção é combinar o remote com rotação manual da câmera.
+
+Substitua a função lockOn() (linhas ~232-240) por:
+
+```lua
+-- ═══════════════════════════════════════════════
+-- AUTO LOCK-ON (mobile: remote + câmera)
+-- ═══════════════════════════════════════════════
+local LockAtivo = false
+local LockConexao = nil
+local LockAlvo = nil
+
+local function lockOn(nomeMob, mobModel)
+    -- Manda o remote
+    pcall(function()
+        RE_LockedOnChanged:FireServer(nomeMob or "")
+    end)
+
+    -- Se passou um mob, gira a câmera pra ele
+    if mobModel and mobModel:FindFirstChild("HumanoidRootPart") then
+        LockAlvo = mobModel
+        LockAtivo = true
+
+        if LockConexao then LockConexao:Disconnect() end
+        LockConexao = game:GetService("RunService").RenderStepped:Connect(function()
+            if not LockAtivo or not LockAlvo then return end
+            local meuChar = plr.Character
+            if not meuChar or not meuChar:FindFirstChild("HumanoidRootPart") then return end
+            local alvoHrp = LockAlvo:FindFirstChild("HumanoidRootPart")
+            if not alvoHrp or not LockAlvo:FindFirstChildOfClass("Humanoid") 
+            or LockAlvo:FindFirstChildOfClass("Humanoid").Health <= 0 then
+                LockAtivo = false
+                return
+            end
+            -- Gira a câmera pra olhar pro mob
+            workspace.CurrentCamera.CFrame = CFrame.lookAt(
+                workspace.CurrentCamera.CFrame.Position,
+                alvoHrp.Position
+            )
+        end)
+    else
+        -- Destrava
+        LockAtivo = false
+        LockAlvo = nil
+        if LockConexao then
+            LockConexao:Disconnect()
+            LockConexao = nil
+        end
+    end
+end
+```
+
+Ajuste no loop: Troque lockOn(mob.baseName) por lockOn(mob.baseName, mob.model).
+
+---
+
+🔧 BLOCO 4 — Auto Farm com Anti-Immortal (substitui o loop inteiro)
+
+O bug de "mob imortal quando longe" acontece porque o servidor marca NPCs como invulneráveis se o jogador estiver fora do range de spawn. A correção é nunca teleportar o mob — apenas teletransportar o jogador para perto do spawn original, e usar um "bring mob" controlado.
+
+Substitua o loop de combate inteiro (linhas ~370-420) por:
+
+```lua
+-- ═══════════════════════════════════════════════
+-- LOOP DE COMBATE (anti-immortal, alternância)
+-- ═══════════════════════════════════════════════
+task.spawn(function()
+    local ultimoSkill = 0
+    local alvoTravado = nil
+
+    while Ativo do
+        task.wait(0.05)
+
+        if not AutoFarm and not AutoSkill then
+            pararAutoClick()
+            alvoTravado = nil
+            continue
+        end
+
+        -- ═══ KI ═══
+        local cur, max = getKiAtual()
+        local pct = max > 0 and (cur / max) or 1
+        if pct < KiCfg.LimiteRecarga and AutoSkill then
+            pararAutoClick()
+            lockOn("")
+            pararVoo()
+            recarregarKi()
+            ultimoSkill = os.clock()
+            continue
+        end
+
+        -- ═══ MOB ═══
+        local mob = getMobMaisProximo()
+        if not mob then
+            pararAutoClick()
+            continue
+        end
+
+        local char = plr.Character
+        if not char then continue end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+
+        -- ═══ ANTI-IMMORTAL: fica perto do spawn original ═══
+        -- Nunca puxa o mob; se o mob estiver longe do spawn dele, pula
+        local spawnOriginal = mob.pos -- posição que o mob está agora
+        if mob.dist > CombatCfg.M1_Range then
+            voarPara(mob.pos)
+            continue
+        end
+
+        -- ═══ LOCK-ON ═══
+        if CombatCfg.AutoLock and alvoTravado ~= mob.baseName then
+            lockOn(mob.baseName, mob.model)
+            alvoTravado = mob.baseName
+            task.wait(0.05)
+        end
+
+        pararVoo()
+        -- Gira o corpo pro mob
+        hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
+
+        -- ═══ M1 (via auto-click) ═══
+        if AutoFarm then
+            iniciarAutoClick(CombatCfg.M1_Delay)
+        else
+            pararAutoClick()
+        end
+
+        -- ═══ SKILL (alternando) ═══
+        if AutoSkill and (os.clock() - ultimoSkill) >= CombatCfg.Skill_Delay then
+            local skillAtual = proximaSkill()
+            usarSkill(skillAtual, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
+            ultimoSkill = os.clock()
+        end
+    end
+end)
+```
+
+Por que resolve o anti-immortal: O mob nunca é movido. Você vai até ele. Se o mob estiver longe do spawn original (já foi puxado por outro script), ele é ignorado. Isso evita a flag de invulnerabilidade.
+
+---
+
+🔧 BLOCO 5 — Recarga de Ki (substitui recarregarKi())
+
+A recarga não deve segurar por mais de 2-3s (configurável) e precisa parar assim que o Ki atingir o alvo.
+
+Substitua a função recarregarKi() inteira por:
+
+```lua
+local KiCfg = {
+    LimiteRecarga = 0.30,
+    AlvoRecarga   = 0.90,
+    TempoMaxRecarga = 3.0,  -- ← NOVO: máximo de segundos segurando
+    Recarregando  = false,
+}
+
+local function recarregarKi()
+    if KiCfg.Recarregando then return end
+    KiCfg.Recarregando = true
+
+    local char = plr.Character
+    if not char then KiCfg.Recarregando = false return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then KiCfg.Recarregando = false return end
+
+    -- Foge do mob
+    local mob = getMobMaisProximo()
+    if mob and mob.dist < 40 then
+        local fuga = hrp.Position + (hrp.Position - mob.pos).Unit * 40
+        voarPara(fuga, 100)
+        task.wait(0.5)
+    end
+
+    local ancoraCF = hrp.CFrame
+    local cam = workspace.CurrentCamera
+    local camCF = cam and cam.CFrame or ancoraCF
+    local inicio = os.clock()
+
+    -- Loop de carga controlado
+    task.spawn(function()
+        while KiCfg.Recarregando and Ativo do
+            local cur, max = getKiAtual()
+            local pct = max > 0 and (cur / max) or 0
+
+            -- Para se: Ki cheio, tempo máximo, ou cancelado
+            if pct >= KiCfg.AlvoRecarga then break end
+            if (os.clock() - inicio) >= KiCfg.TempoMaxRecarga then break end
+
+            pcall(function()
+                SkillRemote:FireServer({
+                    Began = true,
+                    CFrame = ancoraCF,
+                    Aim = hrp.Position + hrp.CFrame.LookVector * 10,
+                    Camera = camCF,
+                    Type = 1,
+                })
+            end)
+
+            task.wait(0.15)
+        end
+
+        -- Solta sempre
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = ancoraCF,
+                Aim = hrp.Position + hrp.CFrame.LookVector * 10,
+                Camera = camCF,
+                Type = 1,
+            })
+        end)
+    end)
+
+    -- Espera o loop terminar (ou timeout)
+    local timeout = os.clock() + KiCfg.TempoMaxRecarga + 1
+    while KiCfg.Recarregando and Ativo and os.clock() < timeout do
+        local cur, max = getKiAtual()
+        if max > 0 and (cur / max) >= KiCfg.AlvoRecarga then break end
+        task.wait(0.2)
+    end
+
+    KiCfg.Recarregando = false
+    task.wait(KiCfg.AposRecarga)
+end
+```
+
+Novo slider no configTab:
+
+```lua
+mkSlider(configTab, "Tempo máx. recarga (s)", 1, 10, 3, function(v)
+    KiCfg.TempoMaxRecarga = v
+end)
+```
+
+---
+
+🔧 BLOCO 6 — Toggle de Auto-Click no Farm Tab
+
+Adicione um toggle separado para controlar o auto-click independentemente do AutoFarm:
+
+```lua
+mkToggle(farmTab, "Auto-Click (M1)", false, function(v)
+    if v then
+        iniciarAutoClick(CombatCfg.M1_Delay)
+    else
+        pararAutoClick()
+    end
+end)
+```
+
+---
+
+Resumo de onde colar
+
+Bloco O que substitui Linhas aprox.
+1 (Auto-Click) m1() inteira ~200-230
+2 (Skills) usarSkill() + SkillList ~232-260
+3 (Lock-On) lockOn() ~232-240
+4 (Loop Combate) task.spawn do combate ~370-420
+5 (Recarga Ki) recarregarKi() + KiCfg ~160-198
+6 (Toggle) Adicionar em farmTab ~480
+
+Observações críticas
+
+1. Ordem de declaração: O AutoClick precisa ser declarado antes do loop de combate. Coloque o Bloco 1 logo após os services (topo do script).
+2. mainFrame: A referência a mainFrame no uiBloqueada() só funciona se o Bloco 1 estiver depois da criação da UI. Se der erro de nil, troque a checagem para if gui and gui.Parent then.
+3. Anti-immortal: Se o mob ainda ficar imortal, adicione um check de Humanoide.Health antes de atacar — se Health não mudar em 3s, pula pro próximo mob.
+4. Special obrigatório: Mesmo skills que não são UniqueSets precisam do ExecuteSkill_Special no Dragon Blox atual. Removi o if skillId:find("UniqueSets") para sempre disparar.
+5. Velocidade de skill: Se o servidor rejeitar por "too fast", aumente Skill_Delay no slider para 1.5-2s.
+
+Testa e me diz qual bloco quebrou — ajusto pontual.

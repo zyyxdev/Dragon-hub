@@ -1,0 +1,228 @@
+Sim, isso aparece no dump. Vou te mostrar onde e como implementar.
+
+O que o dump revela sobre Ki
+
+Player status exposto em Workspace:
+
+```
+WS.Characters.maximpaloro.Status.CurrentEnergy
+WS.Characters.maximpaloro.Status.MaxEnergy
+WS.Characters.maximpaloro.Status.EnergyBlast
+```
+
+E o log de tráfego mostrou o mecanismo de carga:
+
+```
+[RECEBIDO] SkillRemote | "FinalEnergyWaveCharging" | {Min=300, Duration=3, Max=400}
+[RECEBIDO] SkillRemote | "EnergyWaveCharging" | {Min=250, Duration=5, Max=350}
+[RECEBIDO] SkillRemote | "SupernovaCharging" | {Min=1, Duration=3, Max=130}
+[RECEBIDO] SkillRemote | "TriBeamCharging" | {Min=400, Duration=10, Max=600}
+[RECEBIDO] SkillRemote | "StardustBreakerCharging" | {Min=0.1, Duration=2.5, Max=1.4}
+```
+
+E o comando que o cliente manda pra carregar (você segurou o botão):
+
+```
+[ENVIADO] SkillRemote | {Began=true, CFrame=..., Aim=..., Camera=..., Type=1, ...}
+[ENVIADO] SkillRemote | {Began=true, ... Velocity=V3(36,22,-70), ...}   ← segurou
+[ENVIADO] SkillRemote | {Began=false, ...}                              ← soltou
+```
+
+Traduzindo: segurar o botão de M1/skill = ciclo Began=true repetido. O servidor responde com <Skill>Charging pra informar Min/Duration/Max da carga. Quando você solta (Began=false), a skill dispara com a energia acumulada.
+
+Como detectar energia baixa
+
+Direto do Workspace, sem remote:
+
+```lua
+local function getKiAtual()
+    local char = plr.Character
+    if not char then return 0, 0 end
+    local status = char:FindFirstChild("Status")
+    if not status then return 0, 0 end
+    local cur = status:FindFirstChild("CurrentEnergy")
+    local max = status:FindFirstChild("MaxEnergy")
+    if not cur or not max then return 0, 0 end
+    return cur.Value, max.Value
+end
+
+local function kiPercentual()
+    local cur, max = getKiAtual()
+    if max <= 0 then return 0 end
+    return cur / max
+end
+```
+
+Bloco de auto-recarregar Ki
+
+```lua
+-- ═══════════════════════════════════════════════
+-- AUTO RECHARGE KI
+-- Quando Ki < threshold, segura M1 sem aim (carga pura)
+-- ═══════════════════════════════════════════════
+local KiCfg = {
+    LimiteRecarga = 0.30,   -- recarrega se Ki < 30%
+    AlvoRecarga   = 0.90,   -- para de recarregar em 90%
+    AposRecarga   = 0.5,    -- pausa após terminar
+    Recarregando  = false,
+}
+
+local function recarregarKi()
+    if KiCfg.Recarregando then return end
+    KiCfg.Recarregando = true
+
+    local char = plr.Character
+    if not char then KiCfg.Recarregando = false return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then KiCfg.Recarregando = false return end
+
+    -- sai de perto do mob (não quer morrer carregando)
+    -- opção A: foge 40 studs pra trás
+    local mob = getMobMaisProximo()
+    if mob and mob.dist < 40 then
+        local fuga = hrp.Position + (hrp.Position - mob.pos).Unit * 40
+        voarPara(fuga, 100)
+        task.wait(0.8)
+    end
+
+    -- trava na posição atual
+    local ancoraCF = hrp.CFrame
+
+    -- manda Began=true continuamente (é isso que carrega Ki)
+    local cam = workspace.CurrentCamera
+    local camCF = cam and cam.CFrame or ancoraCF
+
+    task.spawn(function()
+        local inicio = os.clock()
+        while KiCfg.Recarregando and Ativo do
+            local cur, max = getKiAtual()
+            local pct = max > 0 and cur / max or 0
+
+            if pct >= KiCfg.AlvoRecarga then break end
+            if (os.clock() - inicio) > 15 then break end -- timeout segurança
+
+            pcall(function()
+                SkillRemote:FireServer({
+                    Began = true,
+                    CFrame = ancoraCF,
+                    Aim = hrp.Position + hrp.CFrame.LookVector * 10,
+                    Camera = camCF,
+                    Type = 1,
+                })
+            end)
+
+            task.wait(0.15)
+        end
+
+        -- solta
+        pcall(function()
+            SkillRemote:FireServer({
+                Began = false,
+                CFrame = ancoraCF,
+                Aim = hrp.Position + hrp.CFrame.LookVector * 10,
+                Camera = camCF,
+                Type = 1,
+            })
+        end)
+    end)
+
+    -- espera o loop interno terminar
+    while KiCfg.Recarregando and Ativo do
+        local cur, max = getKiAtual()
+        if max > 0 and (cur / max) >= KiCfg.AlvoRecarga then break end
+        task.wait(0.2)
+    end
+
+    KiCfg.Recarregando = false
+    task.wait(KiCfg.AposRecarga)
+end
+```
+
+Onde colar: junto dos outros helpers de combate (depois de usarSkill).
+
+Integrar no loop de combate
+
+Troca o bloco 4 que eu te mandei por essa versão com verificação de Ki:
+
+```lua
+task.spawn(function()
+    local ultimoM1 = 0
+    local ultimoSkill = 0
+    local alvoTravado = nil
+
+    while Ativo do
+        task.wait(0.05)
+
+        if not AutoFarm and not AutoSkill then
+            alvoTravado = nil
+            continue
+        end
+
+        -- ═══ CHECA KI ANTES DE QUALQUER COISA ═══
+        local cur, max = getKiAtual()
+        local pct = max > 0 and (cur / max) or 1
+
+        if pct < KiCfg.LimiteRecarga and AutoSkill then
+            lockOn("")                    -- destrava alvo
+            pararVoo()
+            recarregarKi()
+            ultimoSkill = os.clock()      -- evita usar skill logo depois
+            continue
+        end
+
+        -- ═══ COMBATE NORMAL ═══
+        local mob = getMobMaisProximo()
+        if not mob then continue end
+
+        local char = plr.Character
+        if not char then continue end
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+
+        if CombatCfg.AutoLock and alvoTravado ~= mob.baseName then
+            lockOn(mob.baseName)
+            alvoTravado = mob.baseName
+            task.wait(0.05)
+        end
+
+        if mob.dist > CombatCfg.M1_Range then
+            voarPara(mob.pos)
+            continue
+        end
+
+        pararVoo()
+        hrp.CFrame = CFrame.new(hrp.Position, mob.pos)
+
+        if AutoFarm and (os.clock() - ultimoM1) >= CombatCfg.M1_Delay then
+            m1(mob.pos)
+            ultimoM1 = os.clock()
+        end
+
+        if AutoSkill and (os.clock() - ultimoSkill) >= CombatCfg.Skill_Delay then
+            usarSkill(CombatCfg.Skill_Current, CombatCfg.Skill_Slot, mob.pos, mob.baseName)
+            ultimoSkill = os.clock()
+        end
+    end
+end)
+```
+
+Aba de config (adiciona esses sliders)
+
+```lua
+mkSlider(configTab, "Ki mín. p/ recarregar (%)", 10, 80, 30, function(v)
+    KiCfg.LimiteRecarga = v / 100
+end)
+mkSlider(configTab, "Ki alvo pós-recarga (%)", 50, 100, 90, function(v)
+    KiCfg.AlvoRecarga = v / 100
+end)
+```
+
+Notas técnicas
+
+1. Não precisa de remote extra pra recarregar — o mecanismo é o próprio SkillRemote com Began=true. O Aim apontando pra frente (sem mob) evita que dispare em algo.
+2. Fugir do mob antes de recarregar é opcional mas recomendado. Se você tem AutoFarm ligado e o mob bate forte, recarregar colado nele = morte. Ajusta 40 studs conforme seu HP.
+3. Min/Duration/Max no charge — o Duration é o tempo máximo de carga. Se seu Ki chegar a 90% antes, para. Se não chegar em 15s (timeout), libera e continua o farm. Não fica preso.
+4. Se a energia não subir mesmo com Began=true spam — aí significa que o servidor só valida carga em skill específica (tipo EnergyBlast). Nesse caso, eu troco o bloco pra chamar uma skill de carga dedicada. Testa e me diz.
+5. EnergyBlast aparece no seu Status do Workspace. Se quiser charge mais rápido, dá pra mandar EnergyBlast como Type específico. Mas primeiro testa o approach genérico.
+
+Testa e me diz se o Ki sobe. Se não subir, me manda o log da aba [ENVIADO] SkillRemote durante a carga manual (segurando o botão) que eu extraio o formato exato que o jogo usa.
