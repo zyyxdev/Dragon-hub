@@ -328,8 +328,10 @@ local function snapshot()
             mobs and #mobs:GetChildren() or 0,
             bosses and #bosses:GetChildren() or 0)
     end
-    if #out > 0 then S.snap[#S.snap + 1 > 400 and 400 or #S.snap + 1] = table.concat(out, " ") end
-    if #S.snap > 400 then table.remove(S.snap, 1) end
+    if #out > 0 then
+        S.snap[#S.snap + 1] = table.concat(out, " ")
+        if #S.snap > 400 then table.remove(S.snap, 1) end
+    end
 end
 
 local FILTRO_DROP = { "drop", "orb", "star", "dragonball", "sphere", "chest", "bau", "baú", "boss" }
@@ -419,8 +421,7 @@ local function save(quiet)
         pcall(writefile, FILE, txt)
         pcall(writefile, MAPF, buildMap())
         S.appended = #S.raw
-    end
-    if ENV.setclipboard then pcall(setclipboard, txt) end
+    end    if ENV.setclipboard then pcall(setclipboard, txt) end
     if not quiet then
         pcall(print, ("[D10] salvo %s (%d unicos / %d chamadas)"):format(FILE, S.uniq, S.total))
     end
@@ -568,8 +569,9 @@ end)
 task.spawn(function()
     while gui.Parent do
         task.wait(20)
-        if canFile and S.active then
-            local chunk = table.concat(S.raw, "\n", math.max(1, #S.raw - 300))
+        if canFile and S.active and S.appended < #S.raw then
+            local chunk = table.concat(S.raw, "\n", S.appended + 1, #S.raw)
+            S.appended = #S.raw
             pcall(appendfile, FILE, "\n" .. chunk .. "\n")
         end
     end
