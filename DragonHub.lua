@@ -1898,7 +1898,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.5"
+local HUB_VERSAO = "6.6"
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
@@ -1927,7 +1927,8 @@ end)
 
 local dragging = false
 local dragTipo = nil
-local posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+local dragInicio = Vector2.new()
+local posInicio = Vector2.new()
 
 pcall(function() header.Active = true end)
 pcall(function() titulo.Active = true end)
@@ -1943,20 +1944,24 @@ local function comecarDrag(i)
     end
     dragging = true
     dragTipo = i.UserInputType
-    posAtual = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
+    dragInicio = i.Position
+    posInicio = Vector2.new(janela.Position.X.Offset, janela.Position.Y.Offset)
 end
 
-local function moverDrag(delta)
+local function moverPara(pos)
     if not dragging then return end
-    if not delta or (delta.X == 0 and delta.Y == 0) then return end
-    posAtual = Vector2.new(posAtual.X + delta.X, posAtual.Y + delta.Y)
     local cam = workspace.CurrentCamera
     local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    local d = pos - dragInicio
+    local nx = posInicio.X + d.X
+    local ny = posInicio.Y + d.Y
     local maxX = vp.X - janela.AbsoluteSize.X
     local maxY = vp.Y - janela.AbsoluteSize.Y
-    if maxX > 0 then posAtual = Vector2.new(math.clamp(posAtual.X, 0, maxX), posAtual.Y) end
-    if maxY > 0 then posAtual = Vector2.new(posAtual.X, math.clamp(posAtual.Y, 0, maxY)) end
-    janela.Position = UDim2.new(0, posAtual.X, 0, posAtual.Y)
+    if maxX > 0 then nx = math.clamp(nx, 0, maxX) else nx = math.clamp(nx, -400, 400) end
+    if maxY > 0 then ny = math.clamp(ny, 0, maxY) else ny = math.clamp(ny, -400, 400) end
+    janela.Position = UDim2.new(0, nx, 0, ny)
+    posInicio = Vector2.new(nx, ny)
+    dragInicio = pos
 end
 
 header.InputBegan:Connect(comecarDrag)
@@ -1973,13 +1978,12 @@ end)
 UserInputService.InputChanged:Connect(function(i)
     if not dragging or dragTipo ~= Enum.UserInputType.MouseButton1 then return end
     if i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-    moverDrag(i.Delta)
+    moverPara(i.Position)
 end)
 
-UserInputService.TouchMoved:Connect(function(touch, gp)
+UserInputService.TouchMoved:Connect(function(touch, _)
     if not dragging or dragTipo ~= Enum.UserInputType.Touch then return end
-    if gp then return end
-    moverDrag(touch.Delta)
+    moverPara(touch.Position)
 end)
 
 btnMin.MouseButton1Click:Connect(function()
