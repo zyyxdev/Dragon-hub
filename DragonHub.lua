@@ -123,6 +123,7 @@ local Config = {
     SkillDelay = 1.5,
     SkillTodos = true,
     TrackerAuto = true,
+    TransformTecla = "Y",
     AutoTecnica = false,
     TecnicaTecla = "M",
     AutoFusion = false,
@@ -518,6 +519,35 @@ local function getAlvo()
         end
     end
     return closest
+end
+
+local function alvoVisivel(alvo)
+    if not alvo or not alvo.Parent then return false end
+    local cam = workspace.CurrentCamera
+    local char = plr.Character
+    if not cam or not char then return false end
+    local mh = alvo:FindFirstChild("Head") or alvo:FindFirstChild("HumanoidRootPart")
+    if not mh then return false end
+
+    local ok, sp = pcall(function() return cam:WorldToViewportPoint(mh.Position) end)
+    if not ok or not sp or sp.Z <= 0 then return false end
+    local vp = cam.ViewportSize
+    if sp.X < 0 or sp.Y < 0 or sp.X > vp.X or sp.Y > vp.Y then return false end
+
+    local params = RaycastParams.new()
+    local okTipo = pcall(function() params.FilterType = Enum.RaycastFilterType.Exclude end)
+    if not okTipo then
+        pcall(function() params.FilterType = Enum.RaycastFilterType.Blacklist end)
+    end
+    params.FilterDescendantsInstances = { char }
+
+    local origem = cam.CFrame.Position
+    local okRay, hit = pcall(function()
+        return workspace:Raycast(origem, mh.Position - origem, params)
+    end)
+    if not okRay then return true end
+    if hit and not hit.Instance:IsDescendantOf(alvo) then return false end
+    return true
 end
 
 -- [HITBOX]
@@ -1383,8 +1413,12 @@ criarToggle(farmTab, "Auto Regen (energia)", false, function(v) Config.AutoRegen
 criarSecao(farmTab, "Transformações")
 criarDropdown(farmTab, "Forma", {
     "SSJAngel", "SSJDemon3", "SSJSunGod", "SSJChristmas",
-    "UltraInstinct", "SSJBlue", "SSJGod", "Base",
+    "SeijinDemonPerfect", "DemonSeijin", "UltraInstinct",
+    "SSJBlue", "SSJGod", "Base",
 }, function(v) Config.TransformMode = v end)
+criarCampoTecla(farmTab, "Tecla Transformar", Config.TransformTecla, function(v)
+    Config.TransformTecla = v
+end)
 criarToggle(farmTab, "Auto Técnica", false, function(v) Config.AutoTecnica = v end)
 criarCampoTecla(farmTab, "Tecla Técnica", Config.TecnicaTecla, function(v)
     Config.TecnicaTecla = v
@@ -1864,7 +1898,7 @@ end)
 -- [ABA SOBRE]
 local sobreTab = criarAba("sobre", "ℹ Sobre")
 criarSecao(sobreTab, "Info")
-local HUB_VERSAO = "6.4"
+local HUB_VERSAO = "6.5"
 criarLabel(sobreTab, "🐉 Dragon Blox Hub\n\nzyyx & elliot\nv" .. HUB_VERSAO, 80)
 print("[DBH] hub v" .. HUB_VERSAO .. " carregado em " .. os.date("%H:%M:%S"))
 local infoServidor = criarLabel(sobreTab, "Carregando...", 100)
@@ -2061,7 +2095,7 @@ task.spawn(function()
         if farmLigado() and Config.SkillMode ~= "off" and not emRegen and not COL.pausa
             and os.clock() - SK.ultimo >= math.max(0.25, Config.SkillDelay) then
             local alvo = getAlvo()
-            if alvo and alvo.Parent then
+            if alvo and alvo.Parent and (LockAlvo == alvo or alvoVisivel(alvo)) then
                 if Config.SkillMode == "todos" then
                     SK.ultimo = os.clock()
                     apertarSkill()
@@ -2124,7 +2158,7 @@ task.spawn(function()
             if not TRANS.aplicada or os.clock() - TRANS.ultimaTecla > 8 then
                 TRANS.aplicada = true
                 TRANS.ultimaTecla = os.clock()
-                local ok = teclaPorNome("Y")
+                local ok = teclaPorNome(Config.TransformTecla or "Y")
                 print(("[DBH] transform Y ok=%s forma=%s"):format(tostring(ok), tostring(atual)))
             end
         else
