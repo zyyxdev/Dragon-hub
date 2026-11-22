@@ -14,52 +14,75 @@ local function safe(fn)
     return ok
 end
 
--- [REMOTES] descoberta em runtime — sem versão fixa do Knit
-local KnitSVC
+-- [REMOTES] pós-update: tudo mora em RS.Network.<Service>.RE/RF
+-- (Knit em Packages._Index virou legado — mantido só como fallback)
+local SVC = {}
 safe(function()
-    local pk = RS:FindFirstChild("Packages")
-    local idx = pk and pk:FindFirstChild("_Index")
-    local best, score
-    if idx then
-        for _, pkg in ipairs(idx:GetChildren()) do
-            if pkg.Name:find("knit", 1, true) then
-                local a, b, c = pkg.Name:match("@(%d+)%.?(%d*)%.?(%d*)$")
-                local sc = (tonumber(a) or 0) * 1e6 + (tonumber(b) or 0) * 1e3 + (tonumber(c) or 0)
-                if not score or sc > score then best, score = pkg, sc end
+    local function addService(svcName, svc)
+        local entry = { RE = {}, RF = {} }
+        for _, tipo in ipairs({ "RE", "RF" }) do
+            local g = svc and svc:FindFirstChild(tipo)
+            if g then
+                for _, r in ipairs(g:GetChildren()) do
+                    if r:IsA("RemoteEvent") or r:IsA("RemoteFunction")
+                        or r:IsA("UnreliableRemoteEvent") then
+                        entry[tipo][r.Name] = r
+                    end
+                end
             end
         end
+        SVC[svcName] = entry
     end
-    -- 1) pasta Services replicada como árvore (padrão atual)
-    local folder = best and (best:FindFirstChild("Services")
-        or (best:FindFirstChild("knit") and best.knit:FindFirstChild("Services")))
-    if folder then
-        local svcs = {}
-        for _, svc in ipairs(folder:GetChildren()) do
-            local entry = { RE = {}, RF = {} }
-            for _, tipo in ipairs({ "RE", "RF" }) do
-                local g = svc:FindFirstChild(tipo)
-                if g then for _, r in ipairs(g:GetChildren()) do entry[tipo][r.Name] = r end end
+
+    -- 1) RS.Network — caminho confirmado no dump de 22/11
+    local net = RS:FindFirstChild("Network")
+    if net then
+        for _, svc in ipairs(net:GetChildren()) do addService(svc.Name, svc) end
+    end
+
+    -- 2) Knit legado (se um dia voltar)
+    if not next(SVC) then
+        local pk = RS:FindFirstChild("Packages")
+        local idx = pk and pk:FindFirstChild("_Index")
+        if idx then
+            for _, pkg in ipairs(idx:GetChildren()) do
+                if pkg.Name:find("knit", 1, true) then
+                    local folder = pkg:FindFirstChild("Services")
+                        or (pkg:FindFirstChild("knit") and pkg.knit:FindFirstChild("Services"))
+                    if folder then
+                        for _, svc in ipairs(folder:GetChildren()) do addService(svc.Name, svc) end
+                    end
+                end
             end
-            svcs[svc.Name] = entry
         end
-        KnitSVC = svcs
-    end
-    -- 2) require do módulo
-    if not KnitSVC and best then
-        local mod = best:FindFirstChild("knit") or best:FindFirstChild("Knit")
-        local ok, lib = pcall(require, mod)
-        if ok and type(lib) == "table" and lib.Services then KnitSVC = lib.Services end
     end
 end)
 
-local function resolveRemote(service, kind, name)
-    local s = KnitSVC and KnitSVC[service]
-    local r = s and s[kind] and s[kind][name]
-    if typeof(r) == "Instance" then return r end
-    -- fallback por nome em ReplicatedStorage
-    for _, d in ipairs(RS:GetDescendants()) do
-        if d.Name == name and (d:IsA("RemoteEvent") or d:IsA("RemoteFunction")) then return d end
+local function resolveRemote(service, kind, ...)
+    local s = SVC[service]
+    if s then
+        for _, nome in ipairs({ ... }) do
+            local r = s[kind][nome]
+            if typeof(r) == "Instance" then return r end
+        end
     end
+    for _, nome in ipairs({ ... }) do
+        for _, svc in pairs(SVC) do
+            for _, tipo in ipairs({ "RE", "RF" }) do
+                for name, r in pairs(svc[tipo]) do
+                    if name == nome then return r end
+                end
+            end
+        end
+    end
+end
+
+-- works em RE e RF sem o script ter que saber qual é qual
+local function callRemote(r, ...)
+    if not r then return end
+    safe(function()
+        if r:IsA("RemoteFunction") then r:InvokeServer(...) else r:FireServer(...) end
+    end)
 end
 
 local ExecuteSkill         = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill")
@@ -67,8 +90,9 @@ local ExecuteSkill_Special = resolveRemote("SkillManagerV2", "RE", "ExecuteSkill
 local RequestRebirth       = resolveRemote("PlayerLevelService", "RF", "RequestRebirth")
 local PromptRemote         = resolveRemote("PromptService", "RE", "Prompt")
 local SuperFlight          = resolveRemote("FlightService", "RE", "SuperFlight")
-local SelectMode           = resolveRemote("ModeTransformService", "RE", "SelectMode")
-local ToolbarRemote        = resolveRemote("ToolService", "RE", "UpdatePlayerToolbarSelection")
+local SelectMode           = resolveRemote("ModeTransformService", "RE", "SelectMode", "ChangeModeInherit", "ChangeMode")
+local ToolbarRemote        = resolveRemote("ToolService", "RF", "ChangeToolbarSlotRequest")
+    or resolveRemote("ToolService", "RE", "UpdatePlayerToolbarSelection")
 local LockedOnRemote       = resolveRemote("SkillManager", "RE", "LockedOnChanged")
 local SkillRemote          = RS:FindFirstChild("Remotes") and RS.Remotes:FindFirstChild("SkillRemote")
 
