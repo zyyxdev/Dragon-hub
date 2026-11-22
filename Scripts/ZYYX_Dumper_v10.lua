@@ -51,7 +51,7 @@ local SCAN = { active = false, nodes = 0, remotes = 0, token = 0 }
 local CONNS = {}
 local GUI_CONNS = {}
 local HOOK_ORIG = {}
-local HOOK = { active = false, budget = 0, janela = 0, maxPorSeg = 40, n = 0 }
+local HOOK = { active = false, nivel = 0, budget = 0, janela = 0, maxPorSeg = 40 }
 local pathCache = setmetatable({}, { __mode = "k" })
 local wiped = false
 
@@ -398,29 +398,54 @@ desligarHook = function()
     HOOK.active = false
 end
 
-local function hookFireServer()
-    if not ENV.hookfunction or type(hookfunction) ~= "function" then return false end
-    local alvos = {}
+local ALVOS = {}
+
+local function acharAlvos()
+    if ALVOS.RemoteEvent then return end
     pcall(function()
         local net = RS:FindFirstChild("Network")
         local base = net or RS
         for _, d in ipairs(base:GetDescendants()) do
             local cls = d.ClassName
-            if cls == "RemoteEvent" or cls == "UnreliableRemoteEvent"
-                or cls == "RemoteFunction" then
-                alvos[cls] = d
-                if alvos.RemoteEvent and alvos.UnreliableRemoteEvent
-                    and alvos.RemoteFunction then break end
+            if (cls == "RemoteEvent" or cls == "UnreliableRemoteEvent"
+                or cls == "RemoteFunction") and not ALVOS[cls] then
+                ALVOS[cls] = d
+                if ALVOS.RemoteEvent and ALVOS.UnreliableRemoteEvent
+                    and ALVOS.RemoteFunction then break end
             end
         end
     end)
+end
+
+local function hookFireServer()
+    if not ENV.hookfunction or type(hookfunction) ~= "function" then return false end
+    acharAlvos()
     local n = 0
-    if alvos.RemoteEvent and instalarMetodo(alvos.RemoteEvent, "FireServer") then n = n + 1 end
-    if alvos.UnreliableRemoteEvent
-        and instalarMetodo(alvos.UnreliableRemoteEvent, "FireServer") then n = n + 1 end
-    if alvos.RemoteFunction and instalarMetodo(alvos.RemoteFunction, "InvokeServer") then n = n + 1 end
+    if ALVOS.RemoteEvent and instalarMetodo(ALVOS.RemoteEvent, "FireServer") then n = n + 1 end
+    if ALVOS.UnreliableRemoteEvent
+        and instalarMetodo(ALVOS.UnreliableRemoteEvent, "FireServer") then n = n + 1 end
+    HOOK.nivel = n > 0 and 1 or 0
     HOOK.active = n > 0
     return n > 0
+end
+
+local function hookInvoke()
+    if HOOK.nivel ~= 1 then return false end
+    if not ALVOS.RemoteFunction then acharAlvos() end
+    if not ALVOS.RemoteFunction then return false end
+    if not instalarMetodo(ALVOS.RemoteFunction, "InvokeServer") then return false end
+    HOOK.nivel = 2
+    HOOK.active = true
+    return true
+end
+
+local function hookNivel(novo)
+    pcall(desligarHook)
+    HOOK.nivel = 0
+    if novo <= 0 then return 0 end
+    if not hookFireServer() then return 0 end
+    if novo >= 2 then hookInvoke() end
+    return HOOK.nivel
 end
 
 local function snapshot()
@@ -715,17 +740,40 @@ local function mk2(x, w, txt, cor, cb)
     return b
 end
 
-local btnHook = mk2(8, 256, "HOOK: ON  (entrada + saida)", Color3.fromRGB(90, 45, 150), function()
-    if #HOOK_ORIG == 0 then return end
-    HOOK.active = not HOOK.active
-    btnHook.Text = HOOK.active and "HOOK: ON  (entrada + saida)"
-        or "HOOK: OFF  (so entrada)"
-    btnHook.BackgroundColor3 = HOOK.active and Color3.fromRGB(90, 45, 150)
-        or Color3.fromRGB(55, 55, 65)
+local CORES = {
+    [0] = Color3.fromRGB(55, 55, 65),
+    [1] = Color3.fromRGB(90, 45, 150),
+    [2] = Color3.fromRGB(160, 40, 110),
+}
+local TEXTOS = {
+    [0] = "HOOK: OFF  (so entrada)",
+    [1] = "HOOK: ON  saida RE",
+    [2] = "HOOK: MAX saida RE+RF",
+}
+
+local function pintarHook()
+    btnHook.Text = TEXTOS[HOOK.nivel] or TEXTOS[0]
+    btnHook.BackgroundColor3 = CORES[HOOK.nivel] or CORES[0]
+end
+
+local btnHook = mk2(8, 256, TEXTOS[1], CORES[1], function()
+    if not ENV.hookfunction or type(hookfunction) ~= "function" then
+        btnHook.Text = "HOOK: n/a (executor sem hookfunction)"
+        btnHook.BackgroundColor3 = CORES[0]
+        return
+    end
+    local alvo = (HOOK.nivel + 1) % 3
+    if hookNivel(alvo) ~= alvo then
+        btnHook.Text = "HOOK: falhou, voltou pra off"
+        btnHook.BackgroundColor3 = CORES[0]
+        task.delay(2, pintarHook)
+        return
+    end
+    pintarHook()
 end)
-if #HOOK_ORIG == 0 then
-    btnHook.Text = "HOOK: OFF  (executor sem hookfunction)"
-    btnHook.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+if not hooked then
+    HOOK.nivel = 0
+    pintarHook()
 end
 
 local drag, dStart, sStart = false, nil, nil
