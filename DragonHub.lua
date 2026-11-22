@@ -2327,23 +2327,23 @@ function SURV.tick(alvo, hrp)
 end
 
 -- [DUMP LIVE] grava por chamada, sobrevive ao teleporte de servidor
-local _liveHook = nil
-local function dungeonLiveStop()
-    if not _liveHook then return end
+DUN.liveHook = nil
+function dungeonLiveStop()
+    if not DUN.liveHook then return end
     pcall(function()
         local mt = getrawmetatable(game)
         if mt then
             setreadonly(mt, false)
-            mt.__namecall = _liveHook
+            mt.__namecall = DUN.liveHook
             setreadonly(mt, true)
         end
     end)
-    _liveHook = nil
+    DUN.liveHook = nil
     print("[DUMP] log ao vivo OFF")
 end
 
-local function dungeonLiveStart()
-    if _liveHook then return end
+function dungeonLiveStart()
+    if DUN.liveHook then return end
     if not hookmetamethod then warn("[DUMP] sem hookmetamethod") return end
     local mt = getrawmetatable(game)
     if not mt then warn("[DUMP] sem metatable") return end
@@ -2351,7 +2351,7 @@ local function dungeonLiveStart()
     local arquivo = "DBH_dungeon_live.txt"
     pcall(function() writefile(arquivo, "") end)
     setreadonly(mt, false)
-    _liveHook = function(self, ...)
+    DUN.liveHook = function(self, ...)
         local m = getnamecallmethod()
         if _dungeonMatch(m) then
             local n = select("#", ...)
@@ -2365,7 +2365,7 @@ local function dungeonLiveStart()
         end
         return old(self, ...)
     end
-    mt.__namecall = _liveHook
+    mt.__namecall = DUN.liveHook
     setreadonly(mt, true)
     print("[DUMP] log ao vivo ON -> " .. arquivo)
 end
